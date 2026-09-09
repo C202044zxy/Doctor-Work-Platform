@@ -30,6 +30,15 @@ persistent named volumes and are accessible only inside the Compose network.
 The frontend and API use the same local URLs. Stop with Ctrl+C or `docker compose down`;
 normal shutdown preserves the database volumes.
 
+## Startup troubleshooting
+
+If npm reports `Exit handler never called!`, inspect the npm log for preceding
+fetch errors. An unreachable registry or proxy can cause installation to fail.
+The startup script defaults to the official npm registry and uses `HTTPS_PROXY`
+(or `HTTP_PROXY`) when set, overriding stale npm-specific proxy settings for that
+invocation. Set `npm_config_registry` explicitly if you need another registry.
+It does not change your global npm configuration.
+
 ## Basic functionality
 
 - Create synthetic patients, search names, paginate, view notes, and delete records.
