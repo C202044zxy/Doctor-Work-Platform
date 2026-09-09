@@ -1,0 +1,19 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: #f3f6f8; color: #173042; font-family: system-ui, sans-serif; }
+main { max-width: 1120px; margin: 0 auto; padding: 48px 24px; }
+header, li, .pagination { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+h1 { font-size: 32px; margin: 8px 0 24px; } h2 { font-size: 20px; margin-top: 0; }
+.eyebrow { color: #267d79; font-size: 12px; letter-spacing: 2px; font-weight: 700; }
+.status { padding: 8px 14px; background: #e0efed; border-radius: 20px; white-space: nowrap; }
+.notice { padding: 16px; background: #fff3d7; border-radius: 8px; margin-bottom: 28px; }
+.layout { display: grid; grid-template-columns: 320px 1fr; gap: 24px; }
+section { background: white; border: 1px solid #dde5e9; border-radius: 12px; padding: 24px; }
+label { display: block; font-size: 14px; margin-bottom: 18px; }
+input, select, textarea { width: 100%; padding: 11px; border: 1px solid #afbec7; border-radius: 6px; font: inherit; margin-top: 7px; }
+button { background: #176c69; color: white; padding: 11px 16px; border: 0; border-radius: 6px; font: inherit; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; } button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #58b4c3; outline-offset: 2px; }
+.secondary { background: #edf2f5; color: #173042; } .link { padding: 0; color: #176c69; background: none; text-align: left; font-weight: 600; }
+.search { display: flex; gap: 10px; } .search input { margin: 0; }
+ul { padding: 0; list-style: none; } li { padding: 16px 0; border-bottom: 1px solid #e7edef; } li p, small { color: #607785; font-size: 13px; }
+small { font-weight: normal; } .error { background: #ffe4e1; padding: 16px; } aside { margin-top: 20px; padding: 16px; background: #f3f6f8; } .notes { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .layout { grid-template-columns: 1fr; } header { align-items: flex-start; flex-direction: column; } main { padding: 24px 16px; } }
