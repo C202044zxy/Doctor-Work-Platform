@@ -38,6 +38,7 @@ jobs:
   windows-one-command:
     name: Windows one-command startup
     runs-on: windows-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -50,33 +51,43 @@ jobs:
         with:
           python-version: '3.11'
       # The same acceptance scenario as above, on Windows: one command, nothing else.
-      - name: Start the stack with scripts\dev.ps1
-        shell: pwsh
-        run: |
-          Start-Process pwsh -ArgumentList '-NoProfile', '-File', './scripts/dev.ps1' -RedirectStandardOutput dev.log -RedirectStandardError dev.err -PassThru | Out-Null
-      - name: Smoke-test the stack through the Vite proxy
+      # dev.ps1 runs as a job so its output streams into this log. A cold runner installs
+      # every dependency from scratch, which is slow, and a silent step would be
+      # impossible to diagnose.
+      - name: Run scripts\dev.ps1 and smoke-test the stack
         shell: pwsh
         env:
           SMOKE_REQUIRE_REDIS: '0'
         run: |
-          $deadline = (Get-Date).AddMinutes(10)
+          $start = Get-Date
+          $root = $env:GITHUB_WORKSPACE
+          $job = Start-Job -ScriptBlock {
+            Set-Location $using:root
+            & (Join-Path $using:root 'scripts\dev.ps1')
+          }
+          $deadline = $start.AddMinutes(25)
+          $printed = 0
           $ready = $false
           while ((Get-Date) -lt $deadline) {
+            $out = @(Receive-Job -Job $job -Keep)
+            if ($out.Count -gt $printed) {
+              foreach ($line in $out[$printed..($out.Count - 1)]) { Write-Output "dev.ps1: $line" }
+              $printed = $out.Count
+            }
             try {
               Invoke-WebRequest 'http://127.0.0.1:5173/api/health/ready' -TimeoutSec 5 | Out-Null
               $ready = $true
               break
             } catch {
-              Start-Sleep -Seconds 5
+              Start-Sleep -Seconds 15
             }
           }
           if (-not $ready) {
-            Get-Content dev.log, dev.err -ErrorAction SilentlyContinue
-            throw 'The stack did not become ready within 10 minutes.'
+            Receive-Job -Job $job -Keep | Select-Object -Last 40 | ForEach-Object { Write-Output "dev.ps1: $_" }
+            throw "The stack did not become ready within 25 minutes."
           }
+          Write-Output ("One command to a healthy stack: {0:N1} minutes" -f ((Get-Date) - $start).TotalMinutes)
           python scripts/smoke.py
       - if: always()
         shell: pwsh
-        run: |
-          Get-Content dev.log, dev.err -ErrorAction SilentlyContinue
-          Get-Process python, node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        run: Get-Process python, node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
