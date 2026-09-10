@@ -1,5 +1,8 @@
 name: Foundation checks
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -19,9 +22,76 @@ jobs:
         working-directory: backend
       - run: npm ci && npm run build
         working-directory: frontend
-      - run: docker compose up --build --wait --wait-timeout 180
-      - run: python3 scripts/smoke.py
+      # T04 acceptance S1: start MySQL, Redis, backend, and frontend with the
+      # documented one-command script, exactly as a newcomer would.
+      - name: Start the full stack with scripts/dev.sh docker
+        run: bash scripts/dev.sh docker --detach --wait --wait-timeout 300
+      - name: Smoke-test the stack through the frontend proxy
+        run: python3 scripts/smoke.py
+      - name: Verify scripts/backup.sh dumps the MySQL database
+        run: bash scripts/backup.sh docker
       - if: failure()
         run: docker compose logs
       - if: always()
         run: docker compose down
+
+  windows-one-command:
+    name: Windows one-command startup
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # The same acceptance scenario as above, on Windows: one command, nothing else.
+      # dev.ps1 runs as a job so its output streams into this log. A cold runner installs
+      # every dependency from scratch, which is slow, and a silent step would be
+      # impossible to diagnose.
+      - name: Run scripts\dev.ps1 and smoke-test the stack
+        shell: pwsh
+        env:
+          SMOKE_REQUIRE_REDIS: '0'
+        run: |
+          # Receive-Job turns the child's stderr into error records, and the runner sets
+          # $ErrorActionPreference = 'Stop' for pwsh steps, so a harmless progress line
+          # from uv would abort this step. Keep errors visible but not terminating.
+          $ErrorActionPreference = 'Continue'
+          $start = Get-Date
+          $root = $env:GITHUB_WORKSPACE
+          $job = Start-Job -ScriptBlock {
+            Set-Location $using:root
+            & (Join-Path $using:root 'scripts\dev.ps1')
+          }
+          $deadline = $start.AddMinutes(25)
+          $printed = 0
+          $ready = $false
+          while ((Get-Date) -lt $deadline) {
+            $out = @(Receive-Job -Job $job -Keep -ErrorAction Continue)
+            if ($out.Count -gt $printed) {
+              foreach ($line in $out[$printed..($out.Count - 1)]) { Write-Output "dev.ps1: $line" }
+              $printed = $out.Count
+            }
+            try {
+              Invoke-WebRequest 'http://127.0.0.1:5173/api/health/ready' -TimeoutSec 5 | Out-Null
+              $ready = $true
+              break
+            } catch {
+              Start-Sleep -Seconds 15
+            }
+          }
+          if (-not $ready) {
+            Receive-Job -Job $job -Keep -ErrorAction Continue | Select-Object -Last 40 | ForEach-Object { Write-Output "dev.ps1: $_" }
+            throw "The stack did not become ready within 25 minutes."
+          }
+          Write-Output ("One command to a healthy stack: {0:N1} minutes" -f ((Get-Date) - $start).TotalMinutes)
+          python scripts/smoke.py
+      - if: always()
+        shell: pwsh
+        run: Get-Process python, node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
