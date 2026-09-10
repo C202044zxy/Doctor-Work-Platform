@@ -1,5 +1,8 @@
 name: Foundation checks
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -19,9 +22,61 @@ jobs:
         working-directory: backend
       - run: npm ci && npm run build
         working-directory: frontend
-      - run: docker compose up --build --wait --wait-timeout 180
-      - run: python3 scripts/smoke.py
+      # T04 acceptance S1: start MySQL, Redis, backend, and frontend with the
+      # documented one-command script, exactly as a newcomer would.
+      - name: Start the full stack with scripts/dev.sh docker
+        run: bash scripts/dev.sh docker --detach --wait --wait-timeout 300
+      - name: Smoke-test the stack through the frontend proxy
+        run: python3 scripts/smoke.py
+      - name: Verify scripts/backup.sh dumps the MySQL database
+        run: bash scripts/backup.sh docker
       - if: failure()
         run: docker compose logs
       - if: always()
         run: docker compose down
+
+  windows-one-command:
+    name: Windows one-command startup
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # The same acceptance scenario as above, on Windows: one command, nothing else.
+      - name: Start the stack with scripts\dev.ps1
+        shell: pwsh
+        run: |
+          Start-Process pwsh -ArgumentList '-NoProfile', '-File', './scripts/dev.ps1' -RedirectStandardOutput dev.log -RedirectStandardError dev.err -PassThru | Out-Null
+      - name: Smoke-test the stack through the Vite proxy
+        shell: pwsh
+        env:
+          SMOKE_REQUIRE_REDIS: '0'
+        run: |
+          $deadline = (Get-Date).AddMinutes(10)
+          $ready = $false
+          while ((Get-Date) -lt $deadline) {
+            try {
+              Invoke-WebRequest 'http://127.0.0.1:5173/api/health/ready' -TimeoutSec 5 | Out-Null
+              $ready = $true
+              break
+            } catch {
+              Start-Sleep -Seconds 5
+            }
+          }
+          if (-not $ready) {
+            Get-Content dev.log, dev.err -ErrorAction SilentlyContinue
+            throw 'The stack did not become ready within 10 minutes.'
+          }
+          python scripts/smoke.py
+      - if: always()
+        shell: pwsh
+        run: |
+          Get-Content dev.log, dev.err -ErrorAction SilentlyContinue
+          Get-Process python, node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
