@@ -59,6 +59,10 @@ jobs:
         env:
           SMOKE_REQUIRE_REDIS: '0'
         run: |
+          # Receive-Job turns the child's stderr into error records, and the runner sets
+          # $ErrorActionPreference = 'Stop' for pwsh steps, so a harmless progress line
+          # from uv would abort this step. Keep errors visible but not terminating.
+          $ErrorActionPreference = 'Continue'
           $start = Get-Date
           $root = $env:GITHUB_WORKSPACE
           $job = Start-Job -ScriptBlock {
@@ -69,7 +73,7 @@ jobs:
           $printed = 0
           $ready = $false
           while ((Get-Date) -lt $deadline) {
-            $out = @(Receive-Job -Job $job -Keep)
+            $out = @(Receive-Job -Job $job -Keep -ErrorAction Continue)
             if ($out.Count -gt $printed) {
               foreach ($line in $out[$printed..($out.Count - 1)]) { Write-Output "dev.ps1: $line" }
               $printed = $out.Count
@@ -83,7 +87,7 @@ jobs:
             }
           }
           if (-not $ready) {
-            Receive-Job -Job $job -Keep | Select-Object -Last 40 | ForEach-Object { Write-Output "dev.ps1: $_" }
+            Receive-Job -Job $job -Keep -ErrorAction Continue | Select-Object -Last 40 | ForEach-Object { Write-Output "dev.ps1: $_" }
             throw "The stack did not become ready within 25 minutes."
           }
           Write-Output ("One command to a healthy stack: {0:N1} minutes" -f ((Get-Date) - $start).TotalMinutes)
