@@ -1,19 +1,445 @@
-* { box-sizing: border-box; }
-body { margin: 0; background: #f3f6f8; color: #173042; font-family: system-ui, sans-serif; }
-main { max-width: 1120px; margin: 0 auto; padding: 48px 24px; }
-header, li, .pagination { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
-h1 { font-size: 32px; margin: 8px 0 24px; } h2 { font-size: 20px; margin-top: 0; }
-.eyebrow { color: #267d79; font-size: 12px; letter-spacing: 2px; font-weight: 700; }
-.status { padding: 8px 14px; background: #e0efed; border-radius: 20px; white-space: nowrap; }
-.notice { padding: 16px; background: #fff3d7; border-radius: 8px; margin-bottom: 28px; }
-.layout { display: grid; grid-template-columns: 320px 1fr; gap: 24px; }
-section { background: white; border: 1px solid #dde5e9; border-radius: 12px; padding: 24px; }
-label { display: block; font-size: 14px; margin-bottom: 18px; }
-input, select, textarea { width: 100%; padding: 11px; border: 1px solid #afbec7; border-radius: 6px; font: inherit; margin-top: 7px; }
-button { background: #176c69; color: white; padding: 11px 16px; border: 0; border-radius: 6px; font: inherit; cursor: pointer; }
-button:disabled { opacity: .5; cursor: default; } button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #58b4c3; outline-offset: 2px; }
-.secondary { background: #edf2f5; color: #173042; } .link { padding: 0; color: #176c69; background: none; text-align: left; font-weight: 600; }
-.search { display: flex; gap: 10px; } .search input { margin: 0; }
-ul { padding: 0; list-style: none; } li { padding: 16px 0; border-bottom: 1px solid #e7edef; } li p, small { color: #607785; font-size: 13px; }
-small { font-weight: normal; } .error { background: #ffe4e1; padding: 16px; } aside { margin-top: 20px; padding: 16px; background: #f3f6f8; } .notes { white-space: pre-wrap; overflow-wrap: anywhere; }
-@media (max-width: 760px) { .layout { grid-template-columns: 1fr; } header { align-items: flex-start; flex-direction: column; } main { padding: 24px 16px; } }
+/* ---------------------------------------------------------------------------
+   Doctor Work Platform - global styles and design tokens.
+
+   Four principles this file encodes:
+   1. Red means allergy. Nothing else in the interface is red, so the signal
+      never has to compete for attention.
+   2. Identifiers and measurements are monospaced, prose is not. You can tell
+      at a glance which is which.
+   3. Quiet by default. At most one loud signal per screen.
+   4. Element Plus is re-themed rather than used off the shelf, so the palette
+      stays clinical instead of default-library blue.
+--------------------------------------------------------------------------- */
+
+:root {
+  /* Ink and surfaces */
+  --ink: #14212b;
+  --ink-2: #5c7280;
+  --ink-3: #8a9ba5;
+  --canvas: #eef1f3;
+  --surface: #ffffff;
+  --surface-2: #f7f9fa;
+  --line: #d8e0e4;
+  --line-2: #e8eef0;
+
+  /* Brand */
+  --teal: #0f5f5c;
+  --teal-dark: #0c4c4a;
+  --teal-soft: #e7efef;
+
+  /* Safety signals. --alert is reserved for allergy and safety only. */
+  --alert: #b3261e;
+  --alert-dark: #8c1d17;
+  --alert-soft: #fbeceb;
+  --warn: #92600a;
+  --warn-soft: #fdf4e3;
+  --ok: #2b6a4a;
+  --ok-soft: #e8f2ec;
+
+  /* Type. System stacks only: the demo must render correctly with no network,
+     and the Segoe/Cascadia families ship with Windows 11. */
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-data: "Cascadia Mono", Consolas, "SF Mono", ui-monospace, Menlo,
+    monospace;
+
+  /* Geometry */
+  --radius: 6px;
+  --radius-lg: 8px;
+  --sidebar-w: 236px;
+  --topbar-h: 56px;
+
+  /* Element Plus theme. Derived from --teal: light-N is teal mixed with N*10%
+     white, dark-2 is teal mixed with 20% black. */
+  --el-color-primary: #0f5f5c;
+  --el-color-primary-light-3: #578f8d;
+  --el-color-primary-light-5: #87afae;
+  --el-color-primary-light-7: #b7cfce;
+  --el-color-primary-light-8: #cfdfde;
+  --el-color-primary-light-9: #e7efef;
+  --el-color-primary-dark-2: #0c4c4a;
+
+  --el-color-danger: #b3261e;
+  --el-color-danger-light-3: #c95c56;
+  --el-color-danger-light-5: #d9938e;
+  --el-color-danger-light-7: #e8c9c7;
+  --el-color-danger-light-8: #f0d7d5;
+  --el-color-danger-light-9: #fbeceb;
+  --el-color-danger-dark-2: #8c1d17;
+
+  --el-color-warning: #92600a;
+  --el-color-warning-light-3: #ad8045;
+  --el-color-warning-light-5: #c9a082;
+  --el-color-warning-light-7: #e4cfc0;
+  --el-color-warning-light-8: #edded4;
+  --el-color-warning-light-9: #fdf4e3;
+  --el-color-warning-dark-2: #754d08;
+
+  --el-font-family: var(--font-ui);
+  --el-font-size-base: 14px;
+  --el-border-radius-base: 6px;
+  --el-text-color-primary: #14212b;
+  --el-text-color-regular: #3d525e;
+  --el-text-color-secondary: #5c7280;
+  --el-border-color: #d8e0e4;
+  --el-border-color-light: #e8eef0;
+  --el-fill-color-blank: #ffffff;
+  --el-table-header-bg-color: #f7f9fa;
+  --el-table-border-color: #e8eef0;
+  --el-table-row-hover-bg-color: #f7f9fa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Identifiers and measurements. Prose stays in --font-ui. */
+.data {
+  font-family: var(--font-data);
+  font-size: 0.92em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Visible keyboard focus everywhere, including Element Plus internals. */
+:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.el-button:focus-visible,
+.el-input__wrapper:focus-within {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+/* Element Plus draws its own halo; we use an outline instead. */
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--teal) inset !important;
+}
+
+.el-table th.el-table__cell {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+/* ---------------------------------------------------------------------------
+   Page furniture.
+
+   Every screen is assembled from the same handful of parts: a heading row,
+   panels, a toolbar, definition lists, status chips. They live here rather
+   than in ten scoped blocks so that a change to the panel border or the chip
+   shape reaches every screen at once.
+--------------------------------------------------------------------------- */
+
+.page {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+/* For screens that carry three working columns rather than one reading column. */
+.page-wide {
+  max-width: 1460px;
+}
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.page-heading {
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.page-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Panels ------------------------------------------------------------------- */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.panel-head h2,
+.panel-head h3 {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+/* A count or a link that sits at the far end of a panel heading. */
+.panel-tail {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.panel-body {
+  padding: 16px 20px;
+}
+
+.panel-foot {
+  padding: 14px 20px;
+  border-top: 1px solid var(--line-2);
+}
+
+.panel-count {
+  padding: 1px 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--teal-dark);
+  background: var(--teal-soft);
+  border-radius: 10px;
+}
+
+/* Layout ------------------------------------------------------------------- */
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(272px, var(--split-rail, 330px));
+  gap: 20px;
+  align-items: start;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+@media (max-width: 1100px) {
+  .split {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Severity -----------------------------------------------------------------
+
+   One palette, four levels. Setting data-severity on any element makes --sev
+   and --sev-soft available inside it, so a chip, an edge bar and a banner can
+   all agree without repeating the mapping. Order matters: calmest last so it
+   never overrides a louder sibling. */
+
+[data-severity='alert'] {
+  --sev: var(--alert);
+  --sev-soft: var(--alert-soft);
+}
+
+[data-severity='warn'] {
+  --sev: var(--warn);
+  --sev-soft: var(--warn-soft);
+}
+
+[data-severity='ok'] {
+  --sev: var(--ok);
+  --sev-soft: var(--ok-soft);
+}
+
+[data-severity='info'] {
+  --sev: var(--ink-3);
+  --sev-soft: var(--surface-2);
+}
+
+.chip {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--sev, var(--ink-2));
+  white-space: nowrap;
+  background: var(--sev-soft, var(--surface-2));
+  border-radius: 10px;
+}
+
+.chip::before {
+  width: 5px;
+  height: 5px;
+  content: '';
+  background: currentcolor;
+  border-radius: 50%;
+}
+
+/* A notice keeps the severity colour but stays quiet enough to read prose in. */
+.notice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sev, var(--ink-2));
+  background: var(--sev-soft, var(--surface-2));
+  border-radius: var(--radius);
+}
+
+.notice strong {
+  color: inherit;
+}
+
+/* Definition lists --------------------------------------------------------- */
+
+.kv {
+  padding: 4px 20px 8px;
+  margin: 0;
+}
+
+.kv > div {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.kv > div:last-child {
+  border-bottom: 0;
+}
+
+.kv dt {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.kv dd {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.kv-lg dd {
+  font-size: 16px;
+}
+
+/* Toolbars and forms ------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.toolbar-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.field {
+  display: block;
+  margin-bottom: 18px;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.field-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+.full {
+  width: 100%;
+}
+
+.form-error {
+  padding: 10px 12px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--alert-dark);
+  background: var(--alert-soft);
+  border-radius: var(--radius);
+}
+
+.empty {
+  padding: 28px 0;
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+
+.muted {
+  color: var(--ink-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
