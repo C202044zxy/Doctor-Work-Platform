@@ -1,6 +1,6 @@
 from datetime import UTC, date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -23,6 +23,14 @@ class Role(Base):
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True)
+    name: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(20), default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    role: Mapped[Role] = relationship(lazy="joined")
+    department: Mapped[Department] = relationship(lazy="joined")
     email: Mapped[str] = mapped_column(String(254), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"))
@@ -80,3 +88,19 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class TempGrant(Base):
+    __tablename__ = "temp_grant"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    grantee_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    reason: Mapped[str] = mapped_column(String(500))
+    granted_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    expire_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    is_valid: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    grantee: Mapped[User] = relationship(foreign_keys=[grantee_id], lazy="joined")
+    patient: Mapped[Patient] = relationship(lazy="joined")

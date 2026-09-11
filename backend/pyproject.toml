@@ -2,7 +2,19 @@
 name = "doctor-work-platform"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "sqlalchemy>=2.0,<3", "alembic>=1.14,<2", "cryptography>=44,<52", "pydantic-settings>=2.7,<3", "pymysql[rsa]>=1.1,<2", "redis>=5,<8"]
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+    "sqlalchemy>=2.0,<3",
+    "alembic>=1.14,<2",
+    "cryptography>=44,<52",
+    "pydantic-settings>=2.7,<3",
+    "pymysql[rsa]>=1.1,<2",
+    "redis>=5,<8",
+    "bcrypt>=4,<6",
+    "pyjwt>=2.10,<3",
+    "apscheduler>=3.11,<4",
+]
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "httpx>=0.28,<1", "ruff>=0.9,<1", "fakeredis>=2,<3"]

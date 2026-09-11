@@ -28,6 +28,7 @@ services:
     environment:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-doctor}:${MYSQL_PASSWORD:-doctor_local_password}@mysql:3306/${MYSQL_DATABASE:-doctor_platform}?charset=utf8mb4
       REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-this-jwt-secret-at-least-32-bytes}
       PATIENT_DATA_KEY: ${PATIENT_DATA_KEY:-dev-only-insecure-patient-data-key}
     ports:
       - "127.0.0.1:8000:8000"

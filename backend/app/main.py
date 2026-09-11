@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from typing import Annotated
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -11,7 +12,7 @@ from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app import crypto
+from app import auth, auth_schemas, crypto, grants
 from app.allergies import allergen_name, dictionary, get_patient_allergens
 from app.config import Settings
 from app.database import make_engine, session_factory
@@ -43,8 +44,9 @@ from app.schemas import (
 PATIENT_NO_RETRIES = 5
 
 
-def get_session(request: Request):
+def get_session(request: Request, user: auth.CurrentUser):
     with request.app.state.sessions() as session:
+        session.info["user"] = user
         yield session
 
 
@@ -140,6 +142,7 @@ def _live_patient(db: Session, patient_no: str) -> Patient:
         select(Patient).where(
             Patient.patient_no == patient_no,
             Patient.deleted_at.is_(None),
+            grants.patient_scope(db.info["user"]),
         )
     )
     if patient is None:
@@ -151,6 +154,9 @@ def _department_id(db: Session, name: str) -> int:
     department = db.scalar(select(Department).where(Department.name == name))
     if department is None:
         raise HTTPException(404, f"Department not found: {name}")
+    user = db.info["user"]
+    if user.role.name != "admin" and department.id != user.department_id:
+        raise HTTPException(403, "Cannot write patients in another department")
     return department.id
 
 
@@ -170,12 +176,32 @@ def create_app(settings: Settings | None = None):
 
     @asynccontextmanager
     async def lifespan(app):
-        yield
-        if cache:
-            cache.close()
-        engine.dispose()
+        scheduler = BackgroundScheduler(timezone="UTC")
+        if settings.scheduler_enabled:
+            scheduler.add_job(
+                grants.expire_grants,
+                "interval",
+                minutes=1,
+                args=[app.state.sessions],
+                id="expire_temp_grants",
+                max_instances=1,
+                coalesce=True,
+            )
+            scheduler.start()
+        app.state.scheduler = scheduler
+        try:
+            yield
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=True)
+            if cache:
+                cache.close()
+            engine.dispose()
 
     app = FastAPI(title="Doctor Work Platform", version="0.1.0", lifespan=lifespan)
+    app.state.settings = settings
+    app.include_router(auth.router)
+    app.include_router(grants.router)
     app.state.sessions = session_factory(engine)
     app.state.engine = engine
     app.state.cache = cache
@@ -196,6 +222,29 @@ def create_app(settings: Settings | None = None):
         return JSONResponse(
             status_code=422, content={"code": 422, "message": message, "data": None}
         )
+
+    @app.exception_handler(RedisError)
+    async def redis_error(request, exc):
+        return JSONResponse(
+            status_code=503, content={"code": 503, "message": "Redis unavailable", "data": None}
+        )
+
+    @app.get("/health", response_model=auth_schemas.HealthResponse)
+    @app.get("/api/health", response_model=auth_schemas.HealthResponse)
+    def health():
+        checks = {"db": "ok", "redis": "disabled"}
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            checks["db"] = "down"
+        if app.state.cache is not None:
+            try:
+                app.state.cache.ping()
+                checks["redis"] = "ok"
+            except RedisError:
+                checks["redis"] = "down"
+        return _ok(checks)
 
     @app.exception_handler(SQLAlchemyError)
     async def database_error(request, exc):
@@ -286,7 +335,7 @@ def create_app(settings: Settings | None = None):
     ):
         if admitted_from and admitted_to and admitted_from > admitted_to:
             raise HTTPException(422, "admitted_from must not be later than admitted_to")
-        conditions = [Patient.deleted_at.is_(None)]
+        conditions = [Patient.deleted_at.is_(None), grants.patient_scope(db.info["user"])]
         if name:
             conditions.append(Patient.name.contains(name, autoescape=True))
         if patient_no:
@@ -518,6 +567,7 @@ def create_app(settings: Settings | None = None):
         patient = db.get(Patient, allergy.patient_id) if allergy else None
         if allergy is None or patient is None or patient.deleted_at is not None:
             raise HTTPException(404, "Allergy not found")
+        _live_patient(db, patient.patient_no)
         return allergy, patient
 
     @app.patch(
