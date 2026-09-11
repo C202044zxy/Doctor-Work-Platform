@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, String, Text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -37,6 +37,8 @@ class Patient(Base):
     # backfills existing rows and the unique index keeps the values unique.
     patient_no: Mapped[str] = mapped_column(String(20), unique=True, index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(100), index=True)
+    gender: Mapped[str] = mapped_column(String(10), default="unknown")
+    birth_date: Mapped[date | None] = mapped_column(Date)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"))
     notes: Mapped[str] = mapped_column(Text, default="")
     phone_enc: Mapped[str | None] = mapped_column(String(255))
@@ -47,13 +49,25 @@ class Patient(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
     )
+    # Soft delete: reads filter this out, while allergies and the audit trail stay put.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+    department: Mapped[Department] = relationship(lazy="joined")
 
 
 class Allergy(Base):
     __tablename__ = "allergies"
     id: Mapped[int] = mapped_column(primary_key=True)
-    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"))
-    substance: Mapped[str] = mapped_column(String(100))
+    patient_id: Mapped[int] = mapped_column(
+        ForeignKey("patients.id", ondelete="CASCADE"), index=True
+    )
+    # A code from app.allergies.DICTIONARY, such as PENICILLIN: the order-validation
+    # engine compares codes against Drug.contraindications, so names never go here.
+    allergen: Mapped[str] = mapped_column(String(50))
+    allergy_type: Mapped[str] = mapped_column(String(20), default="other")
+    severity: Mapped[str] = mapped_column(String(20), default="moderate")
+    reaction: Mapped[str | None] = mapped_column(String(255))
+    recorded_at: Mapped[date] = mapped_column(Date)
 
 
 class AuditLog(Base):
@@ -61,6 +75,8 @@ class AuditLog(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     action: Mapped[str] = mapped_column(String(50))
     patient_id: Mapped[int] = mapped_column()  # Preserve reference after patient deletion.
+    # T14 scenario S2 reads the deleted allergen's name back out of this column.
+    detail: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

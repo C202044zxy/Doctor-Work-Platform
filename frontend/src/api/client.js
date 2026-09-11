@@ -1,11 +1,11 @@
-// Thin wrapper over the FastAPI service. The backend answers success payloads
-// as { data: ... } and errors as { error: { message: ... } }; this unwraps the
-// first and surfaces the second as a thrown Error, so callers only ever deal
-// with data or an exception.
+// Thin wrapper over the FastAPI service. Every JSON response carries the contract
+// envelope { code, message, data } — code 0 on success, the HTTP status otherwise —
+// so this unwraps `data` and surfaces `message` as a thrown Error. Callers only ever
+// deal with data or an exception.
 //
-// Task T07 swaps this for an axios instance with request and response
-// interceptors (attaching the bearer token, redirecting on 401). The function
-// signatures here are written to survive that swap unchanged.
+// Task T07 swaps this for an axios instance with request and response interceptors
+// (attaching the bearer token, redirecting on 401). The function signatures here are
+// written to survive that swap unchanged.
 
 const BASE = '/api'
 
@@ -17,52 +17,82 @@ async function request(path, options = {}) {
     throw new Error('Cannot reach the service. Is the backend running?')
   }
 
-  const body = response.status === 204 ? null : await response.json().catch(() => null)
+  const body = await response.json().catch(() => null)
 
   if (!response.ok) {
-    throw new Error(body?.error?.message || `Request failed (${response.status})`)
+    throw new Error(body?.message || `Request failed (${response.status})`)
   }
-  return body
+  return body?.data
+}
+
+function send(method, body) {
+  return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
 }
 
 function json(body) {
-  return {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }
+  return send('POST', body)
 }
 
 export const health = {
   async ready() {
-    return request('/health/ready')
+    // /api/health is T03's endpoint and answers with the dependency report itself,
+    // not the { code, message, data } envelope.
+    const response = await fetch(`${BASE}/health/ready`)
+    return response.json()
   },
 }
 
 export const departments = {
   async list() {
-    const body = await request('/departments')
-    return body.data
+    return request('/departments')
+  },
+}
+
+export const allergens = {
+  async list() {
+    return request('/allergens')
   },
 }
 
 export const patients = {
-  async list({ q = '', offset = 0, limit = 20 } = {}) {
-    const params = new URLSearchParams({ q, offset: String(offset), limit: String(limit) })
+  async list({ name = '', patientNo = '', symptomTags = [], page = 1, size = 20 } = {}) {
+    const params = new URLSearchParams({
+      name,
+      patient_no: patientNo,
+      page: String(page),
+      size: String(size),
+    })
+    symptomTags.forEach((tag) => params.append('symptom_tags', tag))
     return request(`/patients?${params}`)
   },
 
-  async get(id) {
-    const body = await request(`/patients/${id}`)
-    return body.data
+  async get(patientNo) {
+    return request(`/patients/${encodeURIComponent(patientNo)}`)
   },
 
   async create(payload) {
-    const body = await request('/patients', json(payload))
-    return body.data
+    return request('/patients', json(payload))
   },
 
-  async remove(id) {
-    return request(`/patients/${id}`, { method: 'DELETE' })
+  async remove(patientNo) {
+    return request(`/patients/${encodeURIComponent(patientNo)}`, { method: 'DELETE' })
+  },
+
+  allergies: {
+    async list(patientNo) {
+      return request(`/patients/${encodeURIComponent(patientNo)}/allergies`)
+    },
+
+    async create(patientNo, payload) {
+      return request(`/patients/${encodeURIComponent(patientNo)}/allergies`, json(payload))
+    },
+
+    async update(id, payload) {
+      return request(`/allergies/${id}`, send('PATCH', payload))
+    },
+
+    async remove(id) {
+      return request(`/allergies/${id}`, { method: 'DELETE' })
+    },
   },
 }
