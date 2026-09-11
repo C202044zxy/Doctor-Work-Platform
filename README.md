@@ -2,7 +2,7 @@
 
 A runnable foundation for the school project's doctor workspace: FastAPI, Vue 3,
 SQLAlchemy/Alembic, and a Docker Compose stack with MySQL 8.4 and Redis 7.
-Scope and future clinical workflows are tracked in [project_plan.md](project_plan.md).
+Scope and future clinical workflows are tracked in [project_plan.md](docs/project_plan.md).
 Setting the project up for the first time? Follow [docs/onboarding.md](docs/onboarding.md).
 
 ## Prerequisites
