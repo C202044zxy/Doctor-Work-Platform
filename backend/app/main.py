@@ -249,6 +249,9 @@ def create_app(settings: Settings | None = None):
                 continue
             db.add(AuditLog(action="patient.create", patient_id=patient.id))
             db.commit()
+            # Echo stored values: MySQL DATETIME keeps whole seconds, so the
+            # in-memory microseconds would not match a later read.
+            db.refresh(patient)
             return {"data": _to_read(patient)}
         raise HTTPException(409, "Could not allocate a patient number, please retry")
 
@@ -302,6 +305,7 @@ def create_app(settings: Settings | None = None):
             setattr(patient, field, value)
         db.add(AuditLog(action="patient.update", patient_id=patient.id))
         db.commit()
+        db.refresh(patient)
         return {"data": _to_read(patient)}
 
     @app.delete(

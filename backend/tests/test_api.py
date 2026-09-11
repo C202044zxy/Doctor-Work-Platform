@@ -6,7 +6,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from redis.exceptions import ConnectionError
-from sqlalchemy import func, select
+from sqlalchemy import DateTime, TypeDecorator, func, select
 
 from app.config import Settings
 from app.crypto import decrypt
@@ -291,3 +291,24 @@ def test_swagger_documents_every_patient_field(client):
 
     patient_path = schema["paths"]["/api/patients/{patient_id}"]
     assert set(patient_path) == {"get", "patch", "delete"}
+
+
+class _WholeSecondDateTime(TypeDecorator):
+    """Reproduce MySQL's DATETIME precision, which keeps whole seconds only."""
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        return value.replace(microsecond=0) if value is not None else value
+
+
+def test_write_response_matches_what_the_database_stores(client, monkeypatch):
+    # MySQL DATETIME has no fractional seconds while SQLite keeps microseconds, so
+    # echoing the Python-side default would return a value the next read cannot match.
+    monkeypatch.setattr(Patient.__table__.c.created_at, "type", _WholeSecondDateTime())
+    patient = create_patient(client, name="Echo Test")
+    assert client.get(f"/api/patients/{patient['id']}").json()["data"] == patient
+    updated = client.patch(f"/api/patients/{patient['id']}", json={"name": "Echo Again"})
+    assert updated.status_code == 200
+    assert client.get(f"/api/patients/{patient['id']}").json()["data"] == updated.json()["data"]
