@@ -4,7 +4,7 @@
 
 `project_plan.md` is the source of truth for baseline scope, task IDs, ownership, dependencies, capacity, milestones, and unresolved decisions. `README.md` documents how to install, run, and verify the stack.
 
-- `backend/app/` -- FastAPI application. `main.py` builds the app, exception handlers, health endpoints, and the department, patient, and audit routes; `models.py` (SQLAlchemy), `schemas.py` (Pydantic), `config.py`, `database.py`, `seed.py`.
+- `backend/app/` -- FastAPI application. `main.py` builds the app, exception handlers, health endpoints, and the department, patient, and audit routes; `models.py` (SQLAlchemy), `schemas.py` (Pydantic), `crypto.py` (AES-256-GCM and masking helpers for patient identifiers), `config.py`, `database.py`, `seed.py`.
 - `backend/migrations/` -- Alembic revisions. Schema changes reach a database only through a revision.
 - `backend/tests/` -- pytest suite; each test migrates a throwaway SQLite database.
 - `frontend/src/` -- Vue 3 single-page workspace and styles.
