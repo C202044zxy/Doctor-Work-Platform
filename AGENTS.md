@@ -30,7 +30,10 @@ From the repository root: `./scripts/dev.sh` or `.\scripts\dev.ps1` prepares and
 ## Coding Style & Naming Conventions
 
 - Python: four-space indentation, double quotes, Ruff formatting with `line-length = 100`.
-- API: keep routes under `/api`. Success payloads use `data` (lists add `total`); errors use `error.message` through the handlers in `main.py`.
+- API: `docs/api/openapi.yaml` is the **source of truth for request and response shape**, and `docs/api/API-索引.md` is its index. Generate from it rather than inventing fields. It is tracked in git, so pull before generating: a stale copy silently produces the wrong fields.
+- API envelope: every JSON response is `{code, message, data}`, with `code: 0` for success. Lists are paginated as `data: {items, total, page, size}`; errors carry a non-zero `code` and a human-readable `message`, not a nested `error` object.
+- API paths live under `/api`, **except** the health check: `GET /health` is a required alias of `GET /api/health` with a byte-identical body (the sign-off scenario calls the bare path).
+- ⚠️ **`backend/app/main.py` does not follow the envelope yet** — it still returns `{"error": {"message": …}}` and `{"data": […], "total": …}` from the three routes that predate the contract. Treat those as legacy to be migrated, not as the pattern to copy.
 - Vue and JavaScript: two-space indentation, single quotes, no semicolons.
 - Preserve task identifiers such as T01 and M01 and module identifiers such as M1 and M8 from `project_plan.md`.
 - Keep `scripts/dev.sh` and `scripts/dev.ps1` in sync, and keep `dev.ps1` ASCII-only: Windows PowerShell 5.1 decodes a script without a byte-order mark as ANSI.

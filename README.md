@@ -363,9 +363,18 @@ npm run build
 ```
 
 Use four-space Python indentation and Ruff formatting. Use two-space indentation
-in Vue/JavaScript. Keep API routes under `/api`; success payloads use `data` and
-errors use `error.message`. The Vite development proxy and Nginx container proxy
+in Vue/JavaScript. Keep API routes under `/api` — with one required exception,
+`GET /health`, which must exist as an alias of `GET /api/health`. Every JSON
+response uses the `{code, message, data}` envelope with `code: 0` for success;
+lists are paginated as `data: {items, total, page, size}`. **`docs/api/openapi.yaml`
+is the source of truth for the shape of every request and response** — see
+[`docs/api/API-索引.md`](docs/api/API-索引.md) for the index and the reasoning behind
+each convention. The Vite development proxy and Nginx container proxy
 route browser API requests to FastAPI without cross-origin configuration.
+
+Note that `backend/app/main.py` predates the contract and still returns
+`{"error": {"message": …}}` / `{"data": […], "total": …}` from the routes already
+implemented; those are pending migration, not the convention to copy.
 
 `dev.sh` and `dev.ps1` must keep the same set of commands; when you change one, change
 the other. Keep `dev.ps1` ASCII-only: Windows PowerShell 5.1 decodes a script without a

@@ -1,0 +1,4818 @@
+openapi: 3.1.0
+
+info:
+  title: Doctor Work Platform API
+  version: 1.0.0
+  description: |
+    Doctor workspace for the hospital: authentication, patient records, EMR with
+    order validation, consultations, remote meetings, health management, and audit.
+
+    ## Conventions
+
+    - All business routes live under `/api`.
+    - Success: `{ "code": 0, "message": "ok", "data": ... }` — HTTP 200 with `code`
+      pinned to `0`.
+    - Failure: `{ "code": <http status>, "message": "...", "data": null }` — on a
+      failure, and only on a failure, `code` equals the HTTP status code.
+    - Paginated lists take `page` (default 1) and `size` (default 20, max 100) and
+      return `{ items, total, page, size }` inside `data`.
+    - A list operation that declares **no** `page`/`size` parameters returns its rows
+      as a flat array in `data` instead. These are the fixed-size dictionaries
+      (`/roles`, `/departments`, `/allergens`, `/drugs`, `/emr/templates`) and the
+      per-parent collections bounded by one parent (`/emr/orders`,
+      `/emr/records/{id}/versions`, `/patient-groups`,
+      `/patients/{patient_no}/histories`, `/patients/{patient_no}/allergies`,
+      `/patients/{patient_no}/assessments`, `/meetings/{id}/participants`,
+      `/meetings/{id}/materials`). Read the operation's `data` schema rather than
+      assuming the paginated shape.
+    - `message` is an English developer-facing string. Clients must render their
+      own copy and never show `message` to an end user.
+    - Timestamps are ISO 8601 in UTC.
+    - Errors are produced by global exception handlers. Route functions return
+      bare data and must not build the envelope themselves.
+
+    ## Roles and data scope
+
+    Functional permission comes from the role (`admin` / `senior` / `junior`).
+    Data permission comes from the department: a doctor sees only their own
+    department's patients, records, consultations, and meetings. `admin` is not
+    restricted by department. A `temp_grant` is the only time-boxed exception.
+
+    Authorization failures use two distinct codes and must not be conflated:
+
+    - `403` when the caller's role simply cannot perform the action, such as a
+      `junior` physician calling a review endpoint. `message` names the missing
+      permission.
+    - `404` when the action is allowed but the target belongs to another
+      department. This is indistinguishable from a genuinely missing record, so
+      the status code cannot be used to probe for the existence of a patient in
+      another department.
+
+    The Chinese companion document is `docs/api/API-索引.md`.
+  contact:
+    name: Doctor Work Platform team
+
+servers:
+  - url: /
+    description: Same origin. Vite proxies `/api` in development; Nginx proxies it in Docker.
+
+tags:
+  - name: Infrastructure
+    description: Health checks. Task T03.
+  - name: Auth
+    description: Two-step login, email verification code, logout. Tasks T05, T06.
+  - name: Users
+    description: User administration. Task T08.
+  - name: Grants
+    description: Time-boxed cross-department access. Task T10.
+  - name: Patients
+    description: Patient records, history, allergies, groups. Tasks T13, T14, T17.
+  - name: EMR
+    description: Templates, records, orders, review and archive. Tasks T18-T24.
+  - name: Prescriptions
+    description: Order validation and the drug dictionary. Task T21.
+  - name: Consultations
+    description: Online consultation, messaging, image upload, call metadata. Tasks T25-T29.
+  - name: Meetings
+    description: Remote consultation state machine, materials, report. Tasks T30-T32.
+  - name: Health
+    description: Health plans, vital signs, reminders, assessments. Tasks T33-T37.
+  - name: Audit
+    description: Audit log search and CSV export. Tasks T11, T12.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/health:
+    get:
+      operationId: getHealth
+      tags: [Infrastructure]
+      summary: Readiness of the database and Redis
+      description: |
+        Task T03. Always answers **200**, even when a dependency is down — a
+        dependency failure is reported in the body, never as a 500 or a 503, so the
+        process is not killed and the caller can still read the per-dependency state.
+        T03 scenario S1 stops Redis and requires this route to keep returning 200
+        with `redis` reading `down`.
+
+        Each field is `ok` or `down`. A dependency that is not configured in this
+        deployment is reported as `disabled` rather than `down`, so local mode with
+        no Redis is distinguishable from a genuinely broken Redis.
+
+        The sign-off document writes this route as `GET /health` (no `/api`) while the
+        repository convention is "routes live under `/api`". Both paths are registered
+        against this same handler and are documented separately below; the sign-off
+        scenario calls `/health`, and its response is identical.
+      security: []
+      responses:
+        '200':
+          description: Body carries the state of each dependency. This is the only success code; a down dependency does not change it.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResponse' }
+
+  /health:
+    get:
+      operationId: getHealthAlias
+      tags: [Infrastructure]
+      summary: Alias of `/api/health`
+      description: |
+        Task T03. The same handler as `/api/health`, mounted at the path the sign-off
+        document writes so T03 scenario S1 can call the route as written. Every rule
+        above applies unchanged: always 200, dependency state in the body only.
+      security: []
+      responses:
+        '200':
+          description: Identical to `/api/health`. Body carries the state of each dependency.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResponse' }
+
+  /api/auth/login:
+    post:
+      operationId: login
+      tags: [Auth]
+      summary: Verify a password and start the login handshake
+      description: |
+        Task T05. Step one of two. On success returns a one-time `ticket` valid for
+        5 minutes; the ticket is exchanged at `/auth/verify-code` for a JWT. A JWT is
+        never issued here — the two-step handshake is what makes 2FA meaningful.
+
+        Repeated wrong passwords must not be retryable without limit. T05 scenario S2
+        posts five wrong passwords in a row and requires a lockout or throttle response;
+        count failures per account in Redis and answer 429 once the limit is reached.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Credentials accepted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401':
+          description: Wrong username or password. The response does not say which.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: Too many consecutive failures for this account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/auth/send-code:
+    post:
+      operationId: sendCode
+      tags: [Auth]
+      summary: Email the login verification code
+      description: |
+        Task T06. Sends a 6-digit code, stored in Redis under a key that includes the
+        user id with a **TTL of 300 seconds**. The response never reveals whether the
+        address exists.
+
+        One send per account per 60 seconds. A repeat inside that window is refused and
+        the refusal **names the remaining seconds** — T06 scenario S2 clicks twice and
+        expects "retry in about 45 seconds", not a bare failure. A per-account daily
+        cap (the sign-off document suggests 20) bounds abuse.
+
+        The code must never appear in any response body or log line. A debug switch may
+        print it in a test environment; the production default is off.
+
+        If SMTP is unreachable, fail with a clear error rather than swallowing the
+        exception, and apply a timeout so the client is not left waiting forever.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SendCodeRequest' }
+      responses:
+        '200':
+          description: Code dispatched, or silently skipped for an unknown address.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkData' }
+        '429':
+          description: Sent too recently, or the daily cap is reached. `message` carries the remaining seconds.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '502':
+          description: SMTP is unavailable. The failure is reported, not swallowed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/auth/verify-code:
+    post:
+      operationId: verifyCode
+      tags: [Auth]
+      summary: Exchange the ticket and code for an access token
+      description: |
+        Task T05. Step two of two. Signs a JWT valid for 2 hours whose payload carries
+        `user_id`, `title`, `department`, and `jti`.
+
+        A code is single-use: a second submission of the same code fails, and a code
+        past its 300-second TTL fails with "the code has expired".
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyCodeRequest' }
+      responses:
+        '200':
+          description: Signed in.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '401':
+          description: Wrong code, already-used code, expired code, or expired ticket.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/auth/logout:
+    post:
+      operationId: logout
+      tags: [Auth]
+      summary: Invalidate the current token
+      description: |
+        Task T05. Adds the token's `jti` to a Redis blacklist so it stops working
+        immediately, before its natural 2-hour expiry.
+      responses:
+        '200':
+          description: Signed out.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/me:
+    get:
+      operationId: getMe
+      tags: [Auth]
+      summary: Read the signed-in user
+      description: |
+        Task T05. The frontend calls this on page load to restore the session and
+        decide which navigation entries and actions to render. Returns `title`, not
+        `role` — see T05 scenario S1, which asserts `title=admin`.
+
+        A missing token, an expired token, and a blacklisted token all answer **401**,
+        but the three `message` values must be distinguishable so the frontend can tell
+        "sign in again" from "your session was ended by a logout". A user whose
+        `status` is `disabled` is refused even while holding a valid token.
+      responses:
+        '200':
+          description: The current user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUserResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/users:
+    get:
+      operationId: listUsers
+      tags: [Users]
+      summary: List users
+      description: Task T08. Administrator only.
+      parameters:
+        - name: q
+          in: query
+          description: Matches name or username.
+          schema: { type: string }
+        - name: title
+          in: query
+          schema: { $ref: '#/components/schemas/Role' }
+        - name: department
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of users.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createUser
+      tags: [Users]
+      summary: Create a user
+      description: Task T08. Administrator only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCreateRequest' }
+      responses:
+        '200':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: The username is taken.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getUser
+      tags: [Users]
+      summary: Read a user
+      description: Task T08. Administrator only.
+      responses:
+        '200':
+          description: The user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateUser
+      tags: [Users]
+      summary: Update a user
+      description: Task T08. Administrator only. Changes title, department, name, or status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserUpdateRequest' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/roles:
+    get:
+      operationId: listRoles
+      tags: [Users]
+      summary: List role codes and their display names
+      description: Task T08. Feeds role pickers; also lets the frontend avoid hardcoding labels.
+      responses:
+        '200':
+          description: The three roles.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/departments:
+    get:
+      operationId: listDepartments
+      tags: [Users]
+      summary: List departments
+      description: |
+        Already implemented, and the one endpoint in this contract that **carries no task
+        ID**: it predates the task register in `project_plan.md` and no sign-off standard
+        asserts anything about it, so attributing it to one would be inventing an owner.
+        `API-索引.md` marks the same row "已有" for the same reason. It is listed here
+        because M03 §4 asks every interface to be traceable, and the honest trace is this
+        note rather than a made-up T-number.
+
+        It feeds the department pickers and filters that T09 (department isolation) and
+        T13 (patient search) depend on, so it must stay available to any authenticated
+        caller — `junior` included.
+      responses:
+        '200':
+          description: Departments.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DepartmentListResponse' }
+
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/temp-grants:
+    get:
+      operationId: listTempGrants
+      tags: [Grants]
+      summary: List time-boxed cross-department grants
+      description: Task T10.
+      parameters:
+        - name: grantee_id
+          in: query
+          schema: { type: integer }
+        - name: patient_no
+          in: query
+          schema: { type: string }
+        - name: is_valid
+          in: query
+          description: Filter to live grants (`true`) or spent ones (`false`).
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of grants, each with its expiry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TempGrantListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createTempGrant
+      tags: [Grants]
+      summary: Grant cross-department access to one patient
+      description: |
+        Task T10. **`admin` or `senior`** may initiate — the sign-off scenario has
+        `admin_zhang` create the grant, so this must not be restricted to `senior`.
+
+        A scheduled scan runs **every minute** and flips `is_valid` to false once
+        `expire_at` has passed, so access narrows without a restart. The scan is
+        registered once at application start-up; say explicitly in the code comment how
+        multiple workers are handled.
+
+        Both the creation and the automatic expiry are written to the audit trail as
+        `temp_grant.create` and `temp_grant.expire`. The sign-off scenario reads both
+        back, so neither write may be skipped.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TempGrantCreateRequest' }
+      responses:
+        '200':
+          description: Granted. The grantee can read the patient immediately; before this they received 404.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TempGrantResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/temp-grants/{id}:
+    delete:
+      operationId: revokeTempGrant
+      tags: [Grants]
+      summary: Revoke a grant immediately
+      description: |
+        Task T10. Sets `is_valid` to false ahead of the natural expiry, which the
+        consultation module calls when a meeting ends. Access falls back to 404 at once.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Revoked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TempGrantResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/patients:
+    get:
+      operationId: listPatients
+      tags: [Patients]
+      summary: Search patients
+      description: |
+        Task T13. The four search conditions — fuzzy name, exact patient number,
+        symptom tag, and admission-date range — combine freely with AND, and all four
+        may be sent at once. With none set, the full page for the caller's department is
+        returned. Results default to `created_at` descending.
+
+        A non-admin caller is silently restricted to their own department (T09); passing
+        another department does not widen the result set.
+      parameters:
+        - name: name
+          in: query
+          description: Fuzzy match on the patient name.
+          schema: { type: string }
+        - name: patient_no
+          in: query
+          description: Exact match. Distinct from `name`, which is fuzzy.
+          schema: { type: string, example: P20260001 }
+        - name: symptom_tags
+          in: query
+          description: |
+            Matches `symptom_tags` on the patient. Repeat the parameter to match any
+            of several tags; the name is plural for that reason, and a client sending
+            the singular `symptom_tag` gets no filtering at all rather than an error.
+
+            This is one of four search conditions — `name`, `patient_no`,
+            `symptom_tags`, and the admission-date range. They combine with AND and
+            may be used in any combination; all four empty returns the full page.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+            example: [胸痛, 高血压]
+        - name: department
+          in: query
+          schema: { type: string }
+        - name: group_id
+          in: query
+          description: |
+            Filter to one group. This **stacks with** the other conditions rather than
+            replacing them: T17 scenario S1 filters to a two-member group and then adds
+            a name search, and expects one row, not two. Treating the two as mutually
+            exclusive fails sign-off.
+          schema: { type: integer }
+        - name: admitted_from
+          in: query
+          description: Start of the admission-date range, inclusive.
+          schema: { type: string, format: date }
+        - name: admitted_to
+          in: query
+          description: End of the admission-date range, inclusive.
+          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of patients. An empty result is an empty `items` array, not a 404.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatientListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    post:
+      operationId: createPatient
+      tags: [Patients]
+      summary: Create a patient
+      description: |
+        Task T13. The server generates and returns the unique `patient_no`; the client
+        does not supply one. A missing required field is a 422 whose `message` names the
+        field, per T13 scenario S2.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatientCreateRequest' }
+      responses:
+        '200':
+          description: Created, with the generated `patient_no` in the body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatientResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/patients/{patient_no}:
+    parameters:
+      - $ref: '#/components/parameters/PatientNo'
+    get:
+      operationId: getPatient
+      tags: [Patients]
+      summary: Read a patient with allergies, history, and groups
+      description: |
+        Task T14. Subject to department scope. Returns 404 rather than 403 when the
+        patient belongs to another department, so the status code cannot be used to
+        probe for records.
+      responses:
+        '200':
+          description: The patient.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatientResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updatePatient
+      tags: [Patients]
+      summary: Edit patient basics
+      description: |
+        Task T13. Editing patient information is an explicit instructor requirement
+        and has no endpoint in the current backend.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatientUpdateRequest' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatientResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      operationId: deletePatient
+      tags: [Patients]
+      summary: Delete a patient
+      description: |
+        Task T13. The current backend exposes this without authentication; it must
+        require a signed-in user before any demo on a shared network.
+
+        **Deletion strategy (T13 criterion 1 requires this to be written down):** a
+        soft delete. The row is flagged as removed and disappears from list and detail
+        reads, while the audit trail and any archived record that references the patient
+        stay intact. A hard `DELETE` would break the append-only audit guarantee and the
+        archive lock, so it is not used. Child rows — allergies, histories, group
+        memberships — are left in place and filtered out with the parent.
+      responses:
+        '200':
+          description: Soft-deleted; the patient is no longer readable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/patients/{patient_no}/histories:
+    parameters:
+      - $ref: '#/components/parameters/PatientNo'
+    get:
+      operationId: listPatientHistories
+      tags: [Patients]
+      summary: List a patient's medical history
+      description: Task T14. Ordered by `onset_date` descending for the timeline view.
+      responses:
+        '200':
+          description: History entries.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HistoryListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createPatientHistory
+      tags: [Patients]
+      summary: Add a history entry
+      description: Task T14.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HistoryCreateRequest' }
+      responses:
+        '200':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HistoryResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/histories/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      operationId: updatePatientHistory
+      tags: [Patients]
+      summary: Update a history entry
+      description: Task T14.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HistoryCreateRequest' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HistoryResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deletePatientHistory
+      tags: [Patients]
+      summary: Delete a history entry
+      description: Task T14.
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkData' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/patients/{patient_no}/allergies:
+    parameters:
+      - $ref: '#/components/parameters/PatientNo'
+    get:
+      operationId: listPatientAllergies
+      tags: [Patients]
+      summary: List a patient's allergies
+      description: |
+        Task T14. The patient detail page keeps a persistent red warning banner for
+        severe allergies rather than hiding them in a tab, and shows no banner at all
+        when the list is empty.
+
+        This same list is what the order-validation engine reads, through one shared
+        function `get_patient_allergens(patient_no)`. The banner and the blocking engine
+        must not query allergies separately — T14 criterion 2 makes that a sign-off
+        condition, because two sources drift.
+      responses:
+        '200':
+          description: Allergies.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AllergyListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createPatientAllergy
+      tags: [Patients]
+      summary: Record an allergy
+      description: |
+        Task T14. Adding, changing, and deleting an allergy each write an audit entry
+        (`allergy.create` / `allergy.update` / `allergy.delete`); the delete entry names
+        the allergen that was removed, which is what T14 scenario S2 reads back.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AllergyCreateRequest' }
+      responses:
+        '200':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AllergyResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/allergies/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      operationId: updatePatientAllergy
+      tags: [Patients]
+      summary: Update an allergy
+      description: Task T14. Writes an `allergy.update` audit entry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AllergyCreateRequest' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AllergyResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deletePatientAllergy
+      tags: [Patients]
+      summary: Delete an allergy
+      description: Task T14. Writes an `allergy.delete` audit entry carrying the allergen name.
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkData' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/allergens:
+    get:
+      operationId: listAllergens
+      tags: [Patients]
+      summary: List the allergen dictionary
+      description: |
+        Task T14. Feeds the allergen picker so spellings stay consistent with the drug
+        contraindications that the order-validation engine compares against.
+
+        The dictionary must cover at least penicillins, sulfonamides, cephalosporins,
+        aspirin, and contrast media, and must allow a free-text addition for anything
+        outside it.
+      responses:
+        '200':
+          description: Allergens.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AllergenDictionaryResponse' }
+
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/patient-groups:
+    get:
+      operationId: listPatientGroups
+      tags: [Patients]
+      summary: List patient groups
+      description: |
+        Task T17. Each group carries its member count. Groups fall under the T09
+        department scope, so a caller never sees a group created by a physician outside
+        their own department — T17 scenario S2 checks exactly this.
+      responses:
+        '200':
+          description: Groups.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatientGroupListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createPatientGroup
+      tags: [Patients]
+      summary: Create a patient group
+      description: |
+        Task T17. Groups are manual, by condition or management status. Creation writes
+        an audit entry, as does any later membership change.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatientGroupWriteRequest' }
+      responses:
+        '200':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatientGroupResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/patient-groups/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      operationId: updatePatientGroup
+      tags: [Patients]
+      summary: Rename a patient group
+      description: Task T17.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatientGroupWriteRequest' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatientGroupResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deletePatientGroup
+      tags: [Patients]
+      summary: Delete a patient group
+      description: |
+        Task T17. **Deleting a group never deletes its patients** — the grouping goes,
+        the people stay in the patient list. T17 scenario S2 deletes a group and then
+        checks both members are still listed; a cascade here fails sign-off.
+      responses:
+        '200':
+          description: Grouping removed; the patients remain.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkData' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/patient-groups/{id}/members:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: addPatientGroupMember
+      tags: [Patients]
+      summary: Add patients to a group
+      description: Task T17.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GroupMembersRequest' }
+      responses:
+        '200':
+          description: Members added.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatientGroupResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: At least one patient is already in the group. `message` names them.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      operationId: removePatientGroupMember
+      tags: [Patients]
+      summary: Remove patients from a group
+      description: Task T17.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GroupMembersRequest' }
+      responses:
+        '200':
+          description: Members removed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PatientGroupResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/emr/templates:
+    get:
+      operationId: listEmrTemplates
+      tags: [EMR]
+      summary: List record templates
+      description: Task T18. Feeds the template picker in the record editor.
+      responses:
+        '200':
+          description: Templates.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrTemplateListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createEmrTemplate
+      tags: [EMR]
+      summary: Create a record template
+      description: |
+        Task T18. **Administrator only** — T18 scenario S2 calls this with a `junior`
+        account and requires 403, so the check must be on the endpoint and not merely on
+        the menu. Writes an `emr_template.create` audit entry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmrTemplateWriteRequest' }
+      responses:
+        '200':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrTemplateResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/emr/templates/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getEmrTemplate
+      tags: [EMR]
+      summary: Read a template with its field definitions
+      description: |
+        Task T18. `fields_json` is the sole input to the frontend's dynamic form.
+        **Five** field types only: `text`, `number`, `date`, `select`, `textarea`.
+        The dynamic-form engine is deliberately not generalised this term; a template
+        that declares any other type is rejected with 422 naming the offending field,
+        which is what T18 scenario S2 submits.
+      responses:
+        '200':
+          description: The template.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrTemplateResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateEmrTemplate
+      tags: [EMR]
+      summary: Update or deactivate a record template
+      description: |
+        Task T18. Administrator only. Sending `is_active: false` is the "deactivate"
+        action. Deactivating hides the template from the picker for new records but
+        **leaves existing records renderable** — they keep rendering against the field
+        list they were written with, so a later template change cannot scramble them.
+        Writes an `emr_template.update` audit entry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmrTemplateWriteRequest' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrTemplateResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/emr/records:
+    get:
+      operationId: listEmrRecords
+      tags: [EMR]
+      summary: List medical records
+      description: Task T19. Restricted to the caller's department unless they are an administrator.
+      parameters:
+        - name: patient_no
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/RecordStatus' }
+        - name: author_id
+          in: query
+          schema: { type: integer }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of records.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrRecordListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createEmrRecord
+      tags: [EMR]
+      summary: Start a record draft
+      description: Task T19. Creates an empty draft bound to a patient and a template.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmrRecordCreateRequest' }
+      responses:
+        '200':
+          description: Draft created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrRecordResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/emr/records/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getEmrRecord
+      tags: [EMR]
+      summary: Read a record
+      description: Task T19. Includes `content_json`, `status`, and `version`.
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrRecordResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateEmrRecord
+      tags: [EMR]
+      summary: Save a record draft
+      description: |
+        Task T22. The author only.
+
+        `version` is an optimistic lock; a mismatch returns 409 and the client must
+        reload rather than overwrite. A save against an `archived` record returns 409
+        because archiving locks the record to read-only. Both cases share the status
+        code and are told apart by `message`.
+
+        A failed save must not lose what the author typed: the client keeps a local
+        draft so the text survives a rejected request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmrRecordUpdateRequest' }
+      responses:
+        '200':
+          description: |
+            Saved. A draft save **does not** create a version — `version` advances only on
+            `submit` and `amend`. That is what makes T19 S1 read v1 (draft) → v2 (pending)
+            → v3 rather than one version per save.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrRecordResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            One of two conflicts, told apart by `message`:
+
+            - `"Already archived; it cannot be modified"` — the record was archived by a
+              senior physician. T19 scenario S2 asserts **409** here, not 400.
+            - `"The record was changed by someone else"` — the submitted `version` is stale.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/emr/records/{id}/submit:
+    post:
+      operationId: submitEmrRecord
+      tags: [EMR]
+      summary: Submit a draft for review
+      description: |
+        Task T19. Moves `draft` to `pending` and places the record in a senior
+        physician's queue. **Only `pending` records are reviewable**, so this call is the
+        sole doorway into the queue.
+
+        Each submit increments `version` and stores a **full snapshot** of the content,
+        not a diff — the version history must be readable on its own. T19 scenario S1
+        walks v1 (draft) → v2 (pending) → v3 and reads all three back.
+
+        Content is validated against the template's `fields_json`; a missing required
+        field is a 422 naming that field.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Submitted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrRecordResponse' }
+        '400':
+          description: |
+            The record is in neither `draft` nor `rejected`, so there is nowhere to advance
+            from. **`rejected` is explicitly allowed**: T24 §3 has the author open a record a
+            senior physician sent back, edit it, and submit it again — that increments
+            `version` and returns it to `pending`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            The record is `archived`. Archiving locks it read-only, and T24 §4 requires
+            **every** modifying call against an archived record to answer 409 — this one
+            included, not just the draft save.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: A required template field is empty. `message` names the field.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/emr/records/{id}/versions:
+    get:
+      operationId: listEmrRecordVersions
+      tags: [EMR]
+      summary: List a record's version history
+      description: |
+        Task T19. Every submit appends a **full snapshot** of the content, so any version
+        can be read on its own without replaying the ones before it. History is never
+        rewritten.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Versions, newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrVersionListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/emr/records/{id}/amend:
+    post:
+      operationId: amendEmrRecord
+      tags: [EMR]
+      summary: Append an amendment to an archived record
+      description: |
+        Task T19. The only way to add to a record after archiving: the original text
+        is never modified, the amendment is appended as a new version.
+
+        **The author of the record**, and no one else — the same rule as saving a
+        draft. This is deliberately *not* a senior-only action: T19 scenario S2 has
+        `dr_wang`, a junior physician, take the record he wrote to `archived` and then
+        amend it into v4. A senior reviews and archives; the author amends.
+
+        Because the record is already archived, this is the one write that must **not**
+        answer 409 — the archive lock is what it exists to work around. It is refused
+        with 400 only when the record was never archived, in which case a normal draft
+        save is the correct call.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AmendmentRequest' }
+      responses:
+        '200':
+          description: Amendment appended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrRecordResponse' }
+        '400':
+          description: The record is not archived, so use a normal draft save instead.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/emr/orders:
+    get:
+      operationId: listOrders
+      tags: [EMR]
+      summary: List the orders on a record
+      description: Task T20.
+      parameters:
+        - name: record_id
+          in: query
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Orders.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createOrders
+      tags: [EMR]
+      summary: Place orders
+      description: |
+        Task T20 / T21. **Validation runs again on the server before anything is
+        persisted.** The client-side pre-check is a convenience; the server is the only
+        authority. T21 scenario S2 calls this endpoint directly with curl, bypassing the
+        frontend entirely, and still requires the block to hold — if a direct call can
+        write a contraindicated order, that is a critical defect.
+
+        A `blocked` item rejects the **whole request** and nothing is written; the audit
+        trail records `medical_order.blocked`. T21 writes the status code as 422 or 409;
+        this contract fixes **409** so the frontend has one case to handle.
+
+        A `warning` item is allowed through and `validation_status` becomes `warning`, with
+        the rule detail kept on the order. An accompanying `override_reason` is optional:
+        when supplied it is stored, and a warning is never refused for want of one.
+
+        A successful placement writes a `medical_order.create` audit entry — the third of
+        the three actions T20 S2 looks for, alongside the `medical_order.modify` written by
+        the PATCH and the `medical_order.stop` written by the stop route.
+
+        Each item is validated against its own required fields. A `medication` item with no
+        `dose` is refused with **422** and a `message` naming `dose` (T20 S2); lab and
+        examination items carry no dose and are not held to that rule.
+
+        The patient is the owner of the record named by `record_id`; the server resolves
+        it from the record and runs the allergen comparison against that patient. This
+        request carries no `patient_no` — the record supplies it. Reaching validation
+        without a patient in scope is precisely the defect this endpoint exists to
+        prevent.
+
+        When a request hits both, both appear in `results`, ordered by severity with the
+        block first. The rule table itself is configuration, not code — A must leave it
+        readable so B can change it unaided (risk R4).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderCreateRequest' }
+      responses:
+        '200':
+          description: Orders placed, each carrying its `validation_status` and the rule detail that produced it.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            At least one item is blocked. Nothing was written. `message` names the
+            allergen, for example "The patient is allergic to Penicillins; this order
+            cannot be placed."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: The payload is invalid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/emr/orders/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      operationId: updateOrder
+      tags: [EMR]
+      summary: Modify an order
+      description: |
+        Task T20. Re-runs validation; a modification can still be blocked. Writes a
+        `medical_order.modify` audit entry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderItemInput' }
+      responses:
+        '200':
+          description: Modified.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The change is blocked by an allergy conflict.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: The payload is invalid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/emr/orders/{id}/stop:
+    post:
+      operationId: stopOrder
+      tags: [EMR]
+      summary: Stop an order
+      description: |
+        Task T20. A **soft stop**: `status` becomes `stopped` and the row stays, so the
+        prescription history remains complete. Nothing is physically deleted. Writes a
+        `medical_order.stop` audit entry.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Stopped.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/emr/orders/validate:
+    post:
+      operationId: validateOrders
+      tags: [Prescriptions]
+      summary: Validate orders without saving them
+      description: |
+        Task T21 and the centrepiece of the demonstration. Runs the same three-level
+        check the save path uses and returns the verdict per item.
+
+        - `blocked` — the drug conflicts with a recorded allergy. The client shows a
+          red dialog whose only actions are Cancel and Change drug. There is
+          deliberately no "prescribe anyway" escape.
+        - `warning` — the dose or frequency is outside the safe range. The client
+          shows a yellow dialog offering Continue, and the physician must confirm
+          before anything is saved. A confirmation carries no obligation to justify
+          itself: `override_reason` may ride along and is stored when present, but its
+          absence is never a reason to refuse the order. The `message` quotes the
+          normal range alongside the requested dose, for example
+          "Usual dose 20–40mg/day; this order is 80mg."
+        - `passed` — no conflict.
+
+        Both checks can fire on one item. Then both entries appear in `reasons`, ordered
+        by severity so the block reads first. T21 scenario S1 walks a six-case matrix —
+        allergy hit, allergy miss, dose over range, dose in range, both at once, and a
+        patient with no allergy history — and every cell must match.
+
+        Nothing is persisted by this call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderValidateRequest' }
+      responses:
+        '200':
+          description: A verdict for every item, plus the worst verdict overall.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderValidateResponse' }
+        '404':
+          description: No such patient in the caller's scope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/drugs:
+    get:
+      operationId: listDrugs
+      tags: [Prescriptions]
+      summary: List the drug dictionary
+      description: |
+        Task T21. Each drug carries the allergen codes it conflicts with, so the
+        dictionary and the allergy records share one vocabulary.
+      parameters:
+        - name: q
+          in: query
+          description: Matches drug name or code.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Drugs.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DrugListResponse' }
+
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/emr/reviews:
+    get:
+      operationId: listPendingReviews
+      tags: [EMR]
+      summary: List records awaiting review
+      description: |
+        Task T24. Senior physician only. Returns `pending` records from the caller's
+        department. A junior physician receives 403, which is the behaviour the menu
+        must reflect by hiding the review queue.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of records awaiting review.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrRecordListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/emr/records/{id}/review:
+    post:
+      operationId: reviewEmrRecord
+      tags: [EMR]
+      summary: Approve or reject a record
+      description: |
+        Task T24. Senior physician only, and only for a `pending` record.
+
+        **`approve` archives directly.** Status becomes `archived` in one step and
+        `reviewer_id` / `reviewed_at` are recorded. There is **no intermediate
+        `approved` state** — T24 criterion 2 is "approve → archive", and the two-step
+        flow this document previously asked A to decide on is settled here. There is
+        therefore no separate archive call to make afterwards.
+
+        `reject` requires `comment` and sets `rejected`, storing the comment as
+        `review_comment`. The author sees it under "My submissions" and can edit and
+        resubmit, which increments `version` and returns the record to `pending`
+        (T24 scenario S2 fails sign-off if the comment is not visible to the author).
+
+        Either outcome writes an audit entry naming the reviewer, the time, and the
+        comment.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReviewRequest' }
+      responses:
+        '200':
+          description: Reviewed. On approval the returned record already reads `archived`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrRecordResponse' }
+        '400':
+          description: The record is not `pending` and so is not reviewable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: A rejection arrived without a `comment`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/emr/my-submissions:
+    get:
+      operationId: listMySubmissions
+      tags: [EMR]
+      summary: List the caller's own submissions, including rejections
+      description: |
+        Task T24. Feeds the author's "My submissions" view. It must include `rejected`
+        records **together with their `review_comment`**, because the author cannot act
+        on a rejection they cannot read.
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/RecordStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: The caller's records, with review comments where present.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrRecordListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/emr/records/{id}/archive:
+    post:
+      operationId: archiveEmrRecord
+      tags: [EMR]
+      summary: Archive a record
+      description: |
+        Task T24. Senior physician only, and retained for archiving something that did
+        not come through approval. The normal path is `approve`, which archives in the
+        same call; this endpoint exists so an already-reviewed record can be locked
+        deliberately.
+
+        Archiving locks the record to read-only: **every later `PATCH` returns 409**
+        with "already archived", and only `/amend` can add to it. The frontend editor
+        goes read-only too, so the rule holds at both ends.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Archived.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmrRecordResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The record is already archived.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/consultations:
+    get:
+      operationId: listConsultations
+      tags: [Consultations]
+      summary: List consultations
+      description: Task T27. The workspace groups these as waiting, active, and ended.
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ConsultationStatus' }
+        - name: patient_no
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of consultations.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsultationListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createConsultation
+      tags: [Consultations]
+      summary: Open a consultation
+      description: Task T27.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConsultationCreateRequest' }
+      responses:
+        '200':
+          description: Opened in `waiting`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsultationResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/consultations/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getConsultation
+      tags: [Consultations]
+      summary: Read a consultation
+      description: Task T27.
+      responses:
+        '200':
+          description: The consultation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsultationResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/consultations/{id}/accept:
+    post:
+      operationId: acceptConsultation
+      tags: [Consultations]
+      summary: Accept a waiting consultation
+      description: Task T27. Moves `waiting` to `active`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Accepted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsultationResponse' }
+        '400':
+          description: The consultation is not waiting.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Another doctor accepted it first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/consultations/{id}/end:
+    post:
+      operationId: endConsultation
+      tags: [Consultations]
+      summary: End a consultation
+      description: Task T27. Moves `active` to `ended`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Ended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsultationResponse' }
+        '400':
+          description: The consultation is not active.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/consultations/{id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: listConsultationMessages
+      tags: [Consultations]
+      summary: Read the message history
+      description: |
+        Task T26 / T27. Newest first, so the chat loads older messages as the reader
+        scrolls up. T27 scenario S2 opens a session with 50 messages and expects the
+        first page to be 20, then 20 more on scroll, in order with no duplicates and no
+        gaps — so the ordering must be stable across pages, not merely "roughly newest".
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of messages.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createConsultationMessage
+      tags: [Consultations]
+      summary: Send a message over HTTP
+      description: |
+        Task T26. The HTTP fallback for when the WebSocket is unavailable; the normal
+        path is the chat socket, `WS /ws/chat/{room_id}` with `room_id` set to the
+        consultation id. Both write the same row, so a client that reconnects loses
+        nothing.
+
+        Sending to an `ended` consultation is refused — the room is read-only once
+        closed (T27 criterion 4).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageCreateRequest' }
+      responses:
+        '200':
+          description: Stored.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The consultation has ended and its room is read-only.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/consultations/records:
+    get:
+      operationId: listConsultationRecords
+      tags: [Consultations]
+      summary: Search past consultations
+      description: |
+        Task T28. Patient, date range, and keyword combine with AND and all three may be
+        sent at once. Results fall under the T09 department scope: a keyword naming a
+        patient from another department returns **zero rows**, not a permission error —
+        T28 scenario S2 calls this a security defect if it leaks.
+
+        Each result opens to the full session, text and images together, with timestamps
+        (criterion 2). The search must answer in under 2 seconds with 100+ sessions, so
+        index the message content and the consultation dates.
+      parameters:
+        - name: patient_no
+          in: query
+          schema: { type: string }
+        - name: q
+          in: query
+          description: Matches message content.
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of consultations.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsultationListResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/consultations/export:
+    get:
+      operationId: exportConsultationRecords
+      tags: [Consultations]
+      summary: Export consultation records as CSV
+      description: |
+        Task T28. Returns `text/csv`, not the JSON envelope, so the frontend uses a blob
+        download path rather than the shared JSON client.
+
+        The rows must match the caller's current filters rather than dumping everything,
+        and the body must start with a **UTF-8 BOM** — T28 scenario S1 opens the file in
+        Excel and requires no mojibake and a row count equal to the page.
+      parameters:
+        - name: patient_no
+          in: query
+          schema: { type: string }
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: A CSV attachment, named after the filters that produced it.
+          headers:
+            Content-Disposition:
+              description: |
+                `attachment` with both a plain `filename` and an RFC 5987 `filename*`.
+                Same header as `/api/audit-logs/export`, so both CSV routes download under
+                a real name rather than the endpoint's path segment.
+              schema: { type: string }
+              example: "attachment; filename=\"consultations-2026-09-01_2026-09-11.csv\"; filename*=UTF-8''consultations-2026-09-01_2026-09-11.csv"
+          content:
+            text/csv:
+              schema:
+                type: string
+
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/uploads/images:
+    post:
+      operationId: uploadImage
+      tags: [Consultations]
+      summary: Upload an image
+      description: |
+        Task T26. Stored on local disk under `uploads/` and served by StaticFiles.
+        Object storage was cut from scope.
+
+        Three checks are mandatory, and T26 scenario S2 exercises each:
+
+        - **Content type**, not the file extension, against the whitelist
+          **jpg / png / webp**. A `.exe` renamed to `.jpg` is rejected; sniff the bytes, do
+          not trust the name. `webp` is on the list — a jpg/png-only check refuses a
+          legitimate format the sign-off document names.
+        - **Size cap of 5MB.** A 20MB upload is refused with a message saying so.
+        - **The filename is replaced with a random value** and the file is written
+          inside `uploads/`. An upload called `../evil.png` must land as a random name
+          and must not escape the directory.
+
+        This image-only whitelist is **T26's**. Meeting materials reuse the same uploader but
+        accept a wider set (PDF / images / documents) — see `POST /api/meetings/{id}/materials`.
+
+        The returned URL has to keep working after a page refresh, and a failed upload
+        must leave no half-written message behind — no bubble whose image is broken.
+        `uploads/` is gitignored; document the retention policy in the README.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Stored; returns the URL to send in a message.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadResponse' }
+        '400':
+          description: Unsupported content type or the file is too large.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/consultations/{id}/calls:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: listCallLogs
+      tags: [Consultations]
+      summary: Read the call history
+      description: |
+        Task T29. This is the read side of the call metadata, and without it T29
+        criterion 3 cannot be met: the criterion is not that `call_log` is written,
+        it is that the entry is **viewable in the consultation record**. Scenario S1
+        hangs up after about a minute and then asserts the consultation shows a new
+        entry carrying its start, its end, and a duration of roughly 60 seconds.
+
+        Newest first, matching the message history. A consultation with no calls
+        returns an empty page, not a 404 — the session exists, it just has no calls.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of calls.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CallLogListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createCallLog
+      tags: [Consultations]
+      summary: Record call metadata
+      description: |
+        Task T29. Stores timing and duration only. Recording and cloud storage were
+        cut from scope, so no media is stored.
+
+        Called **once the call has ended**, not when it starts. That is what keeps
+        criterion 4 honest — "no state is left stuck on *in call*" — because a row
+        only exists for a call that finished, so a ring-out or an abandoned call
+        cannot leave a stale open entry behind. Scenario S2 asserts there is no ghost
+        in-progress record, and this design makes one impossible.
+
+        Criterion 5 restricts calling to the physicians on this session, so a caller
+        who is not a participant is refused with 403 rather than silently allowed —
+        the same rule the signalling room in T25 applies.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CallLogRequest' }
+      responses:
+        '200':
+          description: |
+            Recorded. The stored entry is echoed back in full so the client can render
+            the new row without a follow-up read.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CallLogResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/meetings:
+    get:
+      operationId: listMeetings
+      tags: [Meetings]
+      summary: List meetings
+      description: |
+        Task T30. **Without a filter** this returns the meetings the caller started plus
+        those they were invited to.
+
+        **`patient_no` deliberately widens that scope, and is what backs the
+        "Consultations" tab on the patient detail page**: it lists that patient's
+        meetings, and each row's report is then read through
+        `GET /api/meetings/{id}/report`. This is how a patient's archived report is reached
+        after the meeting is over. T32 §3 archives the report **to the patient record**, so
+        a department colleague who neither started nor attended the meeting has to be able
+        to read it back through that tab — restricting the patient-scoped list to
+        initiator-or-invitee would leave the tab empty for exactly the people it is for.
+
+        Access to the patient follows the ordinary T09 department rule, the same one that
+        governs `GET /api/patients/{patient_no}`: inside the caller's department the
+        meetings are listed, outside it the page comes back empty.
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/MeetingStatus' }
+        - name: patient_no
+          in: query
+          description: |
+            Restricts the page to one patient. Access to that patient is enforced as
+            everywhere else: a caller who cannot reach the patient gets an empty page,
+            because the patient-scoped 404 is raised by the patient routes, not here.
+          schema: { type: string, example: P20260001 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of meetings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createMeeting
+      tags: [Meetings]
+      summary: Request a remote consultation
+      description: |
+        Task T30. Takes a patient, one or more invited specialists, a purpose, and an
+        expected time. Anyone who can reach the patient may initiate — **T30 scenario S1
+        has `dr_wang`, a junior physician, start the meeting**, so this endpoint must not
+        be restricted to `senior`.
+
+        **Inviting an expert automatically creates a `temp_grant` for each one**, valid
+        from now until the planned meeting time plus a 24-hour buffer. That is the
+        cross-module link with T10, and scenario S1 checks the grant table directly: after
+        the invitation, a grant exists for the invitee against the patient, and the
+        invitee can suddenly read a patient who returned 404 a moment earlier. Creating
+        the meeting without the grants fails sign-off.
+
+        Inviting a physician who does not exist is a 404. Writes a `meeting.create` audit
+        entry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MeetingCreateRequest' }
+      responses:
+        '200':
+          description: Requested, with a grant created for each invitee.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/meetings/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getMeeting
+      tags: [Meetings]
+      summary: Read a meeting
+      description: |
+        Task T30. Participants only. A physician who was neither the initiator nor
+        invited gets 403 or 404 — either is accepted, as long as the response does not
+        confirm that the meeting exists.
+      responses:
+        '200':
+          description: |
+            The meeting, with its participants and the purpose it was called for. Materials
+            and the report are separate sub-resources — `GET /api/meetings/{id}/materials`
+            and `GET /api/meetings/{id}/report` — and are deliberately **not** embedded
+            here, so opening a meeting does not drag a file list and a report along with it.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/meetings/{id}/accept:
+    post:
+      operationId: acceptMeeting
+      tags: [Meetings]
+      summary: Accept a meeting invitation
+      description: Task T30. The invitee's action. Moves `requested` to `accepted`. Writes an audit entry.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Accepted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The meeting is not awaiting acceptance.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/meetings/{id}/decline:
+    post:
+      operationId: declineMeeting
+      tags: [Meetings]
+      summary: Decline a meeting invitation
+      description: |
+        Task T30. The other half of the invitation inbox. Moves `requested` to
+        **`declined`**, which is a real state in the machine, not a deletion. Writes an
+        audit entry.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Declined.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The meeting is not awaiting acceptance.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/meetings/{id}/start:
+    post:
+      operationId: startMeeting
+      tags: [Meetings]
+      summary: Start a meeting
+      description: Task T30. Initiator only. Moves `accepted` to `in_progress`.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingResponse' }
+        '409':
+          description: The meeting is not in `accepted`. Any illegal jump in the state machine answers 409 — T30 scenario S2 forces `requested` straight to `completed` and requires 409, not 400.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/meetings/{id}/complete:
+    post:
+      operationId: completeMeeting
+      tags: [Meetings]
+      summary: Complete a meeting
+      description: Task T30. Initiator only. Moves `in_progress` to `completed`; a report can then be written.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Completed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingResponse' }
+        '409':
+          description: The meeting is not in progress.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/meetings/{id}/participants:
+    get:
+      operationId: listMeetingParticipants
+      tags: [Meetings]
+      summary: List a meeting's participants
+      description: Task T30. Includes each participant's acceptance status.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Participants.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingParticipantListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/meetings/{id}/materials:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: listMeetingMaterials
+      tags: [Meetings]
+      summary: List shared materials
+      description: |
+        Task T31. **Participants only**, enforced on the server — hiding the list in the
+        frontend is not enough. Each row carries the filename, uploader, and time.
+      responses:
+        '200':
+          description: Materials.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingMaterialListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: uploadMeetingMaterial
+      tags: [Meetings]
+      summary: Share a record or image
+      description: |
+        Task T31. Participants only. Files go to `uploads/meeting/`, served by
+        StaticFiles; object storage was cut from scope.
+
+        **It reuses T26's upload component — but not T26's type whitelist.** T31 criterion 4
+        forbids implementing a second uploader, because two copies of a security check drift
+        apart; the size cap, the filename randomisation, the content-type check (rather than
+        extension) and the audit hook are all that same code. The accepted types are
+        deliberately **wider** than T26's image-only list (jpg / png / webp): T31 §1 says
+        meeting participants share "PDF / 图片 / 文档", and scenario S1 uploads
+        "心电图-2026-09-01.pdf". An implementation that reuses T26's whitelist verbatim
+        rejects that PDF and cannot pass S1.
+
+        So: **this route accepts PDF, images, and documents**; the size cap and the rest of
+        the component are shared with T26. A type outside that set is a 422 naming the
+        offending type.
+
+        Chinese filenames must survive the round trip intact, which is what scenario S1
+        checks when it downloads "心电图-2026-09-01.pdf" and finds the name readable.
+
+        Uploads are audited.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Shared.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingMaterialResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: |
+            Content type outside the meeting-material whitelist (PDF / images / documents),
+            or the file exceeds the shared size cap. `message` names the offending type.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/materials/{id}/download:
+    get:
+      operationId: downloadMaterial
+      tags: [Meetings]
+      summary: Download a shared material
+      description: |
+        Task T31. Returns the file itself, not the JSON envelope.
+
+        **A physician who is not a participant of the owning meeting gets 403.**
+        Scenario S2 copies this URL into a non-participant's session and expects the
+        refusal; guessing a different meeting's material URL must also fail rather than
+        leak. It is not enough to protect the list — the download is the hole people
+        forget. Downloads are audited.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: |
+            The file, with the **original filename** in `Content-Disposition` so a Chinese
+            name is not lost. T31 §3 requires the downloaded filename to be correct and
+            scenario S1 checks that "心电图-2026-09-01.pdf" arrives readable; without this
+            header the browser names the file after the numeric material id in the URL.
+          headers:
+            Content-Disposition:
+              description: |
+                `attachment` carrying both a plain `filename` and an RFC 5987 `filename*`,
+                the latter percent-encoded as UTF-8. The stored file on disk keeps its
+                randomised name; only this header carries the original.
+              schema: { type: string }
+              example: "attachment; filename=\"心电图-2026-09-01.pdf\"; filename*=UTF-8''%E5%BF%83%E7%94%B5%E5%9B%BE-2026-09-01.pdf"
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/meetings/{id}/report:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getMeetingReport
+      tags: [Meetings]
+      summary: Read the meeting report
+      description: |
+        Task T32. **Readable by the meeting's participants *and* by anyone who can reach the
+        patient under the ordinary T09 department rule.** T32 §3 archives the report into the
+        patient record, so a colleague in the same department who neither started nor
+        attended the meeting reads it back through the "Consultations" tab — this endpoint
+        and that tab read the same row, not two copies. A caller who is neither a participant
+        nor able to reach the patient gets 403 or 404, without confirming the meeting exists.
+
+        Writing the report is a different rule: `POST` on this path stays **participants
+        only**, because T32 scenario S2 has a non-participant attempt it and requires 403.
+      responses:
+        '200':
+          description: The report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingReportResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: saveMeetingReport
+      tags: [Meetings]
+      summary: Write or update the meeting report
+      description: |
+        Task T32. Participants only — T32 scenario S2 has a non-participant attempt this
+        and requires 403, so the check cannot live in the UI.
+
+        The body is one **opinion per expert plus an overall conclusion**, which is what
+        the Jinja2 template renders.
+
+        Once the report exists, the conclusion is no longer freely editable. A later
+        change is either refused or written as a **new version with the old one still
+        readable**; silently overwriting the conclusion fails sign-off. Generation is
+        audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MeetingReportWriteRequest' }
+      responses:
+        '200':
+          description: Saved.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeetingReportResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The report is already generated and the conclusion cannot be rewritten in place.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/meetings/{id}/report/print:
+    get:
+      operationId: printMeetingReport
+      tags: [Meetings]
+      summary: Render the report as printable HTML
+      description: |
+        Task T32. Participants only. Jinja2 renders HTML that the browser prints to PDF;
+        no server-side PDF library is used.
+
+        The page ships `@media print` styles sized to A4 with a header and footer, so
+        Ctrl+P previews a clean sheet with nothing clipped — scenario S1 checks exactly
+        that.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: A printable HTML page.
+          content:
+            text/html:
+              schema:
+                type: string
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/health-plans:
+    get:
+      operationId: listHealthPlans
+      tags: [Health]
+      summary: List health plans
+      description: Task T35 (not T33).
+      parameters:
+        - name: patient_no
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of plans.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthPlanListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createHealthPlan
+      tags: [Health]
+      summary: Create a health plan
+      description: |
+        Task T35 (not T33). A plan covers medication, follow-up, or diet and exercise
+        advice, and carries a date range and a goal.
+
+        A plan may **link reminder rules in the same call** — scenario S1 ticks "daily
+        09:00 medication reminder" while creating the plan and then finds the matching
+        rule in the T36 list, so the two modules share one write path rather than asking
+        the user to configure the same thing twice. Two fields carry that: `reminder_rule_ids`
+        links rules that already exist, and `new_reminder_rules` creates them inline. A rule
+        that does not exist yet has no id, so the inline block is the one S1 needs; the rules
+        it creates come back with `health_plan_id` already set.
+
+        Scoped by department: creating a plan for a patient outside the caller's
+        department is a 404. An end date before the start date is a 422 naming the field.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HealthPlanWriteRequest' }
+      responses:
+        '200':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthPlanResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/health-plans/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getHealthPlan
+      tags: [Health]
+      summary: Read a health plan
+      description: Task T35. Includes the plan's entries and their status, plus any linked reminder rules.
+      responses:
+        '200':
+          description: The plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthPlanResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateHealthPlan
+      tags: [Health]
+      summary: Update a health plan
+      description: |
+        Task T35. Also carries the status change between `active`, `completed`, and
+        `terminated`; each change writes an audit entry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HealthPlanWriteRequest' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthPlanResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/patients/{patient_no}/vitals:
+    parameters:
+      - $ref: '#/components/parameters/PatientNo'
+    get:
+      operationId: listVitals
+      tags: [Health]
+      summary: List vital sign readings
+      description: |
+        Task T33. There is no patient client, so readings are entered by staff. A mock
+        script may generate them for the demonstration, which is why `source` exists.
+        Scoped by department like every other patient read.
+      parameters:
+        - name: sign_type
+          in: query
+          schema: { $ref: '#/components/schemas/VitalType' }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of readings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VitalSignListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createVital
+      tags: [Health]
+      summary: Record a vital sign reading
+      description: |
+        Task T33. Records one reading and sets `is_abnormal` against the configured
+        threshold for that `sign_type`.
+
+        The payload is validated: a non-numeric blood pressure is a 422, and a
+        `recorded_at` in the future is a 422 — T33 scenario S2 submits both.
+
+        Thresholds come from one central configuration table, not from constants
+        scattered through the service code, so a clinician's adjustment lands in one
+        place.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VitalSignCreateRequest' }
+      responses:
+        '200':
+          description: Recorded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VitalSignResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/patients/{patient_no}/vitals/trend:
+    get:
+      operationId: getVitalTrend
+      tags: [Health]
+      summary: Read trend-chart data for one metric
+      description: |
+        Task T34. Returns a time series shaped for ECharts directly — pairs of timestamp
+        and value, not raw table rows — so the client draws without reshaping.
+
+        The server marks each point with `is_abnormal` and returns the threshold that
+        produced it. The client colours the point red and shows the threshold in the
+        tooltip; it must **not** recompute the threshold, or the chart and the record
+        will disagree.
+
+        For `bp` each point carries **two** values, systolic and diastolic, because the
+        chart draws both lines (T34 criterion 6). An empty range returns `points: []`
+        and the chart shows an empty state rather than a blank canvas.
+      parameters:
+        - $ref: '#/components/parameters/PatientNo'
+        - name: sign_type
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/VitalType' }
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Points, unit, and threshold for the requested metric.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VitalTrendResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/reminder-rules:
+    get:
+      operationId: listReminderRules
+      tags: [Health]
+      summary: List reminder rules
+      description: Task T36.
+      parameters:
+        - name: patient_no
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Rules.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReminderRuleListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createReminderRule
+      tags: [Health]
+      summary: Create a reminder rule
+      description: |
+        Task T36. A rule carries `rtype` (medication, follow-up, or check-in),
+        `cron_expr`, and `active`. APScheduler runs these on their cron and writes a
+        reminder log entry each time one fires. Push notifications were cut from scope,
+        so reminders surface in the workspace only.
+
+        The scheduler is registered **once at start-up**. Say in the code how multiple
+        workers are handled, because two registrations double every reminder.
+
+        Generation is **idempotent on `rule_id` + `due_at`**, so restarting the service
+        cannot re-send a reminder that already fired. T36 scenario S2 restarts twice and
+        requires no duplicates; a doubling count fails sign-off.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReminderRuleWriteRequest' }
+      responses:
+        '200':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReminderRuleResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/reminder-rules/{id}:
+    patch:
+      operationId: updateReminderRule
+      tags: [Health]
+      summary: Update a reminder rule
+      description: |
+        Task T36. The body is partial: **`{"active": false}` on its own is a complete
+        request** that deactivates the rule, which is what T36 §4 and scenario S2 exercise.
+        Deactivating stops **new** reminders from being generated; the ones already logged
+        stay put.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReminderRuleUpdateRequest' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReminderRuleResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/reminders:
+    get:
+      operationId: listReminders
+      tags: [Health]
+      summary: List fired reminders
+      description: |
+        Task T36. Entries are separate from rules: a rule describes a schedule, a log
+        entry is one firing of it.
+
+        **Opening this list clears the workspace red dot** (criterion 2), so reading the
+        list marks the returned entries as seen. `unread_only` is available for a caller
+        that wants the dot's contents without consuming them.
+      parameters:
+        - name: patient_no
+          in: query
+          schema: { type: string }
+        - name: done
+          in: query
+          schema: { type: boolean }
+        - name: unread_only
+          in: query
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of reminder log entries, plus the unread count that drives the red dot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReminderLogListResponse' }
+
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/reminders/unread-count:
+    get:
+      operationId: getUnreadReminderCount
+      tags: [Health]
+      summary: Count unread reminders
+      description: |
+        Task T36. The single number behind the red dot, so the workspace shell can poll
+        one cheap endpoint instead of fetching the list to decide whether to show it.
+      responses:
+        '200':
+          description: The unread count.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnreadCountResponse' }
+
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/reminders/{id}/done:
+    post:
+      operationId: markReminderDone
+      tags: [Health]
+      summary: Mark a reminder as actioned
+      description: Task T36.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Marked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReminderLogResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/patients/{patient_no}/assessments:
+    parameters:
+      - $ref: '#/components/parameters/PatientNo'
+    get:
+      operationId: listHealthAssessments
+      tags: [Health]
+      summary: List periodic assessments
+      description: |
+        Task T37. Newest first, feeding the "Health data" section of the patient detail
+        page.
+      responses:
+        '200':
+          description: Assessments.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthAssessmentListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createHealthAssessment
+      tags: [Health]
+      summary: Record a periodic assessment
+      description: |
+        Task T37. Fields are the period, the conclusion, and any plan adjustment
+        suggested. A missing conclusion is a 422 from the backend as well as a frontend
+        check — scenario S2 requires both.
+
+        The record links the patient and the assessing physician, and the write is
+        audited. Once saved it is **not freely editable**: the stored entry keeps its
+        original text and at least a modification timestamp if it is ever changed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HealthAssessmentWriteRequest' }
+      responses:
+        '200':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthAssessmentResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/assessments/{id}:
+    get:
+      operationId: getHealthAssessment
+      tags: [Health]
+      summary: Read a periodic assessment
+      description: Task T37.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: The assessment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthAssessmentResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateHealthAssessment
+      tags: [Health]
+      summary: Revise a periodic assessment
+      description: |
+        Task T37. A revision does not overwrite the original in place: it increments
+        `version` and stamps `updated_at`, so the earlier conclusion stays readable.
+
+        **Only the assessing physician may revise their own assessment.** T37 scenario S2
+        has `dr_wang` attempt to change one written by `dr_li` and requires 403 — an
+        assessment is an attributed clinical opinion, not a shared document.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HealthAssessmentWriteRequest' }
+      responses:
+        '200':
+          description: Revised.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthAssessmentResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/audit-logs:
+    get:
+      operationId: listAuditLogs
+      tags: [Audit]
+      summary: Search the audit trail
+      description: |
+        Task T12. **Administrator only** — a senior physician is refused too, with 403
+        and no log data in the body. Hiding the menu entry is not enough; the sign-off
+        scenario calls the endpoint directly with a junior account and requires 403.
+
+        Two writers, split by T11's two criteria. **Writes** (POST / PUT / PATCH / DELETE)
+        are recorded automatically by middleware in the request path — business code never
+        writes those by hand (T11 §1). **Sensitive reads** are *not* visible to middleware
+        and are therefore instrumented **manually by the business code**: viewing a patient
+        detail, viewing an EMR record, and exporting this log (T11 §2). T11 S1 asserts a
+        `patient.view` row appears after `GET /api/patients/P20260001`, so a
+        middleware-only implementation fails the criterion.
+
+        A logging failure is swallowed and alerted on; it must never roll back or 500 the
+        request that triggered it (T11 §3).
+      parameters:
+        - name: user_id
+          in: query
+          schema: { type: integer }
+        - name: action
+          in: query
+          description: Exact action key, for example `patient.view`.
+          schema: { type: string }
+        - name: object_type
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of audit entries.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditLogListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/audit-logs/export:
+    get:
+      operationId: exportAuditLogs
+      tags: [Audit]
+      summary: Export the audit trail as CSV
+      description: |
+        Task T12. Administrator only. Returns `text/csv`, not the JSON envelope, so
+        the frontend uses a blob download path rather than the shared JSON client.
+        Accepts the same filters as the search endpoint, without pagination.
+
+        The export must honour the caller's current filters rather than dumping the
+        whole table, the filename must carry the time range, and the body must start
+        with a UTF-8 BOM so Excel opens it without mojibake.
+      parameters:
+        - name: user_id
+          in: query
+          schema: { type: integer }
+        - name: action
+          in: query
+          schema: { type: string }
+        - name: object_type
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: |
+            A CSV attachment. The `Content-Disposition` header carries the time range in
+            the filename, which T12 §2 asserts, so the browser's save dialog shows it
+            rather than a bare endpoint name.
+          headers:
+            Content-Disposition:
+              description: |
+                `attachment` with both a plain `filename` and an RFC 5987 `filename*`, so
+                a non-ASCII name survives the round trip.
+              schema: { type: string }
+              example: "attachment; filename=\"audit-2026-09-01_2026-09-11.csv\"; filename*=UTF-8''audit-2026-09-01_2026-09-11.csv"
+          content:
+            text/csv:
+              schema:
+                type: string
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/audit-logs/{id}:
+    get:
+      operationId: getAuditLog
+      tags: [Audit]
+      summary: Read one audit entry
+      description: |
+        Task T12. Administrator only. Returns the full `detail` payload for one entry.
+
+        The list endpoint also returns `detail`, because the sign-off criteria require
+        a list row to expand in place and show the original payload — the frontend
+        must not have to fetch each row individually.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: The entry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditLogResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /ws/chat/{room_id}:
+    get:
+      operationId: chatRoomWebSocket
+      tags: [Consultations]
+      summary: Realtime chat room
+      description: |
+        Task T25. WebSocket upgrade; not an HTTP endpoint, so it carries no JSON
+        envelope. The sign-off document names this route `/ws/chat/{room_id}`, and
+        `room_id` is a consultation id or a meeting id — the room model is shared, so
+        the consultation and meeting rooms use one socket implementation.
+
+        **The JWT is validated during the handshake.** A missing or invalid token is
+        refused before the connection is accepted, not after (criterion 1).
+
+        **Participation is checked too.** T29 §5 requires that only the physicians on the
+        session may open the signalling room — "非参与者无法接入信令房间". A valid token
+        belonging to a physician who is on neither the consultation nor the meeting is
+        refused with **403** during the handshake, before the upgrade completes; the room is
+        named by `room_id` and resolved server-side, so a client cannot talk its way in by
+        claiming a role. This is the same rule
+        `POST /api/consultations/{id}/calls` applies, and it is stated here rather than
+        merely referenced there, so an implementer reading only this block cannot miss it.
+
+        Envelope for both directions:
+
+        ```json
+        { "type": "message", "data": { } }
+        ```
+
+        `type` is one of `message`, `typing`, `joined`, `left`, `call_offer`,
+        `call_answer`, `ice_candidate`. The last three carry the WebRTC signalling,
+        which reuses this socket rather than running a separate signalling service.
+
+        Every message is persisted to `consult_message` before it is broadcast, so a
+        reconnecting client can backfill from its last-seen timestamp and lose nothing
+        (criterion 3). Presence lives in Redis and is cleared on an unclean disconnect,
+        so no "ghost online" users accumulate. One room must hold at least 20
+        concurrent connections under 500ms latency; record the measured figure.
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          description: A consultation id or a meeting id. Both are integer primary keys.
+          schema: { type: integer }
+      responses:
+        '101':
+          description: Switching protocols. The caller is authenticated and is on the session.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: |
+            Authenticated, but not a physician on this session. T29 §5 requires a
+            non-participant to be unable to join the signalling room; the refusal happens
+            during the handshake, so no message ever reaches the room.
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT access token from `POST /api/auth/verify-code`. Valid for 2 hours.
+        Logout blacklists the token's `jti` in Redis so it stops working immediately.
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Size:
+      name: size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    PatientNo:
+      name: patient_no
+      in: path
+      required: true
+      description: Business identifier, for example `P20260001`.
+      schema:
+        type: string
+        pattern: '^P[0-9]{8}$'
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+
+  responses:
+    Unauthorized:
+      description: Missing, expired, or blacklisted token. `code` is 401.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: |
+        The caller's role cannot perform this action at all, such as a `junior`
+        physician calling a review endpoint. Department scope violations return 404
+        instead. `code` is 403.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: |
+        No such resource, or the resource belongs to another department. The two
+        cases are deliberately indistinguishable. `code` is 404.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ValidationError:
+      description: |
+        Request validation failed. `code` is 422 and `message` names the offending
+        field.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: State conflict, such as an archived record or a stale version. `code` is 409.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+
+    Error:
+      type: object
+      required: [code, message, data]
+      properties:
+        code:
+          type: integer
+          description: Non-zero. Always equals the HTTP status code.
+          example: 404
+        message:
+          type: string
+          description: English, developer-facing. Never shown to an end user.
+          example: Patient not found
+        data:
+          type: 'null'
+
+    SuccessBase:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+          const: 0
+        message:
+          type: string
+          example: ok
+
+    OkData:
+      type: object
+      required: [code, message, data]
+      properties:
+        code:
+          type: integer
+          const: 0
+        message:
+          type: string
+          example: ok
+        data:
+          type: object
+    Page:
+      type: object
+      description: Pagination metadata. `total` counts every row matching the filter.
+      required: [total, page, size]
+      properties:
+        total:
+          type: integer
+          example: 42
+        page:
+          type: integer
+          example: 1
+        size:
+          type: integer
+          example: 20
+
+    # ---------- Infrastructure ----------
+
+    HealthData:
+      type: object
+      required: [db, redis]
+      properties:
+        db:
+          type: string
+          enum: [ok, down, disabled]
+          description: '"ok" when reachable, "down" when the check fails, "disabled" when no URL is configured.'
+          example: ok
+        redis:
+          type: string
+          enum: [ok, down, disabled]
+          description: '"down" is reported with HTTP 200, not 500. See the route description.'
+          example: ok
+
+    HealthResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/HealthData' }
+
+    # ---------- Auth ----------
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, example: dr_li }
+        password: { type: string, format: password }
+
+    LoginData:
+      type: object
+      required: [ticket, expires_in]
+      properties:
+        ticket:
+          type: string
+          description: One-time ticket exchanged at `/auth/verify-code`. Valid for 5 minutes.
+        expires_in:
+          type: integer
+          description: Seconds until the ticket expires.
+          example: 300
+
+    LoginResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/LoginData' }
+
+    SendCodeRequest:
+      type: object
+      required: [ticket]
+      properties:
+        ticket: { type: string }
+
+    VerifyCodeRequest:
+      type: object
+      required: [ticket, code]
+      properties:
+        ticket: { type: string }
+        code:
+          type: string
+          pattern: '^[0-9]{6}$'
+
+    TokenData:
+      type: object
+      required: [access_token, token_type, expires_in, user]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, const: bearer }
+        expires_in:
+          type: integer
+          description: Token lifetime in seconds.
+          example: 7200
+        user: { $ref: '#/components/schemas/CurrentUser' }
+
+    TokenResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/TokenData' }
+
+    Role:
+      type: string
+      enum: [admin, senior, junior]
+      description: |
+        `admin` administers users and templates and sees everything.
+        `senior` reviews and archives records and issues grants.
+        `junior` writes records and orders, and cannot see the review queue,
+        the audit log, or user administration.
+
+    CurrentUser:
+      type: object
+      required: [id, username, name, title, department]
+      properties:
+        id: { type: integer }
+        username: { type: string, example: admin_zhang }
+        name: { type: string, example: Zhang Wei }
+        title:
+          allOf:
+            - $ref: '#/components/schemas/Role'
+          description: |
+            The caller's role. Named `title` because that is the field the JWT payload
+            carries and the field T05 scenario S1 asserts on `/api/me`
+            (`department=信息科`, `title=admin`). Do not rename it to `role` on the wire.
+        department: { type: string, example: Information Technology }
+
+    CurrentUserResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/CurrentUser' }
+
+    # ---------- Users ----------
+
+    User:
+      allOf:
+        - $ref: '#/components/schemas/CurrentUser'
+        - type: object
+          required: [email, status, created_at]
+          properties:
+            email: { type: string, format: email }
+            status: { type: string, enum: [active, disabled] }
+            created_at: { type: string, format: date-time }
+
+    UserListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/User' }
+
+    UserCreateRequest:
+      type: object
+      required: [username, password, name, email, title, department]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password, minLength: 8 }
+        name: { type: string }
+        email: { type: string, format: email }
+        title: { $ref: '#/components/schemas/Role' }
+        department: { type: string }
+
+    UserUpdateRequest:
+      type: object
+      properties:
+        name: { type: string }
+        title: { $ref: '#/components/schemas/Role' }
+        department: { type: string }
+        status: { type: string, enum: [active, disabled] }
+
+    UserResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/User' }
+
+    Department:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: integer }
+        name: { type: string, example: Cardiology }
+
+    DepartmentListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/Department' }
+
+    RoleListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items:
+                type: object
+                required: [code, label]
+                properties:
+                  code: { $ref: '#/components/schemas/Role' }
+                  label: { type: string, example: Senior physician }
+
+    # ---------- Grants ----------
+
+    TempGrant:
+      type: object
+      required: [id, grantee_id, patient_no, reason, expire_at, is_valid]
+      properties:
+        id: { type: integer }
+        grantee_id: { type: integer }
+        grantee_name: { type: string }
+        patient_no:
+          type: string
+          description: |
+            The patient the grant unlocks, named as on `Patient`. T10 defines the table
+            as `temp_grant(grantee_id, patient_id, reason, expire_at, is_valid)` — that
+            `patient_id` is the table's internal key, and this property is the business
+            key (`P20260001`), the only form the API exposes. A grant is always
+            patient-scoped; there is no generic target type.
+          example: P20260001
+        reason: { type: string }
+        granted_by: { type: integer }
+        expire_at:
+          type: string
+          format: date-time
+          description: The scan flips `is_valid` to false once this passes.
+        is_valid:
+          type: boolean
+          description: |
+            The single validity flag. The scheduler sets it false when `expire_at`
+            passes; the immediate-revocation endpoint sets it false by hand. There is
+            no separate `expired` versus `revoked` state.
+        created_at: { type: string, format: date-time }
+
+    TempGrantCreateRequest:
+      type: object
+      required: [grantee_id, patient_no, reason, expire_at]
+      properties:
+        grantee_id: { type: integer }
+        patient_no: { type: string, example: P20260001 }
+        reason: { type: string, maxLength: 500 }
+        expire_at: { type: string, format: date-time }
+
+    TempGrantListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/TempGrant' }
+
+    TempGrantResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/TempGrant' }
+
+    # ---------- Patients ----------
+
+    Gender:
+      type: string
+      enum: [male, female, unknown]
+
+    AllergySeverity:
+      type: string
+      enum: [mild, moderate, severe]
+
+    AllergyType:
+      type: string
+      enum: [drug, food, other]
+      description: The category the allergen belongs to. Separate from `severity`.
+
+    AllergenCode:
+      type: string
+      description: |
+        A dictionary `code` from `/api/allergens` — `PENICILLIN`, never the display
+        `name` (`Penicillins`). This is the value the block compares: `Allergy.allergen`
+        is tested against `Drug.contraindications`, so both sides must carry codes.
+        Storing a display name here silently disables the block, because no drug lists
+        a name among its contraindications.
+      example: PENICILLIN
+
+    Allergy:
+      type: object
+      description: |
+        Field names follow T14: `allergen`, `allergy_type`, `severity`, `recorded_at`.
+        `allergen` is an `AllergenCode`. The dictionary at `/api/allergens` must cover
+        at least penicillins, sulfonamides, cephalosporins, aspirin, and contrast
+        media, and must accept a custom addition.
+      required: [id, allergen, allergy_type, severity, recorded_at]
+      properties:
+        id: { type: integer }
+        allergen: { $ref: '#/components/schemas/AllergenCode' }
+        allergy_type: { $ref: '#/components/schemas/AllergyType' }
+        severity: { $ref: '#/components/schemas/AllergySeverity' }
+        reaction: { type: string, example: Anaphylaxis }
+        recorded_at:
+          type: string
+          format: date
+          description: Named `recorded_at`, not `noted_at`.
+      example:
+        id: 1
+        allergen: PENICILLIN
+        allergy_type: drug
+        severity: severe
+        reaction: Anaphylaxis
+        recorded_at: '2026-08-01'
+
+    AllergyCreateRequest:
+      type: object
+      required: [allergen, allergy_type, severity, recorded_at]
+      properties:
+        allergen: { $ref: '#/components/schemas/AllergenCode' }
+        allergy_type: { $ref: '#/components/schemas/AllergyType' }
+        severity: { $ref: '#/components/schemas/AllergySeverity' }
+        reaction: { type: string }
+        recorded_at: { type: string, format: date }
+
+    AllergyListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/Allergy' }
+
+    AllergyResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/Allergy' }
+
+    AllergenDictionaryResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items:
+                type: object
+                required: [code, name]
+                properties:
+                  code: { type: string, example: PENICILLIN }
+                  name: { type: string, example: Penicillins }
+
+    History:
+      type: object
+      required: [id, diagnosis]
+      properties:
+        id: { type: integer }
+        diagnosis: { type: string }
+        onset_date: { type: string, format: date }
+        notes: { type: string }
+        created_at: { type: string, format: date-time }
+
+    HistoryCreateRequest:
+      type: object
+      required: [diagnosis]
+      properties:
+        diagnosis: { type: string }
+        onset_date: { type: string, format: date }
+        notes: { type: string }
+
+    HistoryListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/History' }
+
+    HistoryResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/History' }
+
+    PatientGroup:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: integer }
+        name: { type: string, example: Chronic follow-up }
+        description: { type: string }
+        member_count: { type: integer }
+
+    PatientGroupListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/PatientGroup' }
+
+    PatientGroupResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/PatientGroup' }
+
+    PatientGroupWriteRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+
+    GroupMembersRequest:
+      type: object
+      required: [patient_nos]
+      properties:
+        patient_nos:
+          type: array
+          minItems: 1
+          items: { type: string }
+
+    PatientSummary:
+      type: object
+      description: |
+        List projection. `has_severe_allergy` is computed by the server so the list
+        page does not have to walk the allergy array.
+      required: [patient_no, name, gender, department, has_severe_allergy]
+      properties:
+        patient_no: { type: string, example: P20260001 }
+        name: { type: string, example: Zhao Dayong }
+        gender: { $ref: '#/components/schemas/Gender' }
+        birth_date: { type: string, format: date }
+        phone_masked: { type: string, example: '138****1234' }
+        department: { type: string, example: Cardiology }
+        symptom_tags:
+          type: array
+          items: { type: string }
+        allergy_count: { type: integer }
+        has_severe_allergy: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    PatientDetail:
+      allOf:
+        - $ref: '#/components/schemas/PatientSummary'
+        - type: object
+          required: [allergies, histories, groups]
+          properties:
+            id_card_masked: { type: string }
+            allergies:
+              type: array
+              items: { $ref: '#/components/schemas/Allergy' }
+            histories:
+              type: array
+              items: { $ref: '#/components/schemas/History' }
+            groups:
+              type: array
+              items: { $ref: '#/components/schemas/PatientGroup' }
+
+    PatientCreateRequest:
+      type: object
+      description: |
+        `patient_no` is **not** accepted here. T13 requires the number to be generated
+        by the system, so the server assigns the next `P{year}{sequence}` and returns it.
+        Sending one is ignored, not honoured.
+      required: [name, gender, department]
+      properties:
+        name: { type: string }
+        gender: { $ref: '#/components/schemas/Gender' }
+        birth_date: { type: string, format: date }
+        phone:
+          type: string
+          description: Stored AES-encrypted in `phone_enc`; never echoed back in clear.
+        id_card:
+          type: string
+          description: Stored AES-encrypted in `id_card_enc`; never echoed back in clear.
+        department: { type: string }
+        symptom_tags:
+          type: array
+          items: { type: string }
+
+    PatientUpdateRequest:
+      type: object
+      properties:
+        name: { type: string }
+        gender: { $ref: '#/components/schemas/Gender' }
+        birth_date: { type: string, format: date }
+        phone: { type: string }
+        id_card: { type: string }
+        department: { type: string }
+        symptom_tags:
+          type: array
+          items: { type: string }
+
+    PatientListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/PatientSummary' }
+
+    PatientResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/PatientDetail' }
+
+    # ---------- EMR ----------
+
+    EmrField:
+      type: object
+      required: [key, label, type]
+      properties:
+        key: { type: string, example: chief_complaint }
+        label: { type: string, example: Chief complaint }
+        type:
+          type: string
+          enum: [text, number, date, select, textarea]
+          description: The five supported types. Anything else is a 422.
+        required: { type: boolean, default: false }
+        options:
+          type: array
+          description: Present only when `type` is `select`.
+          items: { type: string }
+
+    EmrTemplate:
+      type: object
+      description: |
+        Table shape is `emr_template(id, name, fields_json, is_active)` per T18. Two
+        presets ship seeded — "Admission note" (入院记录) and "Daily progress note"
+        (日常病程记录) — each with at least six fields spanning several control types.
+      required: [id, name, fields_json, is_active]
+      properties:
+        id: { type: integer }
+        name: { type: string, example: Admission note }
+        description: { type: string }
+        is_active:
+          type: boolean
+          description: Inactive templates are hidden from the new-record picker but still render their existing records.
+        fields_json:
+          type: object
+          required: [fields]
+          properties:
+            fields:
+              type: array
+              items: { $ref: '#/components/schemas/EmrField' }
+
+    EmrTemplateWriteRequest:
+      type: object
+      required: [name, fields_json]
+      properties:
+        name: { type: string, example: Admission note }
+        description: { type: string }
+        is_active: { type: boolean, default: true }
+        fields_json:
+          type: object
+          required: [fields]
+          properties:
+            fields:
+              type: array
+              minItems: 1
+              items: { $ref: '#/components/schemas/EmrField' }
+
+    EmrTemplateListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/EmrTemplate' }
+
+    EmrTemplateResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/EmrTemplate' }
+
+    RecordStatus:
+      type: string
+      enum: [draft, pending, rejected, archived]
+
+    EmrRecordSummary:
+      type: object
+      required: [id, patient_no, template_id, status, version]
+      properties:
+        id: { type: integer }
+        patient_no: { type: string }
+        patient_name: { type: string }
+        template_id: { type: integer }
+        template_name: { type: string }
+        author_id: { type: integer }
+        author_name: { type: string }
+        status: { $ref: '#/components/schemas/RecordStatus' }
+        version: { type: integer }
+        reviewer_id: { type: integer }
+        review_comment:
+          type: string
+          description: The reviewer's comment. Carried on the summary, not only on the full record, because "My submissions" lists summaries and the author cannot act on a rejection they cannot read.
+        reviewed_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    EmrRecord:
+      allOf:
+        - $ref: '#/components/schemas/EmrRecordSummary'
+        - type: object
+          required: [content_json]
+          properties:
+            content_json:
+              type: object
+              additionalProperties: true
+
+    EmrRecordCreateRequest:
+      type: object
+      required: [patient_no, template_id]
+      properties:
+        patient_no: { type: string }
+        template_id: { type: integer }
+
+    EmrRecordUpdateRequest:
+      type: object
+      description: |
+        Draft save. `version` is an optimistic lock: a mismatch returns 409 and the
+        client must reload. Saving against an archived record also returns 409.
+      required: [content_json, version]
+      properties:
+        content_json:
+          type: object
+          additionalProperties: true
+        version: { type: integer }
+
+    EmrRecordListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/EmrRecordSummary' }
+
+    EmrRecordResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/EmrRecord' }
+
+    EmrVersion:
+      type: object
+      required: [version, content_json, created_at]
+      properties:
+        version: { type: integer }
+        content_json: { type: object, additionalProperties: true }
+        author_id: { type: integer }
+        author_name: { type: string }
+        created_at: { type: string, format: date-time }
+
+    EmrVersionListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/EmrVersion' }
+
+    ReviewRequest:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [approve, reject] }
+        comment:
+          type: string
+          description: Required when `action` is `reject`.
+
+    AmendmentRequest:
+      type: object
+      required: [content_json]
+      properties:
+        content_json: { type: object, additionalProperties: true }
+
+    # ---------- Prescriptions ----------
+
+    OrderValidationStatus:
+      type: string
+      enum: [passed, warning, blocked]
+      description: |
+        `blocked` is an allergy conflict and must never be saved. `warning` is an
+        out-of-range dose that may be saved once the physician confirms it; an
+        accompanying `override_reason` is optional and never a precondition. `passed`
+        is clean.
+
+    OrderType:
+      type: string
+      enum: [drug, lab, exam]
+      description: Only `drug` is mandatory this term; laboratory and examination orders are optional backlog.
+
+    Order:
+      type: object
+      description: |
+        Table shape is
+        `medical_order(id, record_id, patient_id, doctor_id, order_type, content_json,
+        status, validation_status)` per T20. That `patient_id` is the table's internal
+        key; the property below is the patient's business key (`P20260001`), which is
+        the only form the API exposes. The drug's dose and frequency live inside
+        `content_json`, which is why the four fields below are not flat columns.
+
+        `validation_detail` carries which rule fired, so the T23 dialog can render the
+        reason without re-deriving it.
+      required: [id, record_id, patient_no, doctor_id, order_type, content_json, status, validation_status]
+      properties:
+        id: { type: integer }
+        record_id: { type: integer }
+        patient_no:
+          type: string
+          description: The patient's business key, named as on `Patient`. The table's internal `patient_id` is never exposed on the wire.
+          example: P20260001
+        doctor_id: { type: integer }
+        order_type: { $ref: '#/components/schemas/OrderType' }
+        content_json:
+          type: object
+          additionalProperties: true
+          description: The order body. For a drug this is `{drug_code, drug_name, dose, frequency, route}`.
+          example:
+            drug_code: AMOX500
+            drug_name: Amoxicillin capsules
+            dose: 0.5g
+            frequency: tid
+        status:
+          type: string
+          enum: [active, stopped]
+          description: |
+            `stopped` is set by the stop route, which is a soft stop — the row stays so the
+            prescription history remains complete. Editing an order does not move it out of
+            `active`; the change is recorded in the audit trail, not as a third state.
+        validation_status: { $ref: '#/components/schemas/OrderValidationStatus' }
+        validation_detail:
+          type: array
+          description: The rules that fired, kept on the order for later inspection.
+          items: { $ref: '#/components/schemas/OrderValidateReason' }
+        override_reason: { type: string }
+        created_at: { type: string, format: date-time }
+
+    OrderCreateRequest:
+      type: object
+      description: |
+        Places orders into an existing record. The patient is **not** sent here — the
+        server resolves it from the record named by `record_id`, because a record
+        belongs to exactly one patient. Validation must run against that patient;
+        `POST /api/emr/orders/validate` is the variant that takes `patient_no`
+        directly, for the pre-check before a record exists.
+      required: [record_id, items]
+      properties:
+        record_id: { type: integer }
+        override_reason:
+          type: string
+          description: Optional. Accepted when any item validates as `warning`; stored on every item it covers.
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/OrderItemInput' }
+
+    OrderItemInput:
+      type: object
+      description: |
+        The same vocabulary as `Order.order_type`, so a placed item reads back unchanged.
+
+        `order_type` is the only field required by the schema, but `drug` items are held to
+        a further rule the server enforces: **a `drug` item with no `dose` is refused with
+        422** and a `message` naming `dose` (T20 S2 — "未填写剂量 → 422 且指明字段"). The
+        requirement is not expressed as a blanket `required` because `lab` and `exam` items
+        have no dose and must not be rejected for lacking one.
+      required: [order_type]
+      properties:
+        order_type: { $ref: '#/components/schemas/OrderType' }
+        drug_code: { type: string, example: AMOX500 }
+        dose:
+          type: string
+          description: Required when `order_type` is `drug`; omitted for `lab` and `exam`.
+          example: 0.5g
+        frequency: { type: string, example: tid }
+        route: { type: string }
+
+    OrderValidateRequest:
+      type: object
+      description: Validates without persisting. Used for live pre-checks in the UI.
+      required: [patient_no, items]
+      properties:
+        patient_no: { type: string }
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/OrderItemInput' }
+
+    OrderValidateReason:
+      type: object
+      required: [kind, message]
+      properties:
+        kind:
+          type: string
+          enum: [allergy, dose]
+          description: |
+            T21's check has exactly these two firing cases. An item that trips neither is
+            `passed` with an empty `reasons` array, so there is no third kind to model.
+        severity: { $ref: '#/components/schemas/AllergySeverity' }
+        allergen:
+          allOf:
+            - $ref: '#/components/schemas/AllergenCode'
+          description: Set when `kind` is `allergy`.
+        normal_range:
+          type: string
+          description: |
+            Set when `kind` is `dose` — the configured usual range, so the yellow dialog
+            can show it next to what was requested without a second lookup.
+          example: 20-40mg/day
+        observed:
+          type: string
+          description: Set when `kind` is `dose`. The value the caller submitted.
+          example: 80mg
+        message:
+          type: string
+          description: |
+            **User-facing, unlike most `message` fields.** T23 criterion 5 requires the
+            dialog to render the backend's validation detail rather than a second set of
+            client-side copy, so this string is shown verbatim to a physician. Write it
+            as a sentence a clinician reads, and keep it in English like the rest of the
+            interface.
+          example: 'Usual dose 20-40mg/day; this order is 80mg.'
+
+    OrderValidateResult:
+      type: object
+      required: [index, status, reasons]
+      properties:
+        index:
+          type: integer
+          description: Index into the request `items` array.
+        status: { $ref: '#/components/schemas/OrderValidationStatus' }
+        reasons:
+          type: array
+          items: { $ref: '#/components/schemas/OrderValidateReason' }
+
+    OrderValidateData:
+      type: object
+      required: [overall, results]
+      properties:
+        overall: { $ref: '#/components/schemas/OrderValidationStatus' }
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/OrderValidateResult' }
+
+    OrderValidateResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/OrderValidateData' }
+
+    OrderResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/Order' }
+
+    OrderListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/Order' }
+
+    Drug:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string, example: AMOX500 }
+        name: { type: string, example: Amoxicillin capsule }
+        spec: { type: string, example: 0.5g }
+        default_frequency: { type: string, example: tid }
+        contraindications:
+          type: array
+          description: Allergen codes this drug conflicts with. Compared against `Allergy.allergen`, which is the same code vocabulary.
+          items: { $ref: '#/components/schemas/AllergenCode' }
+        dose_min: { type: string }
+        dose_max: { type: string }
+
+    DrugListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/Drug' }
+
+    # ---------- Consultations ----------
+
+    ConsultationStatus:
+      type: string
+      enum: [waiting, active, ended]
+
+    Consultation:
+      type: object
+      required: [id, patient_no, status]
+      properties:
+        id: { type: integer }
+        patient_no: { type: string }
+        patient_name: { type: string }
+        doctor_id: { type: integer }
+        doctor_name: { type: string }
+        status: { $ref: '#/components/schemas/ConsultationStatus' }
+        last_message:
+          type: string
+          description: |
+            A preview of the most recent message in the room, so the workbench list can
+            show it. T27 §1 requires the list to display "患者名、最后一条消息、时间";
+            without this field the client would have to call
+            `GET /api/consultations/{id}/messages` once per row. Truncated server-side;
+            empty when nothing has been said yet.
+          example: The diuretic dose looks high for this patient's creatinine.
+        last_message_at:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            When that message was sent — the "时间" in the same criterion, and the value the
+            list is ordered by. `null` when the room is empty.
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    ConsultationListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/Consultation' }
+
+    ConsultationResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/Consultation' }
+
+    ConsultationCreateRequest:
+      type: object
+      required: [patient_no]
+      properties:
+        patient_no: { type: string }
+
+    ConsultationMessage:
+      type: object
+      required: [id, consultation_id, sender_type, content, sent_at]
+      properties:
+        id: { type: integer }
+        consultation_id: { type: integer }
+        sender_type:
+          type: string
+          enum: [doctor, patient_assist]
+          description: |
+            `patient_assist` is a staff member relaying the patient's words. The
+            platform has no patient client.
+        sender_name: { type: string }
+        content: { type: string }
+        image_url:
+          type: [string, 'null']
+          example: /uploads/2026/09/abc.jpg
+        sent_at: { type: string, format: date-time }
+
+    MessageCreateRequest:
+      type: object
+      properties:
+        content: { type: string }
+        image_url: { type: [string, 'null'] }
+
+    MessageListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/ConsultationMessage' }
+
+    MessageResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/ConsultationMessage' }
+
+    UploadResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, example: /uploads/2026/09/abc.jpg }
+
+    CallLogRequest:
+      type: object
+      description: |
+        Sent once the call is over. `started_at` is the only field the client must
+        supply; the rest describe how far the call got before it ended.
+      required: [started_at]
+      properties:
+        started_at: { type: string, format: date-time }
+        connected_at: { type: [string, 'null'], format: date-time }
+        ended_at: { type: [string, 'null'], format: date-time }
+        duration_seconds: { type: integer }
+
+    CallLog:
+      type: object
+      description: |
+        One finished call. Recording and cloud storage are out of scope, so timing and
+        duration are all that is kept — there is no media to fetch and no URL here.
+
+        `started_at` is always present. `connected_at` stays null when the callee never
+        picked up; `ended_at` and `duration_seconds` are the numbers T29 scenario S1
+        reads back, so a call that ran to completion carries both.
+      required: [id, consultation_id, started_at]
+      properties:
+        id: { type: integer }
+        consultation_id: { type: integer }
+        started_at: { type: string, format: date-time }
+        connected_at: { type: [string, 'null'], format: date-time }
+        ended_at: { type: [string, 'null'], format: date-time }
+        duration_seconds: { type: [integer, 'null'] }
+
+    CallLogResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/CallLog' }
+
+    CallLogListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/CallLog' }
+
+    # ---------- Meetings ----------
+
+    MeetingStatus:
+      type: string
+      enum: [requested, accepted, declined, in_progress, completed]
+      description: |
+        T30 S1 — `requested → accepted → in_progress → completed`, with `declined` as a
+        branch out of `requested`. `declined` is a real state: an invited expert refusing
+        is not a deletion, and the record of the refusal stays. Any transition the machine
+        does not define answers **409**.
+
+        The machine stops at `completed`. There is no `archived` here — what gets archived
+        is the *report*, which lands on the patient record (T32 S3), not the meeting.
+
+    MeetingParticipant:
+      type: object
+      required: [user_id, status]
+      properties:
+        user_id: { type: integer }
+        name: { type: string }
+        department: { type: string }
+        status: { type: string, enum: [invited, accepted, declined] }
+
+    Meeting:
+      type: object
+      required: [id, status, initiator_id, participants, purpose]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        patient_no: { type: string }
+        initiator_id: { type: integer }
+        initiator_name: { type: string }
+        status: { $ref: '#/components/schemas/MeetingStatus' }
+        scheduled_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        purpose:
+          type: string
+          description: |
+            The purpose the meeting was called for (会诊目的). It is returned because T30
+            §4 requires the meeting detail to show it — a purpose that could be sent but
+            never read back would make that criterion unimplementable.
+          example: Confirm the diuretic dose before discharge.
+        participants:
+          type: array
+          items: { $ref: '#/components/schemas/MeetingParticipant' }
+        created_at: { type: string, format: date-time }
+
+    MeetingCreateRequest:
+      type: object
+      description: |
+        The initiator names the patient, the invited specialists, and **the purpose**.
+        Those three are exactly the inputs T30 criterion 2 lists, and all three are
+        required — the purpose included, since it is the one thing the criterion names that
+        is not otherwise implied. `title` is optional and is a display convenience: when it
+        is omitted the backend derives one from the purpose.
+
+        `scheduled_at` is **optional**: it is not among T30's three inputs, so a client that
+        sends no time must still succeed. When it is omitted the backend takes the moment
+        of the request as the planned time.
+
+        The time matters beyond scheduling, because each invitee's automatic
+        `temp_grant` expires at the planned time plus 24 hours. A request that carries
+        no `scheduled_at` therefore still yields a fully defined grant window — now
+        plus 24 hours — rather than an open-ended one.
+      required: [patient_no, participant_ids, purpose]
+      properties:
+        patient_no: { type: string }
+        participant_ids:
+          type: array
+          minItems: 1
+          description: One `temp_grant` is created per id.
+          items: { type: integer }
+        purpose:
+          type: string
+          description: |
+            Why the consultation is being called. Required: T30 §2 names "填目的" as one of
+            the three inputs, and T30 §4 requires the meeting detail to display it.
+          example: Confirm the diuretic dose before discharge.
+        title:
+          type: string
+          description: Optional display name. Derived from `purpose` when omitted.
+        scheduled_at:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            Defaults to the time of the request. The response reports the value that
+            was actually stored, so a client that omitted it can still display the
+            planned time.
+
+    MeetingListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/Meeting' }
+
+    MeetingResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/Meeting' }
+
+    MeetingParticipantListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/MeetingParticipant' }
+
+    MeetingMaterial:
+      type: object
+      required: [id, meeting_id, filename]
+      properties:
+        id: { type: integer }
+        meeting_id: { type: integer }
+        filename: { type: string, example: CT-report.pdf }
+        content_type: { type: string }
+        size_bytes: { type: integer }
+        uploaded_by: { type: integer }
+        uploaded_at: { type: string, format: date-time }
+
+    MeetingMaterialResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/MeetingMaterial' }
+
+    MeetingMaterialListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/MeetingMaterial' }
+
+    ExpertOpinion:
+      type: object
+      description: One invited specialist's opinion, recorded per expert so the report can attribute them.
+      required: [expert_id, opinion]
+      properties:
+        expert_id: { type: integer }
+        expert_name: { type: string }
+        opinion: { type: string, example: Recommend reducing the diuretic to 20mg/day and reviewing in a week. }
+
+    MeetingReport:
+      type: object
+      description: |
+        Built from each expert's opinion plus a single overall conclusion, which is what
+        the Jinja2 template lays out. `version` supports the rule that a generated report
+        is not silently overwritten — a later change adds a version and the earlier text
+        stays readable.
+      required: [id, meeting_id, expert_opinions, conclusion, status, version]
+      properties:
+        id: { type: integer }
+        meeting_id: { type: integer }
+        expert_opinions:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/ExpertOpinion' }
+        conclusion: { type: string }
+        status: { type: string, enum: [draft, final] }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+
+    MeetingReportWriteRequest:
+      type: object
+      required: [expert_opinions, conclusion]
+      properties:
+        expert_opinions:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/ExpertOpinion' }
+        conclusion: { type: string }
+        status: { type: string, enum: [draft, final] }
+
+    MeetingReportResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/MeetingReport' }
+
+    # ---------- Health ----------
+
+    HealthPlanStatus:
+      type: string
+      enum: [active, completed, terminated]
+
+    HealthPlan:
+      type: object
+      description: |
+        T35 covers medication, follow-up, and diet/exercise advice, so a plan holds
+        entries rather than one free-text note.
+      required: [id, patient_no, title, start_date, end_date, status]
+      properties:
+        id: { type: integer }
+        patient_no: { type: string }
+        title: { type: string, example: Blood pressure management plan }
+        goals: { type: string }
+        instructions: { type: string }
+        entries:
+          type: array
+          description: The individual items, each with its execution status.
+          items:
+            type: object
+            properties:
+              kind: { type: string, enum: [medication, followup, diet_exercise] }
+              text: { type: string }
+              done: { type: boolean }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        status: { $ref: '#/components/schemas/HealthPlanStatus' }
+        reminder_rule_ids:
+          type: array
+          description: Reminder rules created with or linked to this plan (T36).
+          items: { type: integer }
+        created_at: { type: string, format: date-time }
+
+    HealthPlanWriteRequest:
+      type: object
+      required: [patient_no, title, start_date, end_date]
+      properties:
+        patient_no: { type: string }
+        title: { type: string }
+        goals: { type: string }
+        instructions: { type: string }
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string, enum: [medication, followup, diet_exercise] }
+              text: { type: string }
+        start_date: { type: string, format: date }
+        end_date:
+          type: string
+          format: date
+          description: Must not precede `start_date`; the reverse is a 422 naming this field.
+        status: { $ref: '#/components/schemas/HealthPlanStatus' }
+        reminder_rule_ids:
+          type: array
+          description: Ids of rules that already exist and are being linked to this plan.
+          items: { type: integer }
+        new_reminder_rules:
+          type: array
+          description: |
+            Rules **created together with this plan**, which is what T35 §3 means by
+            "创建方案时可一并配置提醒" and what scenario S1 does when it ticks "daily 09:00
+            medication reminder" on the plan form. This is the block that makes the claim on
+            `POST /api/health-plans` — "link reminder rules in the same call" — actually
+            expressible: a brand-new rule has no id yet, so `reminder_rule_ids` alone could
+            never carry it.
+
+            Each entry is a full `ReminderRuleWriteRequest`, so it repeats the plan's
+            `patient_no` — the rule is stored against the same patient. Each is created
+            with its `health_plan_id` already pointing at the plan being created, so it
+            appears in the T36 list with the back-link set.
+          items: { $ref: '#/components/schemas/ReminderRuleWriteRequest' }
+
+    HealthPlanListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/HealthPlan' }
+
+    HealthPlanResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/HealthPlan' }
+
+    VitalType:
+      type: string
+      enum: [bp, gl, hr]
+      description: |
+        Blood pressure, blood glucose, heart rate. The sign-off document spells these
+        `bp` / `gl` / `hr`, not long names.
+
+    VitalSource:
+      type: string
+      enum: [manual, mock]
+      description: |
+        `manual` for staff entry, `mock` for the simulated-data script. Kept distinct so
+        a demonstration can be told apart from a real record.
+
+    VitalSign:
+      type: object
+      description: |
+        Table shape is `vital_sign(id, patient_id, sign_type, value, recorded_at, source)`
+        per T33; that `patient_id` is the table's internal key, while this API exposes
+        the patient's business key as `patient_no`.
+      required: [id, patient_no, sign_type, value, recorded_at, source, is_abnormal]
+      properties:
+        id: { type: integer }
+        patient_no: { type: string }
+        sign_type: { $ref: '#/components/schemas/VitalType' }
+        value:
+          type: number
+          description: For `bp` this is the systolic pressure; diastolic is `value_secondary`. For `gl` and `hr` it stands alone.
+        value_secondary:
+          type: [number, 'null']
+        unit: { type: string, example: mmHg }
+        recorded_at: { type: string, format: date-time }
+        source: { $ref: '#/components/schemas/VitalSource' }
+        is_abnormal:
+          type: boolean
+          description: Set by the server at write time from the configured threshold. The name is `is_abnormal`, not `out_of_range`.
+        recorded_by: { type: integer }
+
+    VitalSignCreateRequest:
+      type: object
+      description: |
+        `recorded_at` must not be in the future — T33 scenario S2 submits a future
+        timestamp and requires 422.
+      required: [sign_type, value, recorded_at]
+      properties:
+        sign_type: { $ref: '#/components/schemas/VitalType' }
+        value:
+          type: number
+          description: Must parse as a number; "abc" is a 422.
+        value_secondary:
+          type: [number, 'null']
+          description: Required when `sign_type` is `bp`; send `null` (or omit it) for `gl` and `hr`.
+        recorded_at: { type: string, format: date-time }
+        source: { $ref: '#/components/schemas/VitalSource' }
+
+    VitalSignResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/VitalSign' }
+
+    VitalSignListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/VitalSign' }
+
+    VitalTrendPoint:
+      type: object
+      required: [recorded_at, value, is_abnormal]
+      properties:
+        recorded_at: { type: string, format: date-time }
+        value: { type: number }
+        value_secondary:
+          type: [number, 'null']
+          description: Present for `bp` only, so the chart can draw the diastolic line.
+        is_abnormal:
+          type: boolean
+          description: Computed by the server against the configured threshold. The client only renders the red marker.
+        threshold:
+          type: object
+          description: |
+            The bounds this point was judged against, repeated per point so a hovering
+            tooltip can show them without a second request. Carries the secondary pair too:
+            T34 scenario S1 hovers a blood-pressure point and expects the tooltip to read
+            **"160/100 mmHg（超出阈值 140/90）"**, so a `bp` point must be able to produce
+            both halves of the threshold. With only `min`/`max` the tooltip could render
+            "140" but not "90".
+          properties:
+            min: { type: number }
+            max: { type: number }
+            min_secondary: { type: [number, 'null'] }
+            max_secondary: { type: [number, 'null'] }
+
+    VitalTrendData:
+      type: object
+      description: |
+        Shaped to feed ECharts directly: a flat time series of `{recorded_at, value}`,
+        not the raw rows. For `bp`, `value` is systolic and `value_secondary` is
+        diastolic, and the chart draws the pair as two lines or a band.
+      required: [sign_type, unit, threshold, points]
+      properties:
+        sign_type: { $ref: '#/components/schemas/VitalType' }
+        unit: { type: string, example: mmHg }
+        threshold:
+          type: object
+          description: |
+            The normal band for the metric. For `bp` both bounds are pairs, so the chart
+            can draw the threshold line against both series.
+          properties:
+            min: { type: number }
+            max: { type: number }
+            min_secondary: { type: [number, 'null'] }
+            max_secondary: { type: [number, 'null'] }
+        points:
+          type: array
+          description: Empty when the range holds no records. The client shows an empty state, never a blank canvas.
+          items: { $ref: '#/components/schemas/VitalTrendPoint' }
+
+    VitalTrendResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/VitalTrendData' }
+
+    ReminderType:
+      type: string
+      enum: [medication, followup, checkin]
+      description: T36 names the field `rtype`; the values are medication, follow-up, and check-in.
+
+    ReminderRule:
+      type: object
+      description: One schedule. A firing of it is a `ReminderLog`, a separate object.
+      required: [id, patient_no, rtype, title, cron_expr, active]
+      properties:
+        id: { type: integer }
+        patient_no: { type: string }
+        rtype: { $ref: '#/components/schemas/ReminderType' }
+        title: { type: string }
+        cron_expr:
+          type: string
+          description: Cron expression evaluated by APScheduler. The demonstration temporarily sets this to every minute.
+          example: '0 9 * * *'
+        active:
+          type: boolean
+          description: Named `active`. A rule that is not active generates nothing new while keeping its existing log entries.
+        health_plan_id:
+          type: integer
+          description: Set when the rule was created alongside a health plan (T35).
+
+    ReminderRuleWriteRequest:
+      type: object
+      description: Creating a rule. Every field that defines the schedule is required.
+      required: [patient_no, rtype, title, cron_expr]
+      properties:
+        patient_no: { type: string }
+        rtype: { $ref: '#/components/schemas/ReminderType' }
+        title: { type: string }
+        cron_expr: { type: string }
+        active: { type: boolean, default: true }
+        health_plan_id:
+          type: integer
+          description: |
+            The plan this rule belongs to, when it is created from T35's plan form. This is
+            the only way to set `ReminderRule.health_plan_id` — without it the field would
+            be unreachable through the API.
+      example:
+        patient_no: P20260001
+        rtype: medication
+        title: Daily 09:00 medication reminder
+        cron_expr: '0 9 * * *'
+        active: true
+        health_plan_id: 12
+
+    ReminderRuleUpdateRequest:
+      type: object
+      description: |
+        Updating a rule. **Every field is optional**, and only the ones present are
+        changed. A partial body is the normal case: T36 §4 and scenario S2 toggle a rule
+        with `{"active": false}` alone, which is why this is a separate schema from the
+        create body rather than a reuse of it.
+      minProperties: 1
+      properties:
+        patient_no: { type: string }
+        rtype: { $ref: '#/components/schemas/ReminderType' }
+        title: { type: string }
+        cron_expr: { type: string }
+        active:
+          type: boolean
+          description: |
+            `false` deactivates the rule: no new reminders are generated, and the ones
+            already logged stay put (T36 §4).
+      example: { active: false }
+
+    ReminderRuleListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/ReminderRule' }
+
+    ReminderRuleResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/ReminderRule' }
+
+    ReminderLog:
+      type: object
+      description: |
+        One firing of a rule. `rule_id` + `due_at` together form the idempotency key, so
+        a restart re-evaluating the same window recognises the entry as already written
+        instead of adding a second one.
+      required: [id, rule_id, patient_no, title, due_at, fired_at, done, read]
+      properties:
+        id: { type: integer }
+        rule_id: { type: integer }
+        patient_no: { type: string }
+        title: { type: string }
+        due_at:
+          type: string
+          format: date-time
+          description: The scheduled instant this entry represents. Half of the idempotency key.
+        fired_at: { type: string, format: date-time }
+        done: { type: boolean }
+        done_at: { type: [string, 'null'], format: date-time }
+        read:
+          type: boolean
+          description: Drives the workspace red dot; cleared when the reminder list is opened.
+
+    ReminderLogResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/ReminderLog' }
+
+    ReminderLogListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items, unread]
+                  properties:
+                    unread:
+                      type: integer
+                      description: Unread count at the time of the request, so the shell can update the red dot from the same response.
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/ReminderLog' }
+
+    UnreadCount:
+      type: object
+      required: [unread]
+      properties:
+        unread: { type: integer, example: 2 }
+
+    UnreadCountResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/UnreadCount' }
+
+    HealthAssessment:
+      type: object
+      description: |
+        T37 requires three things on the form: the period, the conclusion, and any plan
+        adjustment. The record also keeps who wrote it and when, and once saved it is not
+        silently rewritten — `version` and `updated_at` leave a trail.
+      required: [id, patient_no, period, conclusion, assessed_by, assessed_at]
+      properties:
+        id: { type: integer }
+        patient_no: { type: string }
+        period:
+          type: string
+          description: The assessment period, for example "2026-08" for a monthly review.
+          example: '2026-08'
+        conclusion:
+          type: string
+          description: The assessing physician's conclusion. Required — an empty one is a 422.
+          example: Blood pressure is not well controlled; add an ACE inhibitor and recheck in two weeks.
+        plan_adjustment:
+          type: string
+          description: Suggested change to the health plan. Optional.
+        assessed_by: { type: integer }
+        assessed_by_name: { type: string }
+        assessed_at: { type: string, format: date-time }
+        version: { type: integer }
+        updated_at: { type: [string, 'null'], format: date-time }
+
+    HealthAssessmentWriteRequest:
+      type: object
+      description: |
+        T37 §5 requires the assessment form to carry **date validation** ("日期校验齐全"),
+        so two rules are stated here rather than left to the client:
+
+        - `period` must be a calendar month in `YYYY-MM` form; anything else is a 422
+          naming `period`. An unconstrained string would let a typo through and put the
+          assessment in a period nobody can query.
+        - `assessed_at` must not be in the future. This mirrors T33, where a future
+          `recorded_at` is likewise a 422 (`POST .../vitals`, `:2200`). A future
+          assessment date makes the newest-first revision trail read as though a later
+          revision already exists.
+      required: [period, conclusion]
+      properties:
+        period:
+          type: string
+          pattern: '^\d{4}-(0[1-9]|1[0-2])$'
+          description: The calendar month being assessed, as `YYYY-MM`. Invalid form → 422.
+          example: '2026-08'
+        conclusion: { type: string }
+        plan_adjustment: { type: string }
+        assessed_at:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            When the assessment was made. Defaults to now. A value later than the time of
+            the request is a 422 naming this field.
+
+
+    HealthAssessmentListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/HealthAssessment' }
+
+    HealthAssessmentResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/HealthAssessment' }
+
+    # ---------- Audit ----------
+
+    AuditLog:
+      type: object
+      description: |
+        Append-only. There is no update or delete route, and the database account
+        itself must not hold those privileges.
+      required: [id, user_id, action, method, path, result, created_at]
+      properties:
+        id: { type: integer }
+        user_id: { type: integer }
+        username: { type: string }
+        action: { type: string, example: patient.view }
+        object_type: { type: string, example: patient }
+        object_id: { type: string, example: P20260001 }
+        ip: { type: string, example: 127.0.0.1 }
+        method: { type: string, example: POST }
+        path: { type: string, example: /api/patients }
+        result:
+          type: string
+          enum: [success, failure]
+          description: Whether the recorded request succeeded. Written for every entry.
+        detail: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+
+    AuditLogListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  required: [items]
+                  properties:
+                    items:
+                      type: array
+                      items: { $ref: '#/components/schemas/AuditLog' }
+
+    AuditLogResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: '#/components/schemas/AuditLog' }
+

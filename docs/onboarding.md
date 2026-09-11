@@ -80,6 +80,17 @@ Check that it works:
   `{"status":"ok","checks":{"database":"ok","redis":"disabled"}}`. Redis is disabled in
   local mode, which is expected.
 
+> **Two different health checks, don't confuse them.** The one above is the legacy
+> readiness probe; it reports its own `{"status", "checks"}` shape and returns a non-200
+> when a dependency is down, because CI's `smoke.py` depends on it.
+>
+> The check the API contract defines is **`GET /health`** (with `GET /api/health` as the
+> same body under the `/api` prefix): it returns the standard envelope
+> `{code: 0, data: {db, redis}}`, **always with status 200** — a dependency being down
+> only flips `db`/`redis` to `"down"`, it never produces a 5xx. See
+> [`API-索引.md`](api/API-索引.md) §2.1. `live`/`ready` are not part of the contract and
+> are not what the sign-off scenario calls.
+
 ## 4. Full stack: docker mode
 
 Needed for MySQL and Redis, which is how the project is verified and demonstrated.
