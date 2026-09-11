@@ -22,12 +22,15 @@ with urlopen(base, timeout=10) as response:
 department = request("/api/departments")["data"][0]
 patient = request("/api/patients", "POST", {
     "name": "Smoke Test Synthetic Patient",
-    "department_id": department["id"],
+    "gender": "unknown",
+    "department": department["name"],
     "notes": "Temporary smoke test record",
 })["data"]
 try:
-    assert request(f'/api/patients/{patient["id"]}')["data"] == patient
-    assert request("/api/patients?q=Smoke%20Test")["total"] >= 1
+    detail = request(f'/api/patients/{patient["patient_no"]}')["data"]
+    assert detail["patient_no"] == patient["patient_no"], detail
+    assert detail["name"] == patient["name"], detail
+    assert request("/api/patients?name=Smoke%20Test")["data"]["total"] >= 1
 finally:
-    request(f'/api/patients/{patient["id"]}', "DELETE")
+    request(f'/api/patients/{patient["patient_no"]}', "DELETE")
 print("Stack smoke test passed: frontend, readiness, patient create/search/read/delete")

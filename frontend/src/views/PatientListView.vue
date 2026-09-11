@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { departments as departmentsApi, patients as patientsApi } from '../api/client'
@@ -7,16 +7,16 @@ import { departments as departmentsApi, patients as patientsApi } from '../api/c
 // The one screen wired to the running service. Search, paging, create and
 // delete all round-trip to FastAPI for real.
 //
-// The API currently accepts a name fragment, an offset and a limit. Patient ID,
-// symptom tag and admission-date filters belong to task T13, so the toolbar
-// shows only what actually works rather than controls that quietly do nothing.
+// The toolbar searches by name; patient number, symptom tags and admission-date
+// filters land with task T15, so the note under the search box says so rather
+// than offering controls that quietly do nothing.
 
 const PAGE_SIZE = 20
 
 const rows = ref([])
 const departments = ref([])
 const total = ref(0)
-const offset = ref(0)
+const page = ref(1)
 const query = ref('')
 const loading = ref(false)
 const loadError = ref('')
@@ -24,21 +24,18 @@ const loadError = ref('')
 const dialogOpen = ref(false)
 const saving = ref(false)
 const formError = ref('')
-const form = reactive({ name: '', department_id: '', notes: '' })
-
-const currentPage = computed(() => Math.floor(offset.value / PAGE_SIZE) + 1)
-const departmentName = (id) => departments.value.find((item) => item.id === id)?.name ?? '—'
+const form = reactive({ name: '', gender: 'male', department: '', notes: '' })
 
 async function load() {
   loading.value = true
   loadError.value = ''
   try {
     const result = await patientsApi.list({
-      q: query.value.trim(),
-      offset: offset.value,
-      limit: PAGE_SIZE,
+      name: query.value.trim(),
+      page: page.value,
+      size: PAGE_SIZE,
     })
-    rows.value = result.data
+    rows.value = result.items
     total.value = result.total
   } catch (error) {
     loadError.value = error.message
@@ -50,18 +47,19 @@ async function load() {
 }
 
 function search() {
-  offset.value = 0
+  page.value = 1
   load()
 }
 
-function changePage(page) {
-  offset.value = (page - 1) * PAGE_SIZE
+function changePage(next) {
+  page.value = next
   load()
 }
 
 function openDialog() {
   form.name = ''
-  form.department_id = departments.value[0]?.id ?? ''
+  form.gender = 'male'
+  form.department = departments.value[0]?.name ?? ''
   form.notes = ''
   formError.value = ''
   dialogOpen.value = true
@@ -73,7 +71,7 @@ async function save() {
     formError.value = 'Enter the patient name.'
     return
   }
-  if (!form.department_id) {
+  if (!form.department) {
     formError.value = 'Select a department.'
     return
   }
@@ -82,11 +80,12 @@ async function save() {
   try {
     await patientsApi.create({
       name: form.name.trim(),
-      department_id: Number(form.department_id),
+      gender: form.gender,
+      department: form.department,
       notes: form.notes,
     })
     dialogOpen.value = false
-    offset.value = 0
+    page.value = 1
     await load()
     ElMessage.success('Patient record created.')
   } catch (error) {
@@ -108,8 +107,8 @@ async function remove(row) {
   }
 
   try {
-    await patientsApi.remove(row.id)
-    if (rows.value.length === 1 && offset.value > 0) offset.value -= PAGE_SIZE
+    await patientsApi.remove(row.patient_no)
+    if (rows.value.length === 1 && page.value > 1) page.value -= 1
     await load()
     ElMessage.success('Patient record deleted.')
   } catch (error) {
@@ -152,7 +151,7 @@ onMounted(async () => {
           <el-button native-type="submit" :loading="loading">Search</el-button>
         </form>
         <p class="toolbar-note">
-          Patient ID, symptom tag and admission-date filters arrive with task T13.
+          Patient number, symptom tag and admission-date filters arrive with task T15.
         </p>
       </div>
 
@@ -167,15 +166,24 @@ onMounted(async () => {
 
       <el-table v-loading="loading" :data="rows" class="table">
         <el-table-column label="Patient" prop="name" min-width="170" />
-        <el-table-column label="Record ID" width="120">
+        <el-table-column label="Record ID" width="130">
           <template #default="{ row }">
-            <span class="data">#{{ row.id }}</span>
+            <span class="data">{{ row.patient_no }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="Department" min-width="150">
-          <template #default="{ row }">{{ departmentName(row.department_id) }}</template>
+        <el-table-column label="Gender" width="110">
+          <template #default="{ row }">{{ row.gender }}</template>
         </el-table-column>
-        <el-table-column label="Notes" min-width="240">
+        <el-table-column label="Department" prop="department" min-width="150" />
+        <el-table-column label="Allergies" width="110">
+          <template #default="{ row }">
+            <span v-if="row.allergy_count" class="data">
+              {{ row.allergy_count }}<template v-if="row.has_severe_allergy"> ⚠</template>
+            </span>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="Notes" min-width="200">
           <template #default="{ row }">
             <span v-if="row.notes" class="notes">{{ row.notes }}</span>
             <span v-else class="muted">—</span>
@@ -201,7 +209,7 @@ onMounted(async () => {
       <footer v-if="total > PAGE_SIZE" class="pager">
         <el-pagination
           layout="prev, pager, next"
-          :current-page="currentPage"
+          :current-page="page"
           :page-size="PAGE_SIZE"
           :total="total"
           @current-change="changePage"
@@ -216,13 +224,22 @@ onMounted(async () => {
       </label>
 
       <label class="field">
+        <span class="field-label">Gender</span>
+        <el-select v-model="form.gender" class="full">
+          <el-option label="Male" value="male" />
+          <el-option label="Female" value="female" />
+          <el-option label="Unknown" value="unknown" />
+        </el-select>
+      </label>
+
+      <label class="field">
         <span class="field-label">Department</span>
-        <el-select v-model="form.department_id" placeholder="Select a department" class="full">
+        <el-select v-model="form.department" placeholder="Select a department" class="full">
           <el-option
             v-for="department in departments"
             :key="department.id"
             :label="department.name"
-            :value="department.id"
+            :value="department.name"
           />
         </el-select>
       </label>
