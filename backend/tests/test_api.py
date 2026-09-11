@@ -9,10 +9,11 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import DateTime, TypeDecorator, func, select
 
 from app.allergies import get_patient_allergens
+from app.auth import current_user
 from app.config import Settings
 from app.crypto import decrypt
 from app.main import create_app
-from app.models import Allergy, AuditLog, Department, Patient
+from app.models import Allergy, AuditLog, Department, Patient, Role, User
 from app.seed import seed
 
 
@@ -24,7 +25,17 @@ def client(tmp_path, monkeypatch):
     command.upgrade(Config("alembic.ini"), "head")
     seed()
     seed()  # Seeding must be safe to repeat.
-    app = create_app(Settings(database_url=url, redis_url=None))
+    app = create_app(Settings(database_url=url, redis_url=None, scheduler_enabled=False))
+    # Patient-module tests isolate T13/T14; authentication and scope have their own suite.
+    admin = User(
+        id=1,
+        username="test_admin",
+        name="Test Admin",
+        department_id=1,
+        role=Role(name="admin"),
+        department=Department(id=1, name="General Medicine"),
+    )
+    app.dependency_overrides[current_user] = lambda: admin
     with TestClient(app) as client:
         yield client
 
@@ -335,6 +346,7 @@ def test_data_survives_app_restart(client):
         json={"name": "Persistent Demo", "gender": "unknown", "department": "General Medicine"},
     )
     app = create_app(Settings(database_url=str(client.app.state.engine.url), redis_url=None))
+    app.dependency_overrides.update(client.app.dependency_overrides)
     with TestClient(app) as restarted:
         items = restarted.get("/api/patients").json()["data"]["items"]
         assert items[0]["name"] == "Persistent Demo"

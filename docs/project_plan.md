@@ -177,6 +177,12 @@ Goal: users can sign in, view patients, and have relevant actions logged.
 
 **Feature subtotal: 64 hours** — A: 18, B: 18, C: 15, D: 13. The original subtotal was 66 hours; its separate weekly table moved part of T17 into Week 1 without defining a consistent split. This revision keeps all of T17 in Sprint 2 pending rebalancing.
 
+Owner A implementation evidence for T01, T02, T05, and T10 is recorded in
+[Sprint 1 owner A hand-off](sprint1_owner_a.md). The MySQL schema, authentication
+backend, and scheduled grants are implemented; full login acceptance still depends
+on B's T06 SMTP delivery and C's T07 frontend integration. Estimates and ownership
+above are unchanged; E's customer sign-off remains pending.
+
 ### Sprint 2 — Complete patient records and EMR workflow (Days 6–10)
 
 Goal: demonstrate EMR creation, order validation, review, and archiving. Start backend foundations for Week 3 features.
