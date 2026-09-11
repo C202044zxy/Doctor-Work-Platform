@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`project_plan.md` is the source of truth for baseline scope, task IDs, ownership, dependencies, capacity, milestones, and unresolved decisions. `README.md` documents how to install, run, and verify the stack.
+`docs/project_plan.md` is the source of truth for baseline scope, task IDs, ownership, dependencies, capacity, milestones, and unresolved decisions. `README.md` documents how to install, run, and verify the stack.
 
 - `backend/app/` -- FastAPI application. `main.py` builds the app, exception handlers, health endpoints, and the department, patient, and audit routes; `models.py` (SQLAlchemy), `schemas.py` (Pydantic), `crypto.py` (AES-256-GCM and masking helpers for patient identifiers), `config.py`, `database.py`, `seed.py`.
 - `backend/migrations/` -- Alembic revisions. Schema changes reach a database only through a revision.
@@ -35,7 +35,7 @@ From the repository root: `./scripts/dev.sh` or `.\scripts\dev.ps1` prepares and
 - API paths live under `/api`, **except** the health check: `GET /health` is a required alias of `GET /api/health` with a byte-identical body (the sign-off scenario calls the bare path).
 - `backend/app/main.py` follows the envelope on every route, including the ones that predate the contract; keep new endpoints on the same pattern.
 - Vue and JavaScript: two-space indentation, single quotes, no semicolons.
-- Preserve task identifiers such as T01 and M01 and module identifiers such as M1 and M8 from `project_plan.md`.
+- Preserve task identifiers such as T01 and M01 and module identifiers such as M1 and M8 from `docs/project_plan.md`.
 - Keep `scripts/dev.sh` and `scripts/dev.ps1` in sync, and keep `dev.ps1` ASCII-only: Windows PowerShell 5.1 decodes a script without a byte-order mark as ANSI.
 
 ## Testing Guidelines
@@ -43,10 +43,10 @@ From the repository root: `./scripts/dev.sh` or `.\scripts\dev.ps1` prepares and
 - Tests live in `backend/tests/` and are named `test_*.py`; run them with `uv run pytest -q` from `backend/`.
 - The suite migrates isolated SQLite databases and uses a Redis test double, so it does not exercise MySQL or a real Redis. The CI jobs cover those separately.
 - Add or extend a test with every behavior change, including validation failures, not-found paths, and list filters.
-- Future acceptance checks should cover the three demonstration flows in `project_plan.md`, including role and department access, allergy blocking, archive locking, and consultations.
+- Future acceptance checks should cover the three demonstration flows in `docs/project_plan.md`, including role and department access, allergy blocking, archive locking, and consultations.
 
 ## Commit & Pull Request Guidelines
 
 Follow the existing `type: imperative summary` pattern, for example `feat: add allergy endpoints`. Keep changes focused.
 
-PRs should explain the change, reference task IDs from `project_plan.md`, and list the validation performed (`uv run pytest -q`, Ruff, `npm run build`). For scope or schedule changes, state the capacity impact and record unresolved decisions explicitly. Work on a feature branch and open a pull request so CI runs before merge, matching the existing history.
+PRs should explain the change, reference task IDs from `docs/project_plan.md`, and list the validation performed (`uv run pytest -q`, Ruff, `npm run build`). For scope or schedule changes, state the capacity impact and record unresolved decisions explicitly. Work on a feature branch and open a pull request so CI runs before merge, matching the existing history.
