@@ -331,3 +331,19 @@ Acceptance criteria are defined in M01 and checked by E. The final demonstration
 | Reconcile the stated nine modules with the listed module IDs | Avoid promising an unidentified or omitted module |
 
 The next planning step is to resolve these decisions and produce a daily allocation that stays within four hours per person. The task register above provides a consistent baseline for that work.
+
+## Approved scope addition: passkey login (2026-09-12)
+
+User-requested M1 extension to T05, with T06 SMTP delivery and T07 frontend session
+integration needed for initial enrollment. Passkeys use device user verification
+and issue the existing two-hour backend session; password plus email remains an
+alternative. No biometric images/templates are collected. API contract and an
+additive migration accompany the implementation.
+
+Capacity impact: additional implementation and device acceptance work beyond the
+18-hour owner A Sprint 1 baseline; no revised milestone or hour allocation has
+been agreed. Existing task ownership remains unchanged. Coordinate the delivered
+SMTP/session work with B (T06) and C (T07) to avoid duplicate implementation.
+Unresolved deployment inputs: production RP domain/origin and SMTP credentials.
+Physical-device acceptance and a self-service credential removal screen remain
+follow-up work; this increment supports registration and login.

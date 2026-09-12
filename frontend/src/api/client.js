@@ -1,15 +1,10 @@
-// Thin wrapper over the FastAPI service. Every JSON response carries the contract
-// envelope { code, message, data } — code 0 on success, the HTTP status otherwise —
-// so this unwraps `data` and surfaces `message` as a thrown Error. Callers only ever
-// deal with data or an exception.
-//
-// Task T07 swaps this for an axios instance with request and response interceptors
-// (attaching the bearer token, redirecting on 401). The function signatures here are
-// written to survive that swap unchanged.
+import { accessToken, signOut } from '../session.js'
 
 const BASE = '/api'
 
 async function request(path, options = {}) {
+  const token = accessToken()
+  options.headers = { ...options.headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) }
   let response
   try {
     response = await fetch(`${BASE}${path}`, options)
@@ -20,7 +15,13 @@ async function request(path, options = {}) {
   const body = await response.json().catch(() => null)
 
   if (!response.ok) {
-    throw new Error(body?.message || `Request failed (${response.status})`)
+    if (response.status === 401 && token) {
+      signOut()
+      window.location.assign('/login')
+    }
+    const error = new Error(body?.message || `Request failed (${response.status})`)
+    error.status = response.status
+    throw error
   }
   return body?.data
 }
@@ -95,4 +96,14 @@ export const patients = {
       return request(`/allergies/${id}`, { method: 'DELETE' })
     },
   },
+}
+
+export const authentication = {
+  login: (username, password) => request('/auth/login', json({ username, password })),
+  sendCode: (ticket) => request('/auth/send-code', json({ ticket })),
+  verifyCode: (ticket, code) => request('/auth/verify-code', json({ ticket, code })),
+  me: () => request('/me'),
+  logout: () => request('/auth/logout', json({})),
+  passkeyOptions: (kind) => request(`/auth/passkeys/${kind}/options`, json({})),
+  passkeyVerify: (kind, ticket, credential) => request(`/auth/passkeys/${kind}/verify`, json({ ticket, credential })),
 }

@@ -13,14 +13,34 @@ class Model(RootModel[Any]):
     root: Any
 
 
-class LoginRequest(BaseModel):
-    username: str = Field(..., examples=["dr_li"])
-    password: SecretStr
+class PasskeyVerifyRequest(BaseModel):
+    ticket: constr(min_length=1, max_length=200)
+    credential: dict[str, Any] = Field(
+        ...,
+        description="Browser WebAuthn credential JSON; binary fields use base64url.",
+    )
+
+
+class Data(BaseModel):
+    ticket: str
+    public_key: dict[str, Any] = Field(
+        ...,
+        description="WebAuthn creation or request options, with base64url binary fields. Challenge expires in 300 seconds and is single-use. User verification is required.",
+    )
 
 
 class SuccessBase(BaseModel):
     code: Literal[0]
     message: str = Field(..., examples=["ok"])
+
+
+class SendCodeRequest(BaseModel):
+    ticket: str
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., examples=["dr_li"])
+    password: SecretStr
 
 
 class LoginData(BaseModel):
@@ -107,6 +127,10 @@ class OkData(BaseModel):
     data: dict[str, Any]
 
 
+class PasskeyOptionsResponse(SuccessBase):
+    data: Data
+
+
 class LoginResponse(SuccessBase):
     data: LoginData
 
@@ -130,12 +154,12 @@ class TempGrantResponse(SuccessBase):
     data: TempGrant
 
 
-class Data(Page):
+class Data1(Page):
     items: list[TempGrant]
 
 
 class TempGrantListResponse(SuccessBase):
-    data: Data
+    data: Data1
 
 
 class HealthResponse(SuccessBase):

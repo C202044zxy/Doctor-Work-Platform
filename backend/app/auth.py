@@ -226,3 +226,48 @@ def logout(request: Request, user: CurrentUser):
     remaining = max(1, int(claims["exp"] - datetime.now(UTC).timestamp()))
     cache_for(request).set(f"auth:blacklist:{claims['jti']}", "1", ex=remaining)
     return ok({"ok": True})
+
+
+@router.post("/api/auth/send-code", response_model=contract.OkData)
+def send_code(body: contract.SendCodeRequest, request: Request):
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+
+    cache = cache_for(request)
+    settings = request.app.state.settings
+    uid = cache.get(ticket_key(body.ticket))
+    if uid is None:
+        raise HTTPException(401, "Login ticket has expired")
+    if not settings.smtp_host:
+        raise HTTPException(503, "Email delivery is not configured")
+    with request.app.state.sessions() as db:
+        user = db.get(User, int(uid))
+        if user is None or user.status != "active":
+            raise HTTPException(401, "User is unavailable or disabled")
+        address = user.email
+    cooldown = f"auth:send:cooldown:{int(uid)}"
+    if not cache.set(cooldown, "1", nx=True, ex=60):
+        raise HTTPException(429, f"Please retry in about {max(1, cache.ttl(cooldown))} seconds")
+    daily = f"auth:send:daily:{int(uid)}:{datetime.now(UTC).date()}"
+    with cache.pipeline() as pipe:
+        count, _ = pipe.incr(daily).expire(daily, 86400).execute()
+    if count > 20:
+        raise HTTPException(429, "Daily email limit reached; retry tomorrow")
+    code = f"{secrets.randbelow(1000000):06d}"
+    message = EmailMessage()
+    message["From"] = settings.smtp_from
+    message["To"] = address
+    message["Subject"] = "Doctor Work Platform sign-in code"
+    message.set_content(f"Your sign-in code is {code}. It expires in 5 minutes.")
+    try:
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
+            if settings.smtp_starttls:
+                smtp.starttls(context=ssl.create_default_context())
+            if settings.smtp_username:
+                smtp.login(settings.smtp_username, settings.smtp_password or "")
+            smtp.send_message(message)
+    except (OSError, smtplib.SMTPException):
+        raise HTTPException(502, "Email delivery failed; please retry later") from None
+    store_verification_code(cache, settings.jwt_secret, body.ticket, code)
+    return ok({"ok": True})
