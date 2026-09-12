@@ -267,8 +267,11 @@ def deliver_code(settings, address, code):
     message["Subject"] = "Doctor Work Platform verification code"
     message.set_content(f"Your verification code is {code}. It expires in 5 minutes.")
     try:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
-            if settings.smtp_starttls:
+        implicit_tls = settings.smtp_port == 465
+        transport = smtplib.SMTP_SSL if implicit_tls else smtplib.SMTP
+        options = {"context": ssl.create_default_context()} if implicit_tls else {}
+        with transport(settings.smtp_host, settings.smtp_port, timeout=10, **options) as smtp:
+            if settings.smtp_starttls and not implicit_tls:
                 smtp.starttls(context=ssl.create_default_context())
             if settings.smtp_username:
                 smtp.login(settings.smtp_username, settings.smtp_password or "")

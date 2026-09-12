@@ -61,3 +61,40 @@ def test_email_daily_limit(client):
     response = client.post("/api/auth/send-code", json={"ticket": ticket})
     assert response.status_code == 429
     assert "Daily" in response.json()["message"]
+
+
+def test_email_implicit_tls(client, monkeypatch):
+    import ssl
+
+    from app.auth import deliver_code
+
+    settings = client.app.state.settings
+    settings.smtp_host = "smtp.example.test"
+    settings.smtp_port = 465
+    settings.smtp_username = "sender@example.test"
+    settings.smtp_password = "test-authorization-code"
+    calls = []
+
+    class SMTPSSL:
+        def __init__(self, host, port, timeout, context):
+            assert (host, port, timeout) == (settings.smtp_host, 465, 10)
+            assert context.verify_mode == ssl.CERT_REQUIRED
+            assert context.check_hostname
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def login(self, username, password):
+            assert (username, password) == (settings.smtp_username, settings.smtp_password)
+            calls.append("login")
+
+        def send_message(self, message):
+            assert message["To"] == "recipient@example.test"
+            calls.append("send")
+
+    monkeypatch.setattr(smtplib, "SMTP_SSL", SMTPSSL)
+    deliver_code(settings, "recipient@example.test", "123456")
+    assert calls == ["login", "send"]

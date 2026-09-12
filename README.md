@@ -475,3 +475,7 @@ uv run python -m app.activate_user --username new_doctor --department "General M
 
 After activation, use the existing username/password and email-code sign-in flow.
 No database migration is needed: enrollment uses the existing user status field.
+
+SMTP port `465` uses implicit TLS (`SMTP_SSL`); other ports use STARTTLS when
+`SMTP_STARTTLS=true`. For a 163 Mail sender, use `smtp.163.com`, port `465`,
+`SMTP_STARTTLS=false`, and the mailbox SMTP authorization code as `SMTP_PASSWORD`.
