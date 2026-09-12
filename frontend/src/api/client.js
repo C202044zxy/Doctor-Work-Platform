@@ -99,11 +99,10 @@ export const patients = {
 }
 
 export const authentication = {
+  faceLogin: (username, photo) => request('/auth/face/login', json({ username, photo })),
   login: (username, password) => request('/auth/login', json({ username, password })),
   sendCode: (ticket) => request('/auth/send-code', json({ ticket })),
   verifyCode: (ticket, code) => request('/auth/verify-code', json({ ticket, code })),
   me: () => request('/me'),
   logout: () => request('/auth/logout', json({})),
-  passkeyOptions: (kind) => request(`/auth/passkeys/${kind}/options`, json({})),
-  passkeyVerify: (kind, ticket, credential) => request(`/auth/passkeys/${kind}/verify`, json({ ticket, credential })),
 }

@@ -29,8 +29,6 @@ services:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-doctor}:${MYSQL_PASSWORD:-doctor_local_password}@mysql:3306/${MYSQL_DATABASE:-doctor_platform}?charset=utf8mb4
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-this-jwt-secret-at-least-32-bytes}
-      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-localhost}
-      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-http://localhost:5173}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_FROM: ${SMTP_FROM:-noreply@example.test}

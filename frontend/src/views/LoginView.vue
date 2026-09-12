@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { signIn } from '../session'
 
 import { authentication } from '../api/client'
-import { passkeysSupported, usePasskey } from '../passkeys'
+import { capturePhoto, openCamera, stopCamera } from '../face-camera'
 
 const CODE_TTL_SECONDS = 300 // five minutes, matching the planned Redis expiry
 
@@ -14,7 +14,11 @@ const router = useRouter()
 const step = ref('credentials')
 const username = ref('')
 const ticket = ref('')
-const supported = passkeysSupported()
+const cameraOpen = ref(false)
+const cameraReady = ref(false)
+const cameraVideo = useTemplateRef('cameraVideo')
+let cameraStream = null
+let disposed = false
 const password = ref('')
 const code = ref('')
 const error = ref('')
@@ -30,7 +34,39 @@ const countdown = computed(() => {
   return `${minutes}:${seconds}`
 })
 
-onUnmounted(() => clearInterval(timer))
+onUnmounted(() => {
+  disposed = true
+  clearInterval(timer)
+  closeCamera()
+})
+
+function closeCamera() {
+  stopCamera(cameraStream)
+  cameraStream = null
+  cameraOpen.value = false
+  cameraReady.value = false
+}
+
+async function startCamera() {
+  error.value = ''
+  if (!username.value.trim()) {
+    error.value = 'Enter your username.'
+    return
+  }
+  busy.value = true
+  try {
+    const stream = await openCamera()
+    if (disposed) { stopCamera(stream); return }
+    cameraStream = stream
+    cameraOpen.value = true
+    await nextTick()
+    cameraVideo.value.srcObject = stream
+    await cameraVideo.value.play()
+  } catch (err) {
+    closeCamera()
+    error.value = err.message
+  } finally { busy.value = false }
+}
 
 function startCountdown() {
   secondsLeft.value = CODE_TTL_SECONDS
@@ -45,6 +81,7 @@ function startCountdown() {
 }
 
 async function submitCredentials() {
+  closeCamera()
   error.value = ''
   if (!username.value.trim()) {
     error.value = 'Enter your username.'
@@ -86,10 +123,15 @@ async function submitCode() {
   finally { busy.value = false }
 }
 
-async function passkeyLogin() {
+async function faceLogin() {
   error.value = ''
   busy.value = true
-  try { finish(await usePasskey('login')) }
+  try {
+    const photo = capturePhoto(cameraVideo.value)
+    const data = await authentication.faceLogin(username.value.trim(), photo)
+    closeCamera()
+    finish(data)
+  }
   catch (err) { error.value = err.message }
   finally { busy.value = false }
 }
@@ -249,13 +291,18 @@ async function resend() {
           </button>
         </p>
 
-        <p v-if="step === 'credentials'" class="back">
-          <el-button :disabled="busy || !supported" @click="passkeyLogin">Sign in with a passkey</el-button>
-        </p>
+        <div v-if="step === 'credentials'" class="back">
+          <el-button v-if="!cameraOpen" :disabled="busy" @click="startCamera">Sign in with face</el-button>
+          <template v-else>
+            <video ref="cameraVideo" class="camera-preview" autoplay muted playsinline aria-label="Camera preview" @loadeddata="cameraReady = true" />
+            <p>Look at the camera, then capture your photo to sign in as {{ username }}.</p>
+            <el-button type="primary" :disabled="busy || !cameraReady" @click="faceLogin">Capture photo and sign in</el-button>
+            <el-button :disabled="busy" @click="closeCamera">Cancel</el-button>
+          </template>
+        </div>
         <p class="demo-note">
-          Register a passkey from your account menu after signing in.
-          Your device may use face recognition, a fingerprint, or its PIN.
-          <span v-if="!supported">Passkeys require HTTPS or localhost and a compatible browser.</span>
+          Face sign-in sends a camera photo to the server. Photos are not saved.
+          Demo mode: face matching always succeeds for an existing active username.
         </p>
       </form>
     </section>
@@ -263,6 +310,12 @@ async function resend() {
 </template>
 
 <style scoped>
+.camera-preview {
+  width: 100%;
+  border-radius: var(--radius);
+  transform: scaleX(-1);
+}
+
 .login {
   display: grid;
   grid-template-columns: 1fr 1fr;

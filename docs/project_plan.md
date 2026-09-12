@@ -347,3 +347,17 @@ SMTP/session work with B (T06) and C (T07) to avoid duplicate implementation.
 Unresolved deployment inputs: production RP domain/origin and SMTP credentials.
 Physical-device acceptance and a self-service credential removal screen remain
 follow-up work; this increment supports registration and login.
+
+
+## Approved scope replacement: server face login (2026-09-13)
+
+Supersedes the passkey extension above for M1/T05/T07. Capture a photo in the
+browser and upload it with an existing username. The server matcher is a TODO
+that always returns true; account status/role checks and existing sessions remain.
+No enrollment or photo persistence in this increment. Password/email remains available.
+Passkey routes/UI are removed; historical database migration and records remain.
+
+Capacity impact: replaces passkey device acceptance with camera/upload acceptance;
+additional implementation beyond the original baseline, with no revised hours or
+milestones agreed. Ownership is unchanged. Unresolved: real matching algorithm,
+reference-image enrollment, liveness requirements, and deployment camera acceptance.

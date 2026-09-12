@@ -18,7 +18,6 @@ import {
 import { navigation } from './router'
 import { currentClinician, signOut } from './session'
 import { ElMessage } from 'element-plus'
-import { usePasskey } from './passkeys'
 import { authentication, health } from './api/client'
 import { counts } from './api/demo-data'
 
@@ -64,18 +63,13 @@ onMounted(async () => {
 })
 
 const accountBusy = ref(false)
-async function handleAccount(command) {
+async function handleAccount() {
   if (accountBusy.value) return
   accountBusy.value = true
   try {
-    if (command === 'passkey') {
-      await usePasskey('register')
-      ElMessage.success('Passkey registered. You can use it for your next sign-in.')
-    } else {
-      await authentication.logout()
-      signOut()
-      router.push({ name: 'login' })
-    }
+    await authentication.logout()
+    signOut()
+    router.push({ name: 'login' })
   } catch (error) { ElMessage.error(error.message) }
   finally { accountBusy.value = false }
 }
@@ -146,7 +140,6 @@ async function handleAccount(command) {
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item disabled>{{ clinician.department }}</el-dropdown-item>
-                <el-dropdown-item command="passkey" :disabled="accountBusy">Register a passkey</el-dropdown-item>
                 <el-dropdown-item :disabled="accountBusy" command="sign-out" :icon="SwitchButton" divided>
                   Sign out
                 </el-dropdown-item>
