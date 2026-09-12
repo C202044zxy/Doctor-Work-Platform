@@ -37,8 +37,7 @@ def include(name):
 
 
 for name in (
-    "PasskeyVerifyRequest",
-    "PasskeyOptionsResponse",
+    "FaceLoginRequest",
     "SendCodeRequest",
     "LoginRequest",
     "LoginResponse",

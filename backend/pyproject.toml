@@ -14,7 +14,7 @@ dependencies = [
     "bcrypt>=4,<6",
     "pyjwt>=2.10,<3",
     "apscheduler>=3.11,<4",
-    "webauthn>=2.7,<3",
+    "pillow>=11,<13",
 ]
 
 [dependency-groups]

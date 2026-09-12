@@ -4,8 +4,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./doctor.db"
     jwt_secret: str = "dev-only-change-this-jwt-secret-at-least-32-bytes"
-    webauthn_rp_id: str = "localhost"
-    webauthn_origin: str = "http://localhost:5173"
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_username: str | None = None
