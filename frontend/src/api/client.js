@@ -99,6 +99,8 @@ export const patients = {
 }
 
 export const authentication = {
+  signup(details) { return request('/auth/signup', json(details)) },
+  verifySignup(ticket, code) { return request('/auth/signup/verify', json({ ticket, code })) },
   faceLogin: (username, photo) => request('/auth/face/login', json({ username, photo })),
   login: (username, password) => request('/auth/login', json({ username, password })),
   sendCode: (ticket) => request('/auth/send-code', json({ ticket })),

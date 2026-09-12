@@ -6,11 +6,30 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field, RootModel, SecretStr, constr
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    SecretStr,
+    constr,
+)
 
 
 class Model(RootModel[Any]):
     root: Any
+
+
+class SignupRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    username: constr(min_length=1, max_length=100)
+    password: constr(min_length=8, max_length=72) = Field(..., description="Maximum 72 UTF-8 bytes")
+    name: constr(min_length=1, max_length=100)
+    email: constr(pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$", min_length=3, max_length=254)
+    department: constr(min_length=1, max_length=100)
 
 
 class FaceLoginRequest(BaseModel):

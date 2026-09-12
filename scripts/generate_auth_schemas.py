@@ -37,6 +37,7 @@ def include(name):
 
 
 for name in (
+    "SignupRequest",
     "FaceLoginRequest",
     "SendCodeRequest",
     "LoginRequest",

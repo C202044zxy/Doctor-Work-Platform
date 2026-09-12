@@ -149,6 +149,64 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/HealthResponse' }
 
+  /api/auth/signup:
+    post:
+      tags: [Auth]
+      summary: Send an email signup code; ticket expires after 300 seconds. Rate limited to one per minute and 20 per day per address, plus 20 per hour per source IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignupRequest' }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401':
+          description: Invalid, expired or consumed verification code
+        '409':
+          description: Username or email already registered
+        '422':
+          description: Invalid registration details or unknown department
+        '429':
+          description: Rate limit exceeded
+        '502':
+          description: Email delivery failed
+        '503':
+          description: Redis, SMTP or seeded roles unavailable
+
+  /api/auth/signup/verify:
+    post:
+      tags: [Auth]
+      summary: Verify signup email and create a pending junior account. Administrator activation is required. Five incorrect codes invalidate the ticket; tickets are single use.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyCodeRequest' }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkData' }
+        '401':
+          description: Invalid, expired or consumed verification code
+        '409':
+          description: Username or email already registered
+        '422':
+          description: Invalid registration details or unknown department
+        '429':
+          description: Rate limit exceeded
+        '502':
+          description: Email delivery failed
+        '503':
+          description: Redis, SMTP or seeded roles unavailable
+
   /api/auth/login:
     post:
       operationId: login
@@ -2935,6 +2993,16 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
 
   schemas:
+    SignupRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password, name, email, department]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 100 }
+        password: { type: string, minLength: 8, maxLength: 72, description: Maximum 72 UTF-8 bytes }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        email: { type: string, minLength: 3, maxLength: 254, pattern: '^[^\s@]+@[^\s@]+\.[^\s@]+$' }
+        department: { type: string, minLength: 1, maxLength: 100 }
 
     Error:
       type: object
