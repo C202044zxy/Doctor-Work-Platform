@@ -84,6 +84,87 @@ security:
   - bearerAuth: []
 
 paths:
+  /api/auth/passkeys/register/options:
+    post:
+      operationId: passkeyRegistrationOptions
+      tags: [Auth]
+      summary: Create a passkey registration challenge
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PasskeyOptionsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429':
+          description: Too many attempts.
+        '503':
+          description: Authentication service unavailable.
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/auth/passkeys/register/verify:
+    post:
+      operationId: passkeyRegistrationVerify
+      tags: [Auth]
+      description: Returns 409 when the credential is already registered.
+      summary: Register a verified passkey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasskeyVerifyRequest' }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429':
+          description: Too many attempts.
+        '503':
+          description: Authentication service unavailable.
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/auth/passkeys/login/options:
+    post:
+      operationId: passkeyLoginOptions
+      tags: [Auth]
+      summary: Create a discoverable passkey login challenge
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PasskeyOptionsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429':
+          description: Too many attempts.
+        '503':
+          description: Authentication service unavailable.
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/auth/passkeys/login/verify:
+    post:
+      operationId: passkeyLoginVerify
+      tags: [Auth]
+      summary: Verify a passkey and issue a session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasskeyVerifyRequest' }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429':
+          description: Too many attempts.
+        '503':
+          description: Authentication service unavailable.
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/health:
     get:
       operationId: getHealth
@@ -3023,6 +3104,30 @@ components:
           properties:
             data: { $ref: '#/components/schemas/LoginData' }
 
+    PasskeyVerifyRequest:
+      type: object
+      required: [ticket, credential]
+      properties:
+        ticket: { type: string, minLength: 1, maxLength: 200 }
+        credential:
+          type: object
+          additionalProperties: true
+          description: Browser WebAuthn credential JSON; binary fields use base64url.
+    PasskeyOptionsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: object
+              required: [ticket, public_key]
+              properties:
+                ticket: { type: string }
+                public_key:
+                  type: object
+                  additionalProperties: true
+                  description: WebAuthn creation or request options, with base64url binary fields. Challenge expires in 300 seconds and is single-use. User verification is required.
     SendCodeRequest:
       type: object
       required: [ticket]

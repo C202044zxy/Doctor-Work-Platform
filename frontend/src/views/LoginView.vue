@@ -3,10 +3,8 @@ import { computed, nextTick, onUnmounted, ref, useTemplateRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { signIn } from '../session'
 
-// Two-step sign-in: credentials, then a one-time code by email. Task T05 wires
-// this to the real endpoints, where the code lives in Redis with a five-minute
-// expiry and the success path returns a JWT. Until then the form validates
-// shape only and the code is accepted without a server check.
+import { authentication } from '../api/client'
+import { passkeysSupported, usePasskey } from '../passkeys'
 
 const CODE_TTL_SECONDS = 300 // five minutes, matching the planned Redis expiry
 
@@ -14,7 +12,9 @@ const route = useRoute()
 const router = useRouter()
 
 const step = ref('credentials')
-const email = ref('')
+const username = ref('')
+const ticket = ref('')
+const supported = passkeysSupported()
 const password = ref('')
 const code = ref('')
 const error = ref('')
@@ -46,8 +46,8 @@ function startCountdown() {
 
 async function submitCredentials() {
   error.value = ''
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.value.trim())) {
-    error.value = 'Enter a valid email address.'
+  if (!username.value.trim()) {
+    error.value = 'Enter your username.'
     return
   }
   if (!password.value) {
@@ -56,13 +56,22 @@ async function submitCredentials() {
   }
 
   busy.value = true
-  await new Promise((resolve) => setTimeout(resolve, 280)) // stand-in for the request
-  busy.value = false
+  try {
+    const result = await authentication.login(username.value.trim(), password.value)
+    ticket.value = result.ticket
+    step.value = 'code'
+    await authentication.sendCode(ticket.value)
+    startCountdown()
+    await nextTick()
+    codeInput.value?.focus()
+  } catch (err) { error.value = err.message }
+  finally { busy.value = false }
+}
 
-  step.value = 'code'
-  startCountdown()
-  await nextTick()
-  codeInput.value?.focus()
+function finish(data) {
+  signIn(data)
+  const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+  router.replace(redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : { name: 'dashboard' })
 }
 
 async function submitCode() {
@@ -71,14 +80,18 @@ async function submitCode() {
     error.value = 'Enter the 6-digit code from the email.'
     return
   }
-
   busy.value = true
-  await new Promise((resolve) => setTimeout(resolve, 280))
-  busy.value = false
+  try { finish(await authentication.verifyCode(ticket.value, code.value.trim())) }
+  catch (err) { error.value = err.message }
+  finally { busy.value = false }
+}
 
-  signIn()
-  const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
-  router.replace(redirect ?? { name: 'dashboard' })
+async function passkeyLogin() {
+  error.value = ''
+  busy.value = true
+  try { finish(await usePasskey('login')) }
+  catch (err) { error.value = err.message }
+  finally { busy.value = false }
 }
 
 function useAnotherAccount() {
@@ -89,10 +102,15 @@ function useAnotherAccount() {
   step.value = 'credentials'
 }
 
-function resend() {
+async function resend() {
   code.value = ''
   error.value = ''
-  startCountdown()
+  busy.value = true
+  try {
+    await authentication.sendCode(ticket.value)
+    startCountdown()
+  } catch (err) { error.value = err.message }
+  finally { busy.value = false }
 }
 </script>
 
@@ -150,19 +168,19 @@ function resend() {
             Use your hospital account.
           </template>
           <template v-else>
-            We sent a 6-digit code to <span class="data">{{ email.trim() }}</span>.
+            Enter the code sent to your account’s registered email address.
           </template>
         </p>
 
         <template v-if="step === 'credentials'">
           <label class="field">
-            <span class="field-label">Email</span>
+            <span class="field-label">Username</span>
             <el-input
-              v-model="email"
-              type="email"
+              v-model="username"
+              type="text"
               size="large"
               autocomplete="username"
-              placeholder="chen@hospital.example"
+              placeholder="Your username"
               :disabled="busy"
             />
           </label>
@@ -231,9 +249,13 @@ function resend() {
           </button>
         </p>
 
+        <p v-if="step === 'credentials'" class="back">
+          <el-button :disabled="busy || !supported" @click="passkeyLogin">Sign in with a passkey</el-button>
+        </p>
         <p class="demo-note">
-          Development build. Sign-in is not connected to a service yet, so any 6-digit code is
-          accepted.
+          Register a passkey from your account menu after signing in.
+          Your device may use face recognition, a fingerprint, or its PIN.
+          <span v-if="!supported">Passkeys require HTTPS or localhost and a compatible browser.</span>
         </p>
       </form>
     </section>

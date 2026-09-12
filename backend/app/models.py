@@ -1,6 +1,16 @@
 from datetime import UTC, date, datetime
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    LargeBinary,
+    String,
+    Text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -104,3 +114,13 @@ class TempGrant(Base):
     )
     grantee: Mapped[User] = relationship(foreign_keys=[grantee_id], lazy="joined")
     patient: Mapped[Patient] = relationship(lazy="joined")
+
+
+class Passkey(Base):
+    __tablename__ = "passkeys"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    credential_id: Mapped[bytes] = mapped_column(LargeBinary(1024))
+    credential_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    public_key: Mapped[bytes] = mapped_column(LargeBinary(2048))
+    sign_count: Mapped[int] = mapped_column(BigInteger)

@@ -1,35 +1,36 @@
 import { computed, ref } from 'vue'
+import { authentication } from './api/client.js'
 
-// Placeholder session. Task T05 replaces this with a real JWT from the
-// password + email-code flow, and task T08 replaces the hard-coded clinician
-// with the role matrix. Until then sign-in is a local flag so the interface
-// can be demonstrated without an auth backend.
-//
-// sessionStorage rather than localStorage: a refresh keeps you signed in
-// while building, but a fresh tab starts at the sign-in screen.
-
-const STORAGE_KEY = 'dwp.signed-in'
-
-const signedIn = ref(sessionStorage.getItem(STORAGE_KEY) === 'true')
-
-// The one hard-coded clinician this build renders as. The menu in App.vue is
-// written for this role; it is not yet driven by the role matrix.
-const clinician = ref({
-  name: 'Dr. Chen',
-  role: 'Chief Physician',
-  department: 'Cardiology',
-  initials: 'DC',
-})
-
-export const isSignedIn = computed(() => signedIn.value)
-export const currentClinician = computed(() => clinician.value)
-
-export function signIn() {
-  signedIn.value = true
-  sessionStorage.setItem(STORAGE_KEY, 'true')
+const STORAGE_KEY = 'dwp.access-token'
+const token = ref(sessionStorage.getItem(STORAGE_KEY))
+const user = ref(null)
+let restoration
+export const isSignedIn = computed(() => Boolean(token.value && user.value))
+export const currentClinician = computed(() => ({
+  name: user.value?.name || '',
+  role: user.value?.title || '',
+  department: user.value?.department || '',
+  initials: (user.value?.name || '').split(/\s+/).map((part) => part[0]).join('').slice(0, 2),
+}))
+export function accessToken() { return token.value }
+export function signIn(data) {
+  token.value = data.access_token
+  user.value = data.user
+  sessionStorage.setItem(STORAGE_KEY, token.value)
 }
-
 export function signOut() {
-  signedIn.value = false
+  token.value = null
+  user.value = null
   sessionStorage.removeItem(STORAGE_KEY)
+}
+export async function restoreSession() {
+  if (!token.value || user.value) return
+  if (!restoration) {
+    restoration = (async () => {
+      try { user.value = await authentication.me() }
+      catch { signOut() }
+      finally { restoration = null }
+    })()
+  }
+  await restoration
 }

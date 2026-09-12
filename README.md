@@ -417,3 +417,51 @@ without Docker and check that it prints the install hint and exits non-zero:
 ```bash
 bash scripts/dev.sh docker; echo "exit=$?"
 ```
+
+### Passkey login (M1 / T05, T06, T07)
+
+Users can register a passkey from the account menu after signing in with their
+username, password and email code. On later visits, choose **Sign in with a
+passkey**. Device verification is required; Face ID, Windows Hello, fingerprint
+or PIN selection belongs to the device. The server stores only a public key and
+credential metadata, never face images. Passkeys are an alternative to the
+password/email flow; that flow remains available for recovery.
+
+Install locked backend dependencies and apply the new migration before starting:
+
+```bash
+cd backend
+uv sync --frozen
+uv run alembic upgrade head
+```
+
+Configure these values in `backend/.env` for local startup, or the root `.env`
+for Compose. Use **http://localhost:5173** with the defaults (not 127.0.0.1).
+Production requires HTTPS and a stable domain; the origin is the exact frontend
+URL, including its port when nonstandard, with no trailing slash.
+
+```dotenv
+WEBAUTHN_RP_ID=localhost
+WEBAUTHN_ORIGIN=http://localhost:5173
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_FROM=noreply@example.com
+SMTP_USERNAME=your-smtp-user
+SMTP_PASSWORD=your-smtp-password
+SMTP_STARTTLS=true
+```
+
+For `https://doctors.example.com`, set `WEBAUTHN_RP_ID=doctors.example.com` and
+`WEBAUTHN_ORIGIN=https://doctors.example.com`. Do not derive these values from
+request headers. Changing the RP domain requires registering new passkeys.
+Redis is required for expiring, single-use challenges and session revocation.
+Provision an account with `uv run python -m app.create_user` if needed; its email
+must be deliverable. SMTP uses STARTTLS by default and a 10-second connection
+timeout. Delivery is limited to one attempt per minute and 20 per UTC day per
+account. SMTP failures consume an attempt; no code is exposed through the API.
+
+Manual device check: sign in with password/email → register a passkey from the
+account menu → sign out → sign in with the passkey → confirm your account name
+and department. Test cancellation and password fallback too. Automated tests use
+real ES256 signatures with a software authenticator; they do not verify physical
+Face ID/Windows Hello hardware or delivery through your SMTP provider.

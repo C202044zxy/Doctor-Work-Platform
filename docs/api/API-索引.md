@@ -961,3 +961,12 @@
 ---
 
 *本文档由 C 起草，2026-09-11。字段级细节以 `openapi.yaml` 为准，冲突时先改本文再改 YAML。*
+
+### M1 通行密钥扩展（T05 / T07）
+
+- `POST /api/auth/passkeys/register/options`：登录后创建注册挑战。
+- `POST /api/auth/passkeys/register/verify`：验证设备响应并绑定当前账号。
+- `POST /api/auth/passkeys/login/options`：创建无用户名登录挑战。
+- `POST /api/auth/passkeys/login/verify`：验证签名并返回现有 TokenResponse。
+
+挑战有效期 300 秒且只能使用一次，必须通过设备用户验证。账号、角色和科室仍由后端管理；不收集人脸图像。请求和响应以 openapi.yaml 为准。
