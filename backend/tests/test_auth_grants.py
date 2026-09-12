@@ -22,7 +22,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", url)
     command.upgrade(Config("alembic.ini"), "head")
     seed()
-    app = create_app(Settings(database_url=url, redis_url=None, scheduler_enabled=True))
+    app = create_app(
+        Settings(database_url=url, redis_url=None, scheduler_enabled=True, _env_file=None)
+    )
     app.state.cache = fakeredis.FakeRedis()
     with app.state.sessions() as db:
         roles = {r.name: r.id for r in db.scalars(select(Role))}

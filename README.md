@@ -456,3 +456,26 @@ Provision an account with `cd backend && uv run python -m app.create_user` if
 needed. Redis is required for session revocation and email verification. SMTP
 uses a 10-second timeout; delivery is limited to one attempt per minute and 20
 per UTC day per account. SMTP failures consume an attempt.
+
+### Email signup (M1, T05/T06/T08 extension)
+
+Choose **Create an account with email** on the login page. Enter a username, full
+name, email, password (at least eight characters, at most 72 UTF-8 bytes), and an
+existing department name. Redis and the existing `SMTP_*` settings are required.
+The emailed six-digit code expires in five minutes; requesting a new signup code
+requires waiting 60 seconds. Signup requests are limited per email and source IP.
+
+Email verification creates a **pending junior** account. An administrator must
+check staff identity and confirm the department before activating it locally:
+
+```sh
+cd backend
+uv run python -m app.activate_user --username new_doctor --department "General Medicine"
+```
+
+After activation, use the existing username/password and email-code sign-in flow.
+No database migration is needed: enrollment uses the existing user status field.
+
+SMTP port `465` uses implicit TLS (`SMTP_SSL`); other ports use STARTTLS when
+`SMTP_STARTTLS=true`. For a 163 Mail sender, use `smtp.163.com`, port `465`,
+`SMTP_STARTTLS=false`, and the mailbox SMTP authorization code as `SMTP_PASSWORD`.

@@ -967,3 +967,13 @@
 - `POST /api/auth/face/login`：提交 `username` 和 `photo`（base64 JPEG data URL），返回现有 TokenResponse。
 - 服务端匹配函数暂时始终返回 true；仍要求账号存在且启用。图片仅在内存中处理，不保存。
 - 通行密钥接口已移除。请求和响应以 openapi.yaml 为准。
+
+### Email signup extension (M1 / T05 / T06 / T08)
+
+- `POST /api/auth/signup`: public; `SignupRequest` sends an email code and returns
+  `LoginResponse` (`ticket`, `expires_in: 300`). Existing department name required.
+- `POST /api/auth/signup/verify`: public; `VerifyCodeRequest` creates a pending junior
+  account and returns `OkData`. Does not issue a session. Administrator activation
+  uses `python -m app.activate_user`; subsequent login uses existing email 2FA.
+- Validation, duplicates, expired/used tickets, code guesses, SMTP failures and
+  request limits use the standard error envelope. See `openapi.yaml` for shapes.

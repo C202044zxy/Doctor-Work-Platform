@@ -12,6 +12,26 @@ const route = useRoute()
 const router = useRouter()
 
 const step = ref('credentials')
+const registering = ref(false)
+const name = ref('')
+const email = ref('')
+const department = ref('')
+const notice = ref('')
+
+function toggleSignup() {
+  closeCamera()
+  useAnotherAccount()
+  registering.value = !registering.value
+  password.value = ''
+  notice.value = ''
+}
+
+async function requestSignup() {
+  return authentication.signup({
+    username: username.value.trim(), password: password.value,
+    name: name.value.trim(), email: email.value.trim(), department: department.value.trim(),
+  })
+}
 const username = ref('')
 const ticket = ref('')
 const cameraOpen = ref(false)
@@ -94,10 +114,12 @@ async function submitCredentials() {
 
   busy.value = true
   try {
-    const result = await authentication.login(username.value.trim(), password.value)
+    const result = registering.value
+      ? await requestSignup()
+      : await authentication.login(username.value.trim(), password.value)
     ticket.value = result.ticket
     step.value = 'code'
-    await authentication.sendCode(ticket.value)
+    if (!registering.value) await authentication.sendCode(ticket.value)
     startCountdown()
     await nextTick()
     codeInput.value?.focus()
@@ -118,7 +140,15 @@ async function submitCode() {
     return
   }
   busy.value = true
-  try { finish(await authentication.verifyCode(ticket.value, code.value.trim())) }
+  try {
+    if (registering.value) {
+      await authentication.verifySignup(ticket.value, code.value.trim())
+      toggleSignup()
+      notice.value = 'Email verified. Your account is awaiting administrator activation. Contact your administrator before signing in.'
+    } else {
+      finish(await authentication.verifyCode(ticket.value, code.value.trim()))
+    }
+  }
   catch (err) { error.value = err.message }
   finally { busy.value = false }
 }
@@ -149,7 +179,12 @@ async function resend() {
   error.value = ''
   busy.value = true
   try {
-    await authentication.sendCode(ticket.value)
+    if (registering.value) {
+      const result = await requestSignup()
+      ticket.value = result.ticket
+    } else {
+      await authentication.sendCode(ticket.value)
+    }
     startCountdown()
   } catch (err) { error.value = err.message }
   finally { busy.value = false }
@@ -203,18 +238,33 @@ async function resend() {
     <section class="form-side">
       <form class="form" @submit.prevent="step === 'credentials' ? submitCredentials() : submitCode()">
         <h2 class="form-title">
-          {{ step === 'credentials' ? 'Sign in' : 'Check your email' }}
+          {{ step === 'credentials' ? (registering ? 'Create an account' : 'Sign in') : 'Check your email' }}
         </h2>
         <p class="form-lede">
           <template v-if="step === 'credentials'">
-            Use your hospital account.
+            {{ registering ? 'Verify your email, then ask an administrator to activate your staff account.' : 'Use your hospital account.' }}
           </template>
           <template v-else>
             Enter the code sent to your account’s registered email address.
           </template>
         </p>
 
+        <p v-if="notice" role="status">{{ notice }}</p>
         <template v-if="step === 'credentials'">
+          <template v-if="registering">
+            <label class="field">
+              <span class="field-label">Full name</span>
+              <el-input v-model="name" size="large" autocomplete="name" maxlength="100" :disabled="busy" required />
+            </label>
+            <label class="field">
+              <span class="field-label">Email</span>
+              <el-input v-model="email" type="email" size="large" autocomplete="email" maxlength="254" :disabled="busy" required />
+            </label>
+            <label class="field">
+              <span class="field-label">Department</span>
+              <el-input v-model="department" size="large" placeholder="e.g. General Medicine" maxlength="100" :disabled="busy" required />
+            </label>
+          </template>
           <label class="field">
             <span class="field-label">Username</span>
             <el-input
@@ -233,7 +283,10 @@ async function resend() {
               v-model="password"
               type="password"
               size="large"
-              autocomplete="current-password"
+              :autocomplete="registering ? 'new-password' : 'current-password'"
+              :minlength="registering ? 8 : 1"
+              maxlength="72"
+              required
               show-password
               placeholder="Your password"
               :disabled="busy"
@@ -282,7 +335,7 @@ async function resend() {
           class="submit"
           :loading="busy"
         >
-          {{ step === 'credentials' ? 'Continue' : 'Verify and sign in' }}
+          {{ step === 'credentials' ? 'Continue' : (registering ? 'Verify email and create account' : 'Verify and sign in') }}
         </el-button>
 
         <p v-if="step === 'code'" class="back">
@@ -291,7 +344,12 @@ async function resend() {
           </button>
         </p>
 
-        <div v-if="step === 'credentials'" class="back">
+        <p v-if="step === 'credentials'" class="back">
+          <button type="button" class="resend" :disabled="busy" @click="toggleSignup">
+            {{ registering ? 'Already have an account? Sign in' : 'Create an account with email' }}
+          </button>
+        </p>
+        <div v-if="step === 'credentials' && !registering" class="back">
           <el-button v-if="!cameraOpen" :disabled="busy" @click="startCamera">Sign in with face</el-button>
           <template v-else>
             <video ref="cameraVideo" class="camera-preview" autoplay muted playsinline aria-label="Camera preview" @loadeddata="cameraReady = true" />
@@ -300,7 +358,7 @@ async function resend() {
             <el-button :disabled="busy" @click="closeCamera">Cancel</el-button>
           </template>
         </div>
-        <p class="demo-note">
+        <p v-if="!registering" class="demo-note">
           Face sign-in sends a camera photo to the server. Photos are not saved.
           Demo mode: face matching always succeeds for an existing active username.
         </p>

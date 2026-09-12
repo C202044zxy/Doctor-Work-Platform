@@ -230,10 +230,6 @@ def logout(request: Request, user: CurrentUser):
 
 @router.post("/api/auth/send-code", response_model=contract.OkData)
 def send_code(body: contract.SendCodeRequest, request: Request):
-    import smtplib
-    import ssl
-    from email.message import EmailMessage
-
     cache = cache_for(request)
     settings = request.app.state.settings
     uid = cache.get(ticket_key(body.ticket))
@@ -255,19 +251,30 @@ def send_code(body: contract.SendCodeRequest, request: Request):
     if count > 20:
         raise HTTPException(429, "Daily email limit reached; retry tomorrow")
     code = f"{secrets.randbelow(1000000):06d}"
+    deliver_code(settings, address, code)
+    store_verification_code(cache, settings.jwt_secret, body.ticket, code)
+    return ok({"ok": True})
+
+
+def deliver_code(settings, address, code):
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+
     message = EmailMessage()
     message["From"] = settings.smtp_from
     message["To"] = address
-    message["Subject"] = "Doctor Work Platform sign-in code"
-    message.set_content(f"Your sign-in code is {code}. It expires in 5 minutes.")
+    message["Subject"] = "Doctor Work Platform verification code"
+    message.set_content(f"Your verification code is {code}. It expires in 5 minutes.")
     try:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
-            if settings.smtp_starttls:
+        implicit_tls = settings.smtp_port == 465
+        transport = smtplib.SMTP_SSL if implicit_tls else smtplib.SMTP
+        options = {"context": ssl.create_default_context()} if implicit_tls else {}
+        with transport(settings.smtp_host, settings.smtp_port, timeout=10, **options) as smtp:
+            if settings.smtp_starttls and not implicit_tls:
                 smtp.starttls(context=ssl.create_default_context())
             if settings.smtp_username:
                 smtp.login(settings.smtp_username, settings.smtp_password or "")
             smtp.send_message(message)
     except (OSError, smtplib.SMTPException):
         raise HTTPException(502, "Email delivery failed; please retry later") from None
-    store_verification_code(cache, settings.jwt_secret, body.ticket, code)
-    return ok({"ok": True})

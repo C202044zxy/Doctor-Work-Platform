@@ -12,7 +12,7 @@ from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app import auth, auth_schemas, crypto, face_login, grants
+from app import auth, auth_schemas, crypto, face_login, grants, signup
 from app.allergies import allergen_name, dictionary, get_patient_allergens
 from app.config import Settings
 from app.database import make_engine, session_factory
@@ -201,6 +201,7 @@ def create_app(settings: Settings | None = None):
     app = FastAPI(title="Doctor Work Platform", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.include_router(auth.router)
+    app.include_router(signup.router)
     app.include_router(face_login.router)
     app.include_router(grants.router)
     app.state.sessions = session_factory(engine)

@@ -361,3 +361,14 @@ Capacity impact: replaces passkey device acceptance with camera/upload acceptanc
 additional implementation beyond the original baseline, with no revised hours or
 milestones agreed. Ownership is unchanged. Unresolved: real matching algorithm,
 reference-image enrollment, liveness requirements, and deployment camera acceptance.
+
+### Email signup extension — 2026-09-13
+
+User-requested addition to M1 (T05/T06/T08): email-verified self-registration,
+frontend enrollment, Redis expiry and throttling, and local administrator
+activation. New accounts remain pending with junior role until staff identity and
+department are confirmed. This extends the baseline; existing task IDs, owners and
+estimates are unchanged. Capacity impact: additional implementation and review
+outside the baseline allocation; hours have not been estimated. Unresolved:
+assignment and scheduling of a future web approval interface under T08. The local
+activation command completes the current enrollment flow.
