@@ -9,10 +9,11 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import DateTime, TypeDecorator, func, select
 
 from app.allergies import get_patient_allergens
+from app.auth import current_user
 from app.config import Settings
 from app.crypto import decrypt
 from app.main import create_app
-from app.models import Allergy, AuditLog, Department, Patient
+from app.models import Allergy, AuditLog, Department, Patient, Role, User
 from app.seed import seed
 
 
@@ -24,7 +25,17 @@ def client(tmp_path, monkeypatch):
     command.upgrade(Config("alembic.ini"), "head")
     seed()
     seed()  # Seeding must be safe to repeat.
-    app = create_app(Settings(database_url=url, redis_url=None))
+    app = create_app(Settings(database_url=url, redis_url=None, scheduler_enabled=False))
+    # Patient-module tests isolate T13/T14; authentication and scope have their own suite.
+    admin = User(
+        id=1,
+        username="test_admin",
+        name="Test Admin",
+        department_id=1,
+        role=Role(name="admin"),
+        department=Department(id=1, name="General Medicine"),
+    )
+    app.dependency_overrides[current_user] = lambda: admin
     with TestClient(app) as client:
         yield client
 
@@ -110,7 +121,13 @@ def test_patient_lifecycle_and_audit(client):
     assert client.delete(f"/api/patients/{number}").status_code == 404
     assert client.get("/api/patients", params={"name": "Demo"}).json()["data"]["total"] == 0
     with client.app.state.sessions() as db:
-        assert list(db.scalars(select(AuditLog.action).order_by(AuditLog.id))) == [
+        assert list(
+            db.scalars(
+                select(AuditLog.action)
+                .where(AuditLog.result == "success", ~AuditLog.action.like("%view"))
+                .order_by(AuditLog.id)
+            )
+        ) == [
             "patient.create",
             "patient.delete",
         ]
@@ -274,7 +291,13 @@ def test_patient_update(client):
     )
     assert client.patch(f"/api/patients/{number}", json={"name": None}).status_code == 422
     with client.app.state.sessions() as db:
-        assert list(db.scalars(select(AuditLog.action).order_by(AuditLog.id))) == [
+        assert list(
+            db.scalars(
+                select(AuditLog.action)
+                .where(AuditLog.result == "success", ~AuditLog.action.like("%view"))
+                .order_by(AuditLog.id)
+            )
+        ) == [
             "patient.create",
             "patient.update",
             "patient.update",
@@ -335,6 +358,7 @@ def test_data_survives_app_restart(client):
         json={"name": "Persistent Demo", "gender": "unknown", "department": "General Medicine"},
     )
     app = create_app(Settings(database_url=str(client.app.state.engine.url), redis_url=None))
+    app.dependency_overrides.update(client.app.dependency_overrides)
     with TestClient(app) as restarted:
         items = restarted.get("/api/patients").json()["data"]["items"]
         assert items[0]["name"] == "Persistent Demo"
@@ -509,7 +533,13 @@ def test_allergy_update_and_delete_audit(client):
     assert [item["allergen"] for item in detail["allergies"]] == ["PENICILLIN"]
 
     with client.app.state.sessions() as db:
-        actions = list(db.scalars(select(AuditLog.action).order_by(AuditLog.id)))
+        actions = list(
+            db.scalars(
+                select(AuditLog.action)
+                .where(AuditLog.result == "success", ~AuditLog.action.like("%view"))
+                .order_by(AuditLog.id)
+            )
+        )
         assert actions == [
             "patient.create",
             "allergy.create",

@@ -17,7 +17,8 @@ import {
 
 import { navigation } from './router'
 import { currentClinician, signOut } from './session'
-import { health } from './api/client'
+import { ElMessage } from 'element-plus'
+import { authentication, health } from './api/client'
 import { counts } from './api/demo-data'
 
 // Navigation entries carry an icon name; resolve them to components here so the
@@ -61,9 +62,16 @@ onMounted(async () => {
   }
 })
 
-function handleSignOut() {
-  signOut()
-  router.push({ name: 'login' })
+const accountBusy = ref(false)
+async function handleAccount() {
+  if (accountBusy.value) return
+  accountBusy.value = true
+  try {
+    await authentication.logout()
+    signOut()
+    router.push({ name: 'login' })
+  } catch (error) { ElMessage.error(error.message) }
+  finally { accountBusy.value = false }
 }
 </script>
 
@@ -102,8 +110,7 @@ function handleSignOut() {
       </nav>
 
       <p class="build-note">
-        Development build. Synthetic patient data only. Sign-in, role and department controls are
-        not enforced yet.
+        Development build. Some clinical screens still display synthetic demonstration data.
       </p>
     </aside>
 
@@ -121,7 +128,7 @@ function handleSignOut() {
             <el-button text circle :icon="Bell" aria-label="Notifications" />
           </el-badge>
 
-          <el-dropdown trigger="click" @command="handleSignOut">
+          <el-dropdown trigger="click" @command="handleAccount">
             <button type="button" class="clinician">
               <span class="avatar" aria-hidden="true">{{ clinician.initials }}</span>
               <span class="clinician-text">
@@ -133,7 +140,7 @@ function handleSignOut() {
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item disabled>{{ clinician.department }}</el-dropdown-item>
-                <el-dropdown-item command="sign-out" :icon="SwitchButton" divided>
+                <el-dropdown-item :disabled="accountBusy" command="sign-out" :icon="SwitchButton" divided>
                   Sign out
                 </el-dropdown-item>
               </el-dropdown-menu>

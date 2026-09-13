@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { isSignedIn } from '../session'
+import { isSignedIn, restoreSession } from '../session'
 
 // The sidebar in App.vue renders from this array, so a menu entry and its route
 // cannot drift apart. `icon` is resolved to a component in App.vue.
@@ -87,7 +87,8 @@ const router = createRouter({
 
 // Front-end guards shape the experience, they are not a security boundary. The
 // real check is the role and department filter on the API (tasks T08 and T09).
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
+  await restoreSession()
   if (!to.meta.public && !isSignedIn.value) {
     return { name: 'login', query: to.fullPath === '/' ? {} : { redirect: to.fullPath } }
   }

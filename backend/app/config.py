@@ -1,8 +1,19 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./doctor.db"
+    jwt_secret: str = Field(default="", repr=False)
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = Field(default=None, repr=False)
+    smtp_from: str = "noreply@example.test"
+    smtp_starttls: bool = True
+    smtp_timeout: float = Field(default=10, gt=0, le=30)
+    otp_daily_limit: int = Field(default=20, ge=1)
+    scheduler_enabled: bool = True
     redis_url: str | None = None
     # AES-256 key material for patient identifiers (T13). Any passphrase works,
     # because it is hashed to 32 bytes; set a real secret outside local development.

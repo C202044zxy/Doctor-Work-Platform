@@ -177,6 +177,12 @@ Goal: users can sign in, view patients, and have relevant actions logged.
 
 **Feature subtotal: 64 hours** — A: 18, B: 18, C: 15, D: 13. The original subtotal was 66 hours; its separate weekly table moved part of T17 into Week 1 without defining a consistent split. This revision keeps all of T17 in Sprint 2 pending rebalancing.
 
+Owner A implementation evidence for T01, T02, T05, and T10 is recorded in
+[Sprint 1 owner A hand-off](sprint1_owner_a.md). The MySQL schema, authentication
+backend, and scheduled grants are implemented; full login acceptance still depends
+on B's T06 SMTP delivery and C's T07 frontend integration. Estimates and ownership
+above are unchanged; E's customer sign-off remains pending.
+
 ### Sprint 2 — Complete patient records and EMR workflow (Days 6–10)
 
 Goal: demonstrate EMR creation, order validation, review, and archiving. Start backend foundations for Week 3 features.
@@ -325,3 +331,44 @@ Acceptance criteria are defined in M01 and checked by E. The final demonstration
 | Reconcile the stated nine modules with the listed module IDs | Avoid promising an unidentified or omitted module |
 
 The next planning step is to resolve these decisions and produce a daily allocation that stays within four hours per person. The task register above provides a consistent baseline for that work.
+
+## Approved scope addition: passkey login (2026-09-12)
+
+User-requested M1 extension to T05, with T06 SMTP delivery and T07 frontend session
+integration needed for initial enrollment. Passkeys use device user verification
+and issue the existing two-hour backend session; password plus email remains an
+alternative. No biometric images/templates are collected. API contract and an
+additive migration accompany the implementation.
+
+Capacity impact: additional implementation and device acceptance work beyond the
+18-hour owner A Sprint 1 baseline; no revised milestone or hour allocation has
+been agreed. Existing task ownership remains unchanged. Coordinate the delivered
+SMTP/session work with B (T06) and C (T07) to avoid duplicate implementation.
+Unresolved deployment inputs: production RP domain/origin and SMTP credentials.
+Physical-device acceptance and a self-service credential removal screen remain
+follow-up work; this increment supports registration and login.
+
+
+## Approved scope replacement: server face login (2026-09-13)
+
+Supersedes the passkey extension above for M1/T05/T07. Capture a photo in the
+browser and upload it with an existing username. The server matcher is a TODO
+that always returns true; account status/role checks and existing sessions remain.
+No enrollment or photo persistence in this increment. Password/email remains available.
+Passkey routes/UI are removed; historical database migration and records remain.
+
+Capacity impact: replaces passkey device acceptance with camera/upload acceptance;
+additional implementation beyond the original baseline, with no revised hours or
+milestones agreed. Ownership is unchanged. Unresolved: real matching algorithm,
+reference-image enrollment, liveness requirements, and deployment camera acceptance.
+
+### Email signup extension — 2026-09-13
+
+User-requested addition to M1 (T05/T06/T08): email-verified self-registration,
+frontend enrollment, Redis expiry and throttling, and local administrator
+activation. New accounts remain pending with junior role until staff identity and
+department are confirmed. This extends the baseline; existing task IDs, owners and
+estimates are unchanged. Capacity impact: additional implementation and review
+outside the baseline allocation; hours have not been estimated. Unresolved:
+assignment and scheduling of a future web approval interface under T08. The local
+activation command completes the current enrollment flow.

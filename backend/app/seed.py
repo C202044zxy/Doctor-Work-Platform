@@ -11,7 +11,7 @@ def seed():
         for name in ("General Medicine", "Cardiology"):
             if session.scalar(select(Department).where(Department.name == name)) is None:
                 session.add(Department(name=name))
-        for name in ("administrator", "doctor", "department_manager"):
+        for name in ("admin", "senior", "junior"):
             if session.scalar(select(Role).where(Role.name == name)) is None:
                 session.add(Role(name=name))
         session.commit()

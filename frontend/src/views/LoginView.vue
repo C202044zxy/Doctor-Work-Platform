@@ -3,10 +3,8 @@ import { computed, nextTick, onUnmounted, ref, useTemplateRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { signIn } from '../session'
 
-// Two-step sign-in: credentials, then a one-time code by email. Task T05 wires
-// this to the real endpoints, where the code lives in Redis with a five-minute
-// expiry and the success path returns a JWT. Until then the form validates
-// shape only and the code is accepted without a server check.
+import { authentication } from '../api/client'
+import { capturePhoto, openCamera, stopCamera } from '../face-camera'
 
 const CODE_TTL_SECONDS = 300 // five minutes, matching the planned Redis expiry
 
@@ -14,7 +12,33 @@ const route = useRoute()
 const router = useRouter()
 
 const step = ref('credentials')
+const registering = ref(false)
+const name = ref('')
 const email = ref('')
+const department = ref('')
+const notice = ref('')
+
+function toggleSignup() {
+  closeCamera()
+  useAnotherAccount()
+  registering.value = !registering.value
+  password.value = ''
+  notice.value = ''
+}
+
+async function requestSignup() {
+  return authentication.signup({
+    username: username.value.trim(), password: password.value,
+    name: name.value.trim(), email: email.value.trim(), department: department.value.trim(),
+  })
+}
+const username = ref('')
+const ticket = ref('')
+const cameraOpen = ref(false)
+const cameraReady = ref(false)
+const cameraVideo = useTemplateRef('cameraVideo')
+let cameraStream = null
+let disposed = false
 const password = ref('')
 const code = ref('')
 const error = ref('')
@@ -30,7 +54,39 @@ const countdown = computed(() => {
   return `${minutes}:${seconds}`
 })
 
-onUnmounted(() => clearInterval(timer))
+onUnmounted(() => {
+  disposed = true
+  clearInterval(timer)
+  closeCamera()
+})
+
+function closeCamera() {
+  stopCamera(cameraStream)
+  cameraStream = null
+  cameraOpen.value = false
+  cameraReady.value = false
+}
+
+async function startCamera() {
+  error.value = ''
+  if (!username.value.trim()) {
+    error.value = 'Enter your username.'
+    return
+  }
+  busy.value = true
+  try {
+    const stream = await openCamera()
+    if (disposed) { stopCamera(stream); return }
+    cameraStream = stream
+    cameraOpen.value = true
+    await nextTick()
+    cameraVideo.value.srcObject = stream
+    await cameraVideo.value.play()
+  } catch (err) {
+    closeCamera()
+    error.value = err.message
+  } finally { busy.value = false }
+}
 
 function startCountdown() {
   secondsLeft.value = CODE_TTL_SECONDS
@@ -45,9 +101,10 @@ function startCountdown() {
 }
 
 async function submitCredentials() {
+  closeCamera()
   error.value = ''
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.value.trim())) {
-    error.value = 'Enter a valid email address.'
+  if (!username.value.trim()) {
+    error.value = 'Enter your username.'
     return
   }
   if (!password.value) {
@@ -56,13 +113,24 @@ async function submitCredentials() {
   }
 
   busy.value = true
-  await new Promise((resolve) => setTimeout(resolve, 280)) // stand-in for the request
-  busy.value = false
+  try {
+    const result = registering.value
+      ? await requestSignup()
+      : await authentication.login(username.value.trim(), password.value)
+    ticket.value = result.ticket
+    step.value = 'code'
+    if (!registering.value) await authentication.sendCode(ticket.value)
+    startCountdown()
+    await nextTick()
+    codeInput.value?.focus()
+  } catch (err) { error.value = err.message }
+  finally { busy.value = false }
+}
 
-  step.value = 'code'
-  startCountdown()
-  await nextTick()
-  codeInput.value?.focus()
+function finish(data) {
+  signIn(data)
+  const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+  router.replace(redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : { name: 'dashboard' })
 }
 
 async function submitCode() {
@@ -71,14 +139,31 @@ async function submitCode() {
     error.value = 'Enter the 6-digit code from the email.'
     return
   }
-
   busy.value = true
-  await new Promise((resolve) => setTimeout(resolve, 280))
-  busy.value = false
+  try {
+    if (registering.value) {
+      await authentication.verifySignup(ticket.value, code.value.trim())
+      toggleSignup()
+      notice.value = 'Email verified. Your account is awaiting administrator activation. Contact your administrator before signing in.'
+    } else {
+      finish(await authentication.verifyCode(ticket.value, code.value.trim()))
+    }
+  }
+  catch (err) { error.value = err.message }
+  finally { busy.value = false }
+}
 
-  signIn()
-  const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
-  router.replace(redirect ?? { name: 'dashboard' })
+async function faceLogin() {
+  error.value = ''
+  busy.value = true
+  try {
+    const photo = capturePhoto(cameraVideo.value)
+    const data = await authentication.faceLogin(username.value.trim(), photo)
+    closeCamera()
+    finish(data)
+  }
+  catch (err) { error.value = err.message }
+  finally { busy.value = false }
 }
 
 function useAnotherAccount() {
@@ -89,10 +174,20 @@ function useAnotherAccount() {
   step.value = 'credentials'
 }
 
-function resend() {
+async function resend() {
   code.value = ''
   error.value = ''
-  startCountdown()
+  busy.value = true
+  try {
+    if (registering.value) {
+      const result = await requestSignup()
+      ticket.value = result.ticket
+    } else {
+      await authentication.sendCode(ticket.value)
+    }
+    startCountdown()
+  } catch (err) { error.value = err.message }
+  finally { busy.value = false }
 }
 </script>
 
@@ -143,26 +238,41 @@ function resend() {
     <section class="form-side">
       <form class="form" @submit.prevent="step === 'credentials' ? submitCredentials() : submitCode()">
         <h2 class="form-title">
-          {{ step === 'credentials' ? 'Sign in' : 'Check your email' }}
+          {{ step === 'credentials' ? (registering ? 'Create an account' : 'Sign in') : 'Check your email' }}
         </h2>
         <p class="form-lede">
           <template v-if="step === 'credentials'">
-            Use your hospital account.
+            {{ registering ? 'Verify your email, then ask an administrator to activate your staff account.' : 'Use your hospital account.' }}
           </template>
           <template v-else>
-            We sent a 6-digit code to <span class="data">{{ email.trim() }}</span>.
+            Enter the code sent to your account’s registered email address.
           </template>
         </p>
 
+        <p v-if="notice" role="status">{{ notice }}</p>
         <template v-if="step === 'credentials'">
+          <template v-if="registering">
+            <label class="field">
+              <span class="field-label">Full name</span>
+              <el-input v-model="name" size="large" autocomplete="name" maxlength="100" :disabled="busy" required />
+            </label>
+            <label class="field">
+              <span class="field-label">Email</span>
+              <el-input v-model="email" type="email" size="large" autocomplete="email" maxlength="254" :disabled="busy" required />
+            </label>
+            <label class="field">
+              <span class="field-label">Department</span>
+              <el-input v-model="department" size="large" placeholder="e.g. General Medicine" maxlength="100" :disabled="busy" required />
+            </label>
+          </template>
           <label class="field">
-            <span class="field-label">Email</span>
+            <span class="field-label">Username</span>
             <el-input
-              v-model="email"
-              type="email"
+              v-model="username"
+              type="text"
               size="large"
               autocomplete="username"
-              placeholder="chen@hospital.example"
+              placeholder="Your username"
               :disabled="busy"
             />
           </label>
@@ -173,7 +283,10 @@ function resend() {
               v-model="password"
               type="password"
               size="large"
-              autocomplete="current-password"
+              :autocomplete="registering ? 'new-password' : 'current-password'"
+              :minlength="registering ? 8 : 1"
+              maxlength="72"
+              required
               show-password
               placeholder="Your password"
               :disabled="busy"
@@ -222,7 +335,7 @@ function resend() {
           class="submit"
           :loading="busy"
         >
-          {{ step === 'credentials' ? 'Continue' : 'Verify and sign in' }}
+          {{ step === 'credentials' ? 'Continue' : (registering ? 'Verify email and create account' : 'Verify and sign in') }}
         </el-button>
 
         <p v-if="step === 'code'" class="back">
@@ -231,9 +344,23 @@ function resend() {
           </button>
         </p>
 
-        <p class="demo-note">
-          Development build. Sign-in is not connected to a service yet, so any 6-digit code is
-          accepted.
+        <p v-if="step === 'credentials'" class="back">
+          <button type="button" class="resend" :disabled="busy" @click="toggleSignup">
+            {{ registering ? 'Already have an account? Sign in' : 'Create an account with email' }}
+          </button>
+        </p>
+        <div v-if="step === 'credentials' && !registering" class="back">
+          <el-button v-if="!cameraOpen" :disabled="busy" @click="startCamera">Sign in with face</el-button>
+          <template v-else>
+            <video ref="cameraVideo" class="camera-preview" autoplay muted playsinline aria-label="Camera preview" @loadeddata="cameraReady = true" />
+            <p>Look at the camera, then capture your photo to sign in as {{ username }}.</p>
+            <el-button type="primary" :disabled="busy || !cameraReady" @click="faceLogin">Capture photo and sign in</el-button>
+            <el-button :disabled="busy" @click="closeCamera">Cancel</el-button>
+          </template>
+        </div>
+        <p v-if="!registering" class="demo-note">
+          Face sign-in sends a camera photo to the server. Photos are not saved.
+          Demo mode: face matching always succeeds for an existing active username.
         </p>
       </form>
     </section>
@@ -241,6 +368,12 @@ function resend() {
 </template>
 
 <style scoped>
+.camera-preview {
+  width: 100%;
+  border-radius: var(--radius);
+  transform: scaleX(-1);
+}
+
 .login {
   display: grid;
   grid-template-columns: 1fr 1fr;

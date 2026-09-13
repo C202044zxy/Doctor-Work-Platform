@@ -1,6 +1,16 @@
 from datetime import UTC, date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    LargeBinary,
+    String,
+    Text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -23,6 +33,14 @@ class Role(Base):
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True)
+    name: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(20), default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    role: Mapped[Role] = relationship(lazy="joined")
+    department: Mapped[Department] = relationship(lazy="joined")
     email: Mapped[str] = mapped_column(String(254), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"))
@@ -74,9 +92,43 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
     id: Mapped[int] = mapped_column(primary_key=True)
     action: Mapped[str] = mapped_column(String(50))
-    patient_id: Mapped[int] = mapped_column()  # Preserve reference after patient deletion.
+    patient_id: Mapped[int | None] = mapped_column()  # Preserve deleted references.
+    user_id: Mapped[int | None] = mapped_column()
+    ip: Mapped[str | None] = mapped_column(String(45))
+    method: Mapped[str | None] = mapped_column(String(10))
+    path: Mapped[str | None] = mapped_column(String(500))
+    object_type: Mapped[str | None] = mapped_column(String(50))
+    object_id: Mapped[str | None] = mapped_column(String(100))
+    result: Mapped[str | None] = mapped_column(String(20))
+    status_code: Mapped[int | None] = mapped_column()
     # T14 scenario S2 reads the deleted allergen's name back out of this column.
     detail: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class TempGrant(Base):
+    __tablename__ = "temp_grant"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    grantee_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    reason: Mapped[str] = mapped_column(String(500))
+    granted_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    expire_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    is_valid: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    grantee: Mapped[User] = relationship(foreign_keys=[grantee_id], lazy="joined")
+    patient: Mapped[Patient] = relationship(lazy="joined")
+
+
+class Passkey(Base):
+    __tablename__ = "passkeys"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    credential_id: Mapped[bytes] = mapped_column(LargeBinary(1024))
+    credential_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    public_key: Mapped[bytes] = mapped_column(LargeBinary(2048))
+    sign_count: Mapped[int] = mapped_column(BigInteger)
