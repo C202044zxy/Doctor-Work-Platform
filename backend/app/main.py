@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 from typing import Annotated
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from redis import Redis
@@ -11,12 +11,16 @@ from redis.exceptions import RedisError
 from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import auth, auth_schemas, crypto, face_login, grants, signup
 from app.allergies import allergen_name, dictionary, get_patient_allergens
+from app.audit import audit_request, mark_audit
 from app.config import Settings
 from app.database import make_engine, session_factory
-from app.models import Allergy, AuditLog, Department, Patient
+from app.dependencies import Pagination
+from app.models import Allergy, Department, Patient
+from app.patients import patient_scope, visible_patient
 from app.schemas import (
     AllergenDictionaryResponse,
     AllergenRead,
@@ -40,13 +44,16 @@ from app.schemas import (
     join_tags,
     split_tags,
 )
+from app.security import ProtectedFastAPI, allows
 
 PATIENT_NO_RETRIES = 5
 
 
 def get_session(request: Request, user: auth.CurrentUser):
+    request.state.identity = user
     with request.app.state.sessions() as session:
         session.info["user"] = user
+        session.info["request"] = request
         yield session
 
 
@@ -137,17 +144,7 @@ def _next_patient_no(db: Session) -> str:
 
 
 def _live_patient(db: Session, patient_no: str) -> Patient:
-    """A patient that has not been soft-deleted, or 404."""
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.patient_no == patient_no,
-            Patient.deleted_at.is_(None),
-            grants.patient_scope(db.info["user"]),
-        )
-    )
-    if patient is None:
-        raise HTTPException(404, "Patient not found")
-    return patient
+    return visible_patient(db, db.info["user"], patient_no)
 
 
 def _department_id(db: Session, name: str) -> int:
@@ -155,13 +152,17 @@ def _department_id(db: Session, name: str) -> int:
     if department is None:
         raise HTTPException(404, f"Department not found: {name}")
     user = db.info["user"]
-    if user.role.name != "admin" and department.id != user.department_id:
+    if not allows(user, "data.all") and department.id != user.department_id:
         raise HTTPException(403, "Cannot write patients in another department")
     return department.id
 
 
 def _audit(db: Session, action: str, patient_id: int, detail: dict | None = None) -> None:
-    db.add(AuditLog(action=action, patient_id=patient_id, detail=detail))
+    request = db.info["request"]
+    patient = db.get(Patient, patient_id)
+    kind = action.split(".")[0]
+    oid = str(detail["id"]) if detail and "id" in detail else patient.patient_no
+    mark_audit(request, action, kind, oid, patient_id=patient_id, detail=detail)
 
 
 def create_app(settings: Settings | None = None):
@@ -198,7 +199,8 @@ def create_app(settings: Settings | None = None):
                 cache.close()
             engine.dispose()
 
-    app = FastAPI(title="Doctor Work Platform", version="0.1.0", lifespan=lifespan)
+    app = ProtectedFastAPI(title="Doctor Work Platform", version="0.1.0", lifespan=lifespan)
+    app.middleware("http")(audit_request)
     app.state.settings = settings
     app.include_router(auth.router)
     app.include_router(signup.router)
@@ -208,7 +210,7 @@ def create_app(settings: Settings | None = None):
     app.state.engine = engine
     app.state.cache = cache
 
-    @app.exception_handler(HTTPException)
+    @app.exception_handler(StarletteHTTPException)
     async def http_error(request, exc):
         return JSONResponse(
             status_code=exc.status_code,
@@ -255,9 +257,15 @@ def create_app(settings: Settings | None = None):
             content={"code": 503, "message": "Database unavailable", "data": None},
         )
 
+    @app.exception_handler(Exception)
+    async def unexpected_error(request, exc):
+        return JSONResponse(
+            status_code=500, content={"code": 500, "message": "Internal server error", "data": None}
+        )
+
     @app.get("/api/health/live")
     def live():
-        return {"status": "ok"}
+        return {**_ok({"status": "ok"}), "status": "ok"}
 
     @app.get("/api/health/ready")
     def ready():
@@ -277,7 +285,13 @@ def create_app(settings: Settings | None = None):
         available = "unavailable" not in checks.values()
         return JSONResponse(
             status_code=200 if available else 503,
-            content={"status": "ok" if available else "unavailable", "checks": checks},
+            content={
+                "code": 0 if available else 503,
+                "message": "ok" if available else "Dependencies unavailable",
+                "data": checks,
+                "status": "ok" if available else "unavailable",
+                "checks": checks,
+            },
         )
 
     @app.get(
@@ -311,6 +325,7 @@ def create_app(settings: Settings | None = None):
     )
     def patients(
         db: DB,
+        pagination: Annotated[Pagination, Depends()],
         name: str = Query("", max_length=100, description="姓名模糊匹配 / Fuzzy name match"),
         patient_no: str = Query(
             "", max_length=20, description="患者编号精确匹配 / Exact patient number"
@@ -332,12 +347,11 @@ def create_app(settings: Settings | None = None):
             date | None,
             Query(description="入院日期止（含）/ Admission date to, inclusive"),
         ] = None,
-        page: int = Query(1, ge=1, description="页码，从 1 开始 / Page number, starting at 1"),
-        size: int = Query(20, ge=1, le=100, description="每页条数 / Page size"),
     ):
+        page, size = pagination.page, pagination.size
         if admitted_from and admitted_to and admitted_from > admitted_to:
             raise HTTPException(422, "admitted_from must not be later than admitted_to")
-        conditions = [Patient.deleted_at.is_(None), grants.patient_scope(db.info["user"])]
+        conditions = [Patient.deleted_at.is_(None), patient_scope(db.info["user"])]
         if name:
             conditions.append(Patient.name.contains(name, autoescape=True))
         if patient_no:
@@ -430,6 +444,7 @@ def create_app(settings: Settings | None = None):
         responses={404: {"model": ErrorResponse}},
     )
     def get_patient(patient_no: str, db: DB):
+        mark_audit(db.info["request"], "patient.view", "patient", patient_no)
         patient = _live_patient(db, patient_no)
         allergies = get_patient_allergens(db, patient_no)
         return _ok(_detail(patient, allergies, *_severity_summary(allergies)))
@@ -517,6 +532,7 @@ def create_app(settings: Settings | None = None):
         responses={404: {"model": ErrorResponse}},
     )
     def patient_allergies(patient_no: str, db: DB):
+        mark_audit(db.info["request"], "patient.allergies.view", "patient", patient_no)
         _live_patient(db, patient_no)
         return _ok(
             [
