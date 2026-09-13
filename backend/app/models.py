@@ -92,7 +92,15 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
     id: Mapped[int] = mapped_column(primary_key=True)
     action: Mapped[str] = mapped_column(String(50))
-    patient_id: Mapped[int] = mapped_column()  # Preserve reference after patient deletion.
+    patient_id: Mapped[int | None] = mapped_column()  # Preserve deleted references.
+    user_id: Mapped[int | None] = mapped_column()
+    ip: Mapped[str | None] = mapped_column(String(45))
+    method: Mapped[str | None] = mapped_column(String(10))
+    path: Mapped[str | None] = mapped_column(String(500))
+    object_type: Mapped[str | None] = mapped_column(String(50))
+    object_id: Mapped[str | None] = mapped_column(String(100))
+    result: Mapped[str | None] = mapped_column(String(20))
+    status_code: Mapped[int | None] = mapped_column()
     # T14 scenario S2 reads the deleted allergen's name back out of this column.
     detail: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(

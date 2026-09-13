@@ -15,10 +15,16 @@ from redis.exceptions import WatchError
 from sqlalchemy import select
 
 from app import auth_schemas as contract
+from app.dependencies import get_redis
 from app.models import User
 
 router = APIRouter()
 bearer = HTTPBearer(auto_error=False)
+
+
+def require_secret(secret):
+    if len(secret) < 32:
+        raise HTTPException(503, "Configure JWT_SECRET with at least 32 characters")
 
 
 def ok(data):
@@ -43,10 +49,7 @@ DUMMY_HASH = hash_password(secrets.token_urlsafe(32))
 
 
 def cache_for(request: Request):
-    cache = request.app.state.cache
-    if cache is None:
-        raise HTTPException(503, "Authentication requires Redis")
-    return cache
+    return get_redis(request)
 
 
 def ticket_key(ticket: str) -> str:
@@ -58,6 +61,7 @@ def code_key(user_id: int) -> str:
 
 
 def code_digest(secret: str, ticket: str, code: str) -> str:
+    require_secret(secret)
     return hmac.new(secret.encode(), f"{ticket}:{code}".encode(), hashlib.sha256).hexdigest()
 
 
@@ -67,10 +71,21 @@ def store_verification_code(cache, secret: str, ticket: str, code: str) -> None:
     Codes are bound to the password-verified ticket and expire after 300 seconds.
     The sender owns delivery, resend throttling and daily limits.
     """
-    user_id = cache.get(ticket_key(ticket))
-    if user_id is None:
-        raise HTTPException(401, "Login ticket has expired")
-    cache.set(code_key(int(user_id)), code_digest(secret, ticket, code), ex=300)
+    key = ticket_key(ticket)
+    try:
+        with cache.pipeline() as pipe:
+            pipe.watch(key)
+            user_id = pipe.get(key)
+            if user_id is None:
+                raise HTTPException(401, "Login ticket has expired")
+            digest = code_digest(secret, ticket, code)
+            pipe.multi()
+            pipe.set(code_key(int(user_id)), digest, ex=300)
+            pipe.expire(key, 300)
+            pipe.delete(key + ":attempts")
+            pipe.execute()
+    except WatchError:
+        raise HTTPException(401, "Login ticket changed during delivery; retry login") from None
 
 
 def user_data(user):
@@ -84,6 +99,7 @@ def user_data(user):
 
 
 def issue_token(user, secret: str):
+    require_secret(secret)
     now = datetime.now(UTC)
     return jwt.encode(
         {
@@ -104,6 +120,7 @@ def current_user(
 ):
     if credentials is None:
         raise HTTPException(401, "Missing access token")
+    require_secret(request.app.state.settings.jwt_secret)
     try:
         claims = jwt.decode(
             credentials.credentials,
@@ -125,6 +142,7 @@ def current_user(
             raise HTTPException(401, "User is unavailable or disabled")
         if user.role.name not in {"admin", "senior", "junior"}:
             raise HTTPException(403, "Unknown role")
+        request.state.identity = user
         request.state.claims = claims
         return user
 
@@ -151,6 +169,7 @@ class VerifyCodeRequest(contract.VerifyCodeRequest):
 
 @router.post("/api/auth/login", response_model=contract.LoginResponse)
 def login(body: LoginRequest, request: Request):
+    require_secret(request.app.state.settings.jwt_secret)
     cache = cache_for(request)
     failures = "auth:failures:" + hashlib.sha256(body.username.encode()).hexdigest()
     if int(cache.get(failures) or 0) >= 5:
@@ -167,6 +186,7 @@ def login(body: LoginRequest, request: Request):
                 if count >= 5
                 else "Invalid username or password",
             )
+        request.state.identity = user
         cache.delete(failures)
         ticket = secrets.token_urlsafe(32)
         cache.set(ticket_key(ticket), user.id, ex=300)
@@ -207,6 +227,7 @@ def verify_code(body: VerifyCodeRequest, request: Request):
                     raise HTTPException(401, "User is unavailable or disabled")
                 token = issue_token(user, request.app.state.settings.jwt_secret)
                 data = user_data(user)
+                request.state.identity = user
             pipe.multi()
             pipe.delete(key, ck, attempts)
             pipe.execute()
@@ -242,14 +263,10 @@ def send_code(body: contract.SendCodeRequest, request: Request):
         if user is None or user.status != "active":
             raise HTTPException(401, "User is unavailable or disabled")
         address = user.email
-    cooldown = f"auth:send:cooldown:{int(uid)}"
-    if not cache.set(cooldown, "1", nx=True, ex=60):
-        raise HTTPException(429, f"Please retry in about {max(1, cache.ttl(cooldown))} seconds")
-    daily = f"auth:send:daily:{int(uid)}:{datetime.now(UTC).date()}"
-    with cache.pipeline() as pipe:
-        count, _ = pipe.incr(daily).expire(daily, 86400).execute()
-    if count > 20:
-        raise HTTPException(429, "Daily email limit reached; retry tomorrow")
+        request.state.identity = user
+    from app.otp import reserve_send
+
+    reserve_send(cache, int(uid), settings.otp_daily_limit)
     code = f"{secrets.randbelow(1000000):06d}"
     deliver_code(settings, address, code)
     store_verification_code(cache, settings.jwt_secret, body.ticket, code)
@@ -268,9 +285,13 @@ def deliver_code(settings, address, code):
     message.set_content(f"Your verification code is {code}. It expires in 5 minutes.")
     try:
         implicit_tls = settings.smtp_port == 465
+        if not implicit_tls and not settings.smtp_starttls:
+            raise HTTPException(503, "SMTP requires TLS")
         transport = smtplib.SMTP_SSL if implicit_tls else smtplib.SMTP
         options = {"context": ssl.create_default_context()} if implicit_tls else {}
-        with transport(settings.smtp_host, settings.smtp_port, timeout=10, **options) as smtp:
+        with transport(
+            settings.smtp_host, settings.smtp_port, timeout=settings.smtp_timeout, **options
+        ) as smtp:
             if settings.smtp_starttls and not implicit_tls:
                 smtp.starttls(context=ssl.create_default_context())
             if settings.smtp_username:
