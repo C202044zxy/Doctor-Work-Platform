@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Download, Search } from '@element-plus/icons-vue'
 import { auditActions, auditRows } from '../api/demo-data'
+import { simulatedActions, simulatedRows } from '../api/mock-audit'
 
 // M8. An append-only trail: every write and every sensitive read, recorded
 // with who did it, when, from where, on what, and how it turned out.
@@ -10,17 +11,29 @@ import { auditActions, auditRows } from '../api/demo-data'
 // The three filters and the CSV export below really work against the mock
 // rows. Task T11 replaces the array with the query endpoint; the column set
 // here is what that endpoint has to return.
+//
+// Rows from the simulated capabilities are listed alongside the fabricated ones,
+// newest first. That is not a display nicety: §1.1 铁律 2 requires every
+// simulated capability to leave a record, and §3.3.1 keeps the SMS code out of
+// the send response on purpose — this page is the only place it can be read
+// (§3.5 判据②, §6.2 step 4). Both sources are mock, and both go when T11 lands.
 
-const action = ref(auditActions[0])
+const ALL_ACTIONS = 'All actions'
+
+const action = ref(ALL_ACTIONS)
 const actor = ref('')
 const range = ref(null)
+
+const actionOptions = computed(() => [...auditActions, ...simulatedActions.value])
+
+const allRows = computed(() => [...simulatedRows.value, ...auditRows])
 
 const filtered = computed(() => {
   const needle = actor.value.trim().toLowerCase()
   const [from, to] = range.value ?? []
 
-  return auditRows.filter((row) => {
-    if (action.value !== auditActions[0] && row.action !== action.value) return false
+  return allRows.value.filter((row) => {
+    if (action.value !== ALL_ACTIONS && row.action !== action.value) return false
     if (needle && !row.actor.toLowerCase().includes(needle)) return false
     if (from && row.iso < from) return false
     // The picker gives a day; compare against the end of that day.
@@ -30,11 +43,11 @@ const filtered = computed(() => {
 })
 
 const isFiltered = computed(
-  () => action.value !== auditActions[0] || actor.value.trim() !== '' || range.value !== null,
+  () => action.value !== ALL_ACTIONS || actor.value.trim() !== '' || range.value !== null,
 )
 
 function reset() {
-  action.value = auditActions[0]
+  action.value = ALL_ACTIONS
   actor.value = ''
   range.value = null
 }
@@ -87,7 +100,7 @@ function exportCsv() {
       <div class="toolbar">
         <div class="filters">
           <el-select v-model="action" class="filter-action" aria-label="Action">
-            <el-option v-for="item in auditActions" :key="item" :label="item" :value="item" />
+            <el-option v-for="item in actionOptions" :key="item" :label="item" :value="item" />
           </el-select>
 
           <el-input
@@ -111,7 +124,7 @@ function exportCsv() {
         <div class="toolbar-right">
           <span class="result-count">
             <span class="data">{{ filtered.length }}</span>
-            of <span class="data">{{ auditRows.length }}</span> entries
+            of <span class="data">{{ allRows.length }}</span> entries
           </span>
           <el-button v-if="isFiltered" link @click="reset">Clear filters</el-button>
         </div>

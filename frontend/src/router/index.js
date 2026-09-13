@@ -1,8 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { isSignedIn, restoreSession } from '../session'
+import { ElMessage } from 'element-plus'
+import { currentTitle, isSignedIn, restoreSession } from '../session'
+import { setSessionLostHandler } from '../api/client'
+import { canOpen, MODULE_ROLES } from '../access'
 
 // The sidebar in App.vue renders from this array, so a menu entry and its route
 // cannot drift apart. `icon` is resolved to a component in App.vue.
+//
+// `roles` is what T07 签收标准 3 asks for: a `junior` must not see 病历审阅 or
+// 审计日志. Its absence means everyone signed in can see the entry. The route's
+// `meta` below points at the same MODULE_ROLES entry — the menu is what the
+// reader notices, the route guard is what actually closes the screen, and T12's
+// S2 explicitly refuses a build that only does the first.
 export const navigation = [
   { name: 'dashboard', label: 'Dashboard', icon: 'Odometer' },
   { name: 'patients', label: 'Patients', icon: 'User' },
@@ -10,8 +19,8 @@ export const navigation = [
   { name: 'consultations', label: 'Consultations', icon: 'ChatDotRound' },
   { name: 'remote-consultation', label: 'Remote Consultation', icon: 'VideoCamera' },
   { name: 'health', label: 'Health Management', icon: 'TrendCharts' },
-  { name: 'review', label: 'Review Queue', icon: 'Checked' },
-  { name: 'audit', label: 'Audit Log', icon: 'Tickets' },
+  { name: 'review', label: 'Review Queue', icon: 'Checked', roles: MODULE_ROLES.review },
+  { name: 'audit', label: 'Audit Log', icon: 'Tickets', roles: MODULE_ROLES.audit },
 ]
 
 const routes = [
@@ -66,13 +75,34 @@ const routes = [
     path: '/review',
     name: 'review',
     component: () => import('../views/ReviewQueueView.vue'),
-    meta: { title: 'Review Queue' },
+    meta: { title: 'Review Queue', roles: MODULE_ROLES.review },
   },
   {
     path: '/audit',
     name: 'audit',
     component: () => import('../views/AuditLogView.vue'),
-    meta: { title: 'Audit Log' },
+    meta: { title: 'Audit Log', roles: MODULE_ROLES.audit },
+  },
+
+  // T07 签收标准 3 / 场景 S1. Not `public`: nobody reaches this by being signed
+  // out, they reach it by being signed in without the permission. No `roles`
+  // either, or a junior would be refused the page explaining their refusal.
+  {
+    path: '/403',
+    name: 'forbidden',
+    component: () => import('../views/ForbiddenView.vue'),
+    meta: { title: 'No access' },
+  },
+
+  // T42 §4.3.3【录入】. Signed in by definition — the image belongs to the caller's
+  // own record and the endpoint identifies them from the token. No `public`, and
+  // deliberately no sidebar entry: enrolment is a one-off, reached from the
+  // account menu, not a daily workspace.
+  {
+    path: '/face/enroll',
+    name: 'face-enroll',
+    component: () => import('../views/FaceEnrollView.vue'),
+    meta: { title: 'Face enrolment' },
   },
 
   // Unknown paths fall back to the dashboard rather than a dead end.
@@ -85,6 +115,21 @@ const router = createRouter({
   scrollBehavior: () => ({ top: 0 }),
 })
 
+// A session that ends mid-use has to take the reader somewhere that explains it.
+// Deferred by a tick because this fires from inside `restoreSession()`, while the
+// guard for that navigation is still deciding — redirecting first would race the
+// guard's own redirect to /login and can leave the message with nowhere to land.
+setSessionLostHandler(({ kind, message }) => {
+  setTimeout(() => {
+    if (kind === 'forbidden') {
+      if (router.currentRoute.value.name !== 'forbidden') router.replace({ name: 'forbidden' })
+      return
+    }
+    ElMessage.warning(message)
+    if (router.currentRoute.value.name !== 'login') router.replace({ name: 'login' })
+  }, 0)
+})
+
 // Front-end guards shape the experience, they are not a security boundary. The
 // real check is the role and department filter on the API (tasks T08 and T09).
 router.beforeEach(async (to) => {
@@ -94,6 +139,12 @@ router.beforeEach(async (to) => {
   }
   if (to.name === 'login' && isSignedIn.value) {
     return { name: 'dashboard' }
+  }
+  // T07 签收标准 3: signed in but not allowed here goes to the 403 page — not back
+  // to the sign-in form, and not a blank screen. `from` lets that page name the
+  // screen that was refused instead of apologising vaguely.
+  if (!canOpen(to.meta.roles, currentTitle.value)) {
+    return { name: 'forbidden', query: { from: to.fullPath } }
   }
 })
 

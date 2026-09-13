@@ -3,13 +3,48 @@ import { computed, nextTick, onUnmounted, ref, useTemplateRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { signIn } from '../session'
 
-import { authentication } from '../api/client'
-import { capturePhoto, openCamera, stopCamera } from '../face-camera'
+import { USE_MOCK_AUTH, authentication } from '../api/client'
+import CameraCapture from '../components/CameraCapture.vue'
+import MockBadge from '../components/MockBadge.vue'
+import SmsCodeInput from '../components/SmsCodeInput.vue'
 
 const CODE_TTL_SECONDS = 300 // five minutes, matching the planned Redis expiry
 
 const route = useRoute()
 const router = useRouter()
+
+// T41 §3.4: the sign-in page carries two methods. `password` is the T05/T06 email
+// second factor; `sms` is the T41 code, which needs no password at all.
+const method = ref('password')
+const methods = [
+  { value: 'password', label: 'Password' },
+  { value: 'sms', label: 'SMS code' },
+]
+
+const heading = computed(() => {
+  if (method.value === 'sms') return 'Sign in by SMS'
+  if (step.value !== 'credentials') return 'Check your email'
+  return registering.value ? 'Create an account' : 'Sign in'
+})
+
+function chooseMethod(value) {
+  method.value = value
+  error.value = ''
+  notice.value = ''
+  useAnotherAccount()
+}
+
+// The second factor is one thing, not a menu: the email code. The password step
+// is what decides whether a factor is needed at all, so a second factor that is
+// itself a way in without a password would make the password decorative.
+//
+// SMS and face are therefore *entry points* alongside password, not alternatives
+// to the email code: §3.4's top-level 「短信验证码登录」 tab, and §4.3.3's own
+// 【校验】 flow (登录页 →「人脸识别」→ 用户名 → 拍照). Both are simulated.
+function submit() {
+  if (method.value !== 'password') return
+  return step.value === 'credentials' ? submitCredentials() : submitCode()
+}
 
 const step = ref('credentials')
 const registering = ref(false)
@@ -19,7 +54,6 @@ const department = ref('')
 const notice = ref('')
 
 function toggleSignup() {
-  closeCamera()
   useAnotherAccount()
   registering.value = !registering.value
   password.value = ''
@@ -34,17 +68,14 @@ async function requestSignup() {
 }
 const username = ref('')
 const ticket = ref('')
-const cameraOpen = ref(false)
-const cameraReady = ref(false)
-const cameraVideo = useTemplateRef('cameraVideo')
-let cameraStream = null
-let disposed = false
 const password = ref('')
 const code = ref('')
 const error = ref('')
 const busy = ref(false)
 const secondsLeft = ref(0)
 const codeInput = useTemplateRef('codeInput')
+const photo = ref(null)
+const faceBusy = ref(false)
 
 let timer = null
 
@@ -54,39 +85,7 @@ const countdown = computed(() => {
   return `${minutes}:${seconds}`
 })
 
-onUnmounted(() => {
-  disposed = true
-  clearInterval(timer)
-  closeCamera()
-})
-
-function closeCamera() {
-  stopCamera(cameraStream)
-  cameraStream = null
-  cameraOpen.value = false
-  cameraReady.value = false
-}
-
-async function startCamera() {
-  error.value = ''
-  if (!username.value.trim()) {
-    error.value = 'Enter your username.'
-    return
-  }
-  busy.value = true
-  try {
-    const stream = await openCamera()
-    if (disposed) { stopCamera(stream); return }
-    cameraStream = stream
-    cameraOpen.value = true
-    await nextTick()
-    cameraVideo.value.srcObject = stream
-    await cameraVideo.value.play()
-  } catch (err) {
-    closeCamera()
-    error.value = err.message
-  } finally { busy.value = false }
-}
+onUnmounted(() => clearInterval(timer))
 
 function startCountdown() {
   secondsLeft.value = CODE_TTL_SECONDS
@@ -101,7 +100,6 @@ function startCountdown() {
 }
 
 async function submitCredentials() {
-  closeCamera()
   error.value = ''
   if (!username.value.trim()) {
     error.value = 'Enter your username.'
@@ -153,17 +151,56 @@ async function submitCode() {
   finally { busy.value = false }
 }
 
-async function faceLogin() {
-  error.value = ''
-  busy.value = true
-  try {
-    const photo = capturePhoto(cameraVideo.value)
-    const data = await authentication.faceLogin(username.value.trim(), photo)
-    closeCamera()
+// T41 §3.4 — the SMS panel reports its own errors, so the only thing left here is
+// what to do with a success, and there is only one scene reachable from this page:
+// the passwordless one.
+function handleSmsSuccess(data) {
+  notice.value = ''
+  if (data?.access_token) {
     finish(data)
+    return
   }
-  catch (err) { error.value = err.message }
-  finally { busy.value = false }
+  // No session came back. In the mock that is by design — it cannot mint a JWT,
+  // and pretending otherwise would leave the user inside a shell where every
+  // request 401s (§1.1 rule 3). Once the endpoints land, a response that is not a
+  // token means the shape changed, and saying so beats a silent loop.
+  notice.value = 'Simulated sign-in reached the end of the flow. No session was issued: the real endpoint is still being built.'
+}
+
+function handleCaptured(blob) {
+  photo.value = blob
+  error.value = ''
+}
+
+// T42 §4.3.1 ② — username plus photo. Replaces the T05 demo route
+// (`/auth/face/login`), whose matcher returned True for every photo and so could
+// never satisfy "a different face is refused".
+//
+// This is a way in without a password, so it answers to the credentials step and
+// nothing else. No `scene` argument: §8 item 4 (B+A+C) is what settles whether an
+// `mfa` variant of this endpoint exists, and sending one here would settle it by
+// accident.
+async function submitFace() {
+  error.value = ''
+  if (!username.value.trim()) {
+    error.value = 'Enter your username first.'
+    return
+  }
+  if (!photo.value) {
+    error.value = 'Take a photo first.'
+    return
+  }
+  faceBusy.value = true
+  try {
+    const data = await authentication.faceVerify(username.value.trim(), photo.value)
+    notice.value = ''
+    if (data?.simulated) {
+      notice.value = 'Simulated sign-in reached the end of the flow. No session was issued: the real endpoint is still being built.'
+      return
+    }
+    finish(data)
+  } catch (err) { error.value = err.message }
+  finally { faceBusy.value = false }
 }
 
 function useAnotherAccount() {
@@ -171,6 +208,9 @@ function useAnotherAccount() {
   secondsLeft.value = 0
   code.value = ''
   error.value = ''
+  // A photo belongs to one attempt at one account; leaving the credentials step
+  // must not leave it behind as "already captured".
+  photo.value = null
   step.value = 'credentials'
 }
 
@@ -236,12 +276,18 @@ async function resend() {
     </section>
 
     <section class="form-side">
-      <form class="form" @submit.prevent="step === 'credentials' ? submitCredentials() : submitCode()">
-        <h2 class="form-title">
-          {{ step === 'credentials' ? (registering ? 'Create an account' : 'Sign in') : 'Check your email' }}
-        </h2>
+      <form class="form" @submit.prevent="submit">
+        <div class="form-head">
+          <h2 class="form-title">
+            {{ heading }}
+          </h2>
+          <MockBadge />
+        </div>
         <p class="form-lede">
-          <template v-if="step === 'credentials'">
+          <template v-if="method === 'sms'">
+            Sign in with a one-time code sent to your registered mobile number. No password.
+          </template>
+          <template v-else-if="step === 'credentials'">
             {{ registering ? 'Verify your email, then ask an administrator to activate your staff account.' : 'Use your hospital account.' }}
           </template>
           <template v-else>
@@ -249,8 +295,31 @@ async function resend() {
           </template>
         </p>
 
-        <p v-if="notice" role="status">{{ notice }}</p>
-        <template v-if="step === 'credentials'">
+        <div v-if="step === 'credentials' && !registering" class="methods" role="tablist">
+          <button
+            v-for="option in methods"
+            :key="option.value"
+            type="button"
+            role="tab"
+            class="method"
+            :class="{ active: method === option.value }"
+            :aria-selected="method === option.value"
+            :disabled="busy"
+            @click="chooseMethod(option.value)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+
+        <p v-if="notice" class="form-notice" role="status">{{ notice }}</p>
+
+        <SmsCodeInput
+          v-if="method === 'sms'"
+          scene="login"
+          @success="handleSmsSuccess"
+        />
+
+        <template v-else-if="step === 'credentials'">
           <template v-if="registering">
             <label class="field">
               <span class="field-label">Full name</span>
@@ -326,41 +395,51 @@ async function resend() {
           </p>
         </template>
 
-        <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+        <template v-if="method === 'password'">
+          <p v-if="error" class="form-error" role="alert">{{ error }}</p>
 
-        <el-button
-          type="primary"
-          size="large"
-          native-type="submit"
-          class="submit"
-          :loading="busy"
-        >
-          {{ step === 'credentials' ? 'Continue' : (registering ? 'Verify email and create account' : 'Verify and sign in') }}
-        </el-button>
+          <el-button
+            type="primary"
+            size="large"
+            native-type="submit"
+            class="submit"
+            :loading="busy"
+          >
+            {{ step === 'credentials' ? 'Continue' : (registering ? 'Verify email and create account' : 'Verify and sign in') }}
+          </el-button>
 
-        <p v-if="step === 'code'" class="back">
-          <button type="button" class="resend" :disabled="busy" @click="useAnotherAccount">
-            Use a different account
-          </button>
-        </p>
+          <p v-if="step === 'code'" class="back">
+            <button type="button" class="resend" :disabled="busy" @click="useAnotherAccount">
+              Use a different account
+            </button>
+          </p>
 
-        <p v-if="step === 'credentials'" class="back">
-          <button type="button" class="resend" :disabled="busy" @click="toggleSignup">
-            {{ registering ? 'Already have an account? Sign in' : 'Create an account with email' }}
-          </button>
-        </p>
-        <div v-if="step === 'credentials' && !registering" class="back">
-          <el-button v-if="!cameraOpen" :disabled="busy" @click="startCamera">Sign in with face</el-button>
-          <template v-else>
-            <video ref="cameraVideo" class="camera-preview" autoplay muted playsinline aria-label="Camera preview" @loadeddata="cameraReady = true" />
-            <p>Look at the camera, then capture your photo to sign in as {{ username }}.</p>
-            <el-button type="primary" :disabled="busy || !cameraReady" @click="faceLogin">Capture photo and sign in</el-button>
-            <el-button :disabled="busy" @click="closeCamera">Cancel</el-button>
-          </template>
-        </div>
-        <p v-if="!registering" class="demo-note">
-          Face sign-in sends a camera photo to the server. Photos are not saved.
-          Demo mode: face matching always succeeds for an existing active username.
+          <p v-if="step === 'credentials'" class="back">
+            <button type="button" class="resend" :disabled="busy" @click="toggleSignup">
+              {{ registering ? 'Already have an account? Sign in' : 'Create an account with email' }}
+            </button>
+          </p>
+
+          <div v-if="step === 'credentials' && !registering" class="face-entry">
+            <p class="face-lede">Or sign in with your face — no password.</p>
+            <CameraCapture purpose="verify" :busy="faceBusy" @captured="handleCaptured" />
+            <el-button
+              v-if="photo"
+              type="primary"
+              class="submit"
+              :loading="faceBusy"
+              :disabled="faceBusy || !username.trim()"
+              @click="submitFace"
+            >
+              Sign in as {{ username.trim() }}
+            </el-button>
+          </div>
+        </template>
+        <p v-if="method === 'password' && !registering" class="demo-note">
+          SMS and face recognition are simulated: the pages, the countdown, the
+          lockout and the photo capture are real, but nothing leaves for a real
+          gateway or provider. Sign-in still needs the endpoints being built for
+          T41 and T42.
         </p>
       </form>
     </section>
@@ -368,12 +447,6 @@ async function resend() {
 </template>
 
 <style scoped>
-.camera-preview {
-  width: 100%;
-  border-radius: var(--radius);
-  transform: scaleX(-1);
-}
-
 .login {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -473,6 +546,69 @@ async function resend() {
 .form-title {
   font-size: 22px;
   letter-spacing: -0.015em;
+}
+
+.form-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.methods {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  margin-bottom: 22px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+}
+
+.method {
+  flex: 1;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+}
+
+.method.active {
+  color: var(--teal);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(20 33 43 / 8%);
+}
+
+.method:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.form-notice {
+  padding: 10px 12px;
+  margin: -4px 0 16px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
+
+.face-entry {
+  padding-top: 20px;
+  margin-top: 22px;
+  border-top: 1px solid var(--line-2);
+}
+
+.face-lede {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--ink-2);
 }
 
 .form-lede {
