@@ -1,8 +1,11 @@
-FROM python:3.12-slim
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+FROM ${PYTHON_IMAGE}
 WORKDIR /app
-RUN pip install --no-cache-dir uv==0.9.18
+ARG UV_VERSION=0.12.13
+ENV UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy PYTHONUNBUFFERED=1
+RUN pip install --no-cache-dir uv==${UV_VERSION}
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --locked --no-dev --python /usr/local/bin/python
 COPY app ./app
 COPY alembic.ini ./
 COPY migrations ./migrations

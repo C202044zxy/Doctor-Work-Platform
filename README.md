@@ -1,3 +1,7 @@
+## 新成员从零启动（Windows / Docker）
+
+不需要本机安装 Python、Node 或 Redis。先安装并启动 Docker Desktop，然后按 [Docker 新成员指南](docs/Docker-reproduction.md) 初始化配置、启动服务、创建第一个管理员账号。使用 `scripts/docker.ps1`（SQLite）；旧 `scripts/dev.ps1 docker` 为 MySQL 栈。
+
 # Doctor Work Platform
 
 A runnable foundation for the school project's doctor workspace: FastAPI, Vue 3,
