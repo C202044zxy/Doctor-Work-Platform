@@ -9,12 +9,16 @@ export const navigation = [
   { name: 'records', label: 'Medical Records', icon: 'Document' },
   { name: 'consultations', label: 'Consultations', icon: 'ChatDotRound' },
   { name: 'remote-consultation', label: 'Remote Consultation', icon: 'VideoCamera' },
+  { name: 'health-plans', label: 'Health Plans', icon: 'Document' },
+  { name: 'reminders', label: 'Reminders', icon: 'Tickets' },
   { name: 'health', label: 'Health Management', icon: 'TrendCharts' },
   { name: 'review', label: 'Review Queue', icon: 'Checked' },
   { name: 'audit', label: 'Audit Log', icon: 'Tickets' },
 ]
 
 const routes = [
+  { path: '/health-plans', name: 'health-plans', component: () => import('../views/HealthPlansView.vue'), meta: { title: 'Health Plans' } },
+  { path: '/reminders', name: 'reminders', component: () => import('../views/RemindersView.vue'), meta: { title: 'Reminders' } },
   {
     path: '/login',
     name: 'login',
@@ -35,9 +39,8 @@ const routes = [
     meta: { title: 'Patients' },
   },
 
-  // The remaining six modules. Each screen is built and navigable; the content
-  // behind it is fabricated (see api/demo-data.js) until the owning backend
-  // task lands. Patients is the only screen talking to the real service today.
+  // B consultations, health plans and reminders use real APIs.
+  // Other owners replace their own demo screens.
   {
     path: '/records',
     name: 'records',

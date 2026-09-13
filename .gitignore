@@ -8,3 +8,7 @@ __pycache__/
 node_modules/
 dist/
 backups/
+.env.server
+uploads/
+*.db-wal
+*.db-shm

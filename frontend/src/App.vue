@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
@@ -19,7 +19,7 @@ import { navigation } from './router'
 import { currentClinician, signOut } from './session'
 import { ElMessage } from 'element-plus'
 import { authentication, health } from './api/client'
-import { counts } from './api/demo-data'
+import { work } from './api/work'
 
 // Navigation entries carry an icon name; resolve them to components here so the
 // route table itself stays free of presentation concerns.
@@ -49,9 +49,15 @@ const pageTitle = computed(() => route.meta.title ?? 'Doctor Work Platform')
 const serviceState = ref('checking')
 const serviceLabel = computed(() => SERVICE_LABELS[serviceState.value])
 
-// Derived from the same fabricated figures the dashboard shows, so the badge
-// and the worklist never disagree in front of an audience.
-const attentionCount = computed(() => counts.alerts + counts.pendingReviews)
+// T36 counts only the signed-in doctor's unread persisted reminders.
+const attentionCount = ref(0)
+let reminderTimer
+async function refreshReminders() {
+  if (route.meta.public) return
+  try { attentionCount.value = (await work('/reminders/unread-count')).unread_count } catch { attentionCount.value = 0 }
+}
+ onMounted(() => { refreshReminders(); reminderTimer = setInterval(refreshReminders, 15000); window.addEventListener('reminders-read', refreshReminders) })
+onUnmounted(() => { clearInterval(reminderTimer); window.removeEventListener('reminders-read', refreshReminders) })
 
 onMounted(async () => {
   try {
@@ -124,8 +130,8 @@ async function handleAccount() {
             {{ serviceLabel }}
           </span>
 
-          <el-badge :value="attentionCount" :max="9" class="bell">
-            <el-button text circle :icon="Bell" aria-label="Notifications" />
+          <el-badge :value="attentionCount" :hidden="attentionCount === 0" :max="99" class="bell">
+            <el-button text circle :icon="Bell" aria-label="Notifications" @click="router.push('/reminders')" />
           </el-badge>
 
           <el-dropdown trigger="click" @command="handleAccount">

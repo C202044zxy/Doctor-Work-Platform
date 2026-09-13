@@ -1,0 +1,53 @@
+# Single cloud server: one API process, SQLite file, Redis, and Nginx frontend.
+# Run independently: docker compose --env-file .env.server -f compose.sqlite.yaml up --build -d --wait
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: sqlite:////data/doctor.db
+      REDIS_URL: redis://redis:6379/0
+      UPLOAD_DIR: /data/uploads
+      JWT_SECRET: ${JWT_SECRET:?Set a random JWT_SECRET in .env.server}
+      PATIENT_DATA_KEY: ${PATIENT_DATA_KEY:?Set a random PATIENT_DATA_KEY in .env.server}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_FROM: ${SMTP_FROM:-noreply@example.test}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      REMINDER_TIMEZONE: Asia/Shanghai
+      SCHEDULER_ENABLED: 'true'
+    command: ["sh", "-c", ".venv/bin/alembic upgrade head && .venv/bin/python -m app.seed && exec .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log --log-level warning --ws-max-size 20000"]
+    volumes:
+      - clinical_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/ready')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - '${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80'
+    depends_on:
+      backend:
+        condition: service_healthy
+volumes:
+  clinical_data:
+  redis_data:

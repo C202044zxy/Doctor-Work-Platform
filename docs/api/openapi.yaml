@@ -1712,6 +1712,14 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/Size'
+        - name: before_id
+          in: query
+          description: Stable older-history cursor; excludes this message and later IDs.
+          schema: { type: integer, minimum: 1 }
+        - name: after_id
+          in: query
+          description: Reconnect cursor; returns newer messages in ascending ID order. Mutually exclusive with before_id.
+          schema: { type: integer, minimum: 0 }
       responses:
         '200':
           description: A page of messages.
@@ -1852,6 +1860,10 @@ paths:
 
         This image-only whitelist is **T26's**. Meeting materials reuse the same uploader but
         accept a wider set (PDF / images / documents) — see `POST /api/meetings/{id}/materials`.
+
+        URLs require bearer authentication and, once attached, room participation.
+        The UI fetches the image as a blob and can open that blob in a new tab.
+        Unauthenticated public StaticFiles access is not enabled.
 
         The returned URL has to keep working after a page refresh, and a failed upload
         must leave no half-written message behind — no bubble whose image is broken.
@@ -2889,6 +2901,13 @@ paths:
         { "type": "message", "data": { } }
         ```
 
+        B implementation notes: `token` is supplied as a query parameter and rechecked
+        on each event and heartbeat. `client_id` supports idempotent message retries.
+        Server control events also include `status`, `ping` and `error`; clients answer
+        `ping` with `pong`. Older/reconnect history uses the HTTP cursor parameters.
+        This increment resolves consultation IDs. D's meeting model and A's video
+        signalling handlers remain integration dependencies, not implemented features.
+
         `type` is one of `message`, `typing`, `joined`, `left`, `call_offer`,
         `call_answer`, `ice_candidate`. The last three carry the WebRTC signalling,
         which reuses this socket rather than running a separate signalling service.
@@ -3856,6 +3875,14 @@ components:
           type: array
           description: The rules that fired, kept on the order for later inspection.
           items: { $ref: '#/components/schemas/OrderValidateReason' }
+        validation_result:
+          type: object
+          required: [status, reasons]
+          properties:
+            status: { $ref: '#/components/schemas/OrderValidationStatus' }
+            reasons:
+              type: array
+              items: { $ref: '#/components/schemas/OrderValidateReason' }
         override_reason: { type: string }
         created_at: { type: string, format: date-time }
 
@@ -4086,6 +4113,7 @@ components:
       type: object
       required: [id, consultation_id, sender_type, content, sent_at]
       properties:
+        client_id: { type: [string, 'null'], maxLength: 64 }
         id: { type: integer }
         consultation_id: { type: integer }
         sender_type:
@@ -4104,6 +4132,10 @@ components:
     MessageCreateRequest:
       type: object
       properties:
+        client_id:
+          type: string
+          maxLength: 64
+          description: Optional retry key, unique per room and sender. Same payload replays the saved message; conflicting reuse returns 409.
         content: { type: string }
         image_url: { type: [string, 'null'] }
 
@@ -4450,6 +4482,7 @@ components:
             properties:
               kind: { type: string, enum: [medication, followup, diet_exercise] }
               text: { type: string }
+              done: { type: boolean, default: false }
         start_date: { type: string, format: date }
         end_date:
           type: string

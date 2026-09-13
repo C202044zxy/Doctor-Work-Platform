@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     smtp_timeout: float = Field(default=10, gt=0, le=30)
     otp_daily_limit: int = Field(default=20, ge=1)
     scheduler_enabled: bool = True
+    reminder_timezone: str = "Asia/Shanghai"
+    upload_dir: str = "./uploads"
     redis_url: str | None = None
     # AES-256 key material for patient identifiers (T13). Any passphrase works,
     # because it is hashed to 32 bytes; set a real secret outside local development.

@@ -220,7 +220,7 @@ def test_grant_visibility_revoke_expiry_and_audit(client):
         actions = list(db.scalars(select(AuditLog.action)))
         assert actions.count("temp_grant.create") == 2
         assert actions.count("temp_grant.expire") == 1
-    assert len(client.app.state.scheduler.get_jobs()) == 1
+    assert sum(job.id == "expire_temp_grants" for job in client.app.state.scheduler.get_jobs()) == 1
     assert (
         client.app.state.scheduler.get_job("expire_temp_grants").trigger.interval.total_seconds()
         == 60

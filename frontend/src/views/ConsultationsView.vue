@@ -1,630 +1,184 @@
 <script setup>
-import { computed, nextTick, reactive, ref, useTemplateRef } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Paperclip, Promotion } from '@element-plus/icons-vue'
-import { consultMessages, consultPatient, consultSessions } from '../api/demo-data'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { accessToken } from '../session'
+import { work, mergeMessages } from '../api/work'
+import ChatImage from '../components/ChatImage.vue'
 
-// M3. Three columns: the queue, the conversation, and the patient the
-// conversation is about. Task T27 wires this to the WebSocket; the composer
-// below is already local-first, so sending appends to the thread exactly the
-// way the socket will echo it back.
+const rooms = ref([]), status = ref('waiting'), patientNo = ref(''), error = ref('')
+const room = ref(null), messages = ref([]), text = ref(''), pending = ref([])
+const connected = ref(false), more = ref(false), busy = ref(false), scroller = ref(null)
+const page = ref(1), total = ref(0)
+let socket, retryTimer, generation = 0, disposed = false
+const writable = computed(() => room.value?.status === 'active')
+const time = value => value ? new Date(value).toLocaleString() : '—'
 
-const FILTERS = [
-  { key: 'all', label: 'All' },
-  { key: 'waiting', label: 'Waiting' },
-  { key: 'active', label: 'In progress' },
-  { key: 'ended', label: 'Ended' },
-]
-
-const STATE_LABELS = {
-  waiting: 'Waiting',
-  active: 'In progress',
-  ended: 'Ended',
+async function refresh() {
+  try {
+    const data = await work(`/consultations?${new URLSearchParams({ status: status.value, page: page.value, size: 20, ...(patientNo.value ? { patient_no: patientNo.value.trim() } : {}) })}`)
+    rooms.value = data.items; total.value = data.total
+  } catch (err) { error.value = err.message }
 }
-
-const STATE_SEVERITY = {
-  waiting: 'warn',
-  active: 'ok',
-  ended: 'info',
+async function create() {
+  busy.value = true; error.value = ''
+  try {
+    await work('/consultations', 'POST', { patient_no: patientNo.value.trim() })
+    status.value = 'waiting'; page.value = 1; await refresh()
+  } catch (err) { error.value = err.message }
+  finally { busy.value = false }
 }
-
-const filter = ref('all')
-const selectedId = ref(2)
-const draft = ref('')
-const threadEl = useTemplateRef('thread')
-
-// One editable copy of every transcript, keyed by session.
-const threads = reactive(
-  Object.fromEntries(consultSessions.map((s) => [s.id, [...(consultMessages[s.id] ?? [])]])),
-)
-
-const visibleSessions = computed(() =>
-  filter.value === 'all'
-    ? consultSessions
-    : consultSessions.filter((s) => s.state === filter.value),
-)
-
-const session = computed(() => consultSessions.find((s) => s.id === selectedId.value))
-const messages = computed(() => threads[selectedId.value] ?? [])
-const composerDisabled = computed(() => session.value?.state !== 'active')
-
-function countFor(key) {
-  return key === 'all'
-    ? consultSessions.length
-    : consultSessions.filter((s) => s.state === key).length
+function stopSocket() {
+  clearTimeout(retryTimer)
+  if (socket) { socket.onclose = null; socket.close(); socket = null }
+  connected.value = false
 }
-
-function open(id) {
-  selectedId.value = id
-  draft.value = ''
-  scrollToEnd()
+async function add(rows) {
+  messages.value = mergeMessages(messages.value, rows)
+  const ids = new Set(rows.map(row => row.client_id).filter(Boolean))
+  pending.value = pending.value.filter(row => !ids.has(row.client_id))
 }
-
-async function scrollToEnd() {
-  await nextTick()
-  if (threadEl.value) threadEl.value.scrollTop = threadEl.value.scrollHeight
+async function backfill(id, version) {
+  let after = messages.value.at(-1)?.id || 0
+  while (generation === version) {
+    const data = await work(`/consultations/${id}/messages?after_id=${after}&size=100`)
+    if (generation !== version) return
+    await add(data.items)
+    if (data.items.length < 100) break
+    after = data.items.at(-1).id
+  }
 }
-
-async function send() {
-  const text = draft.value.trim()
-  if (!text) return
-
-  const at = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-  threads[selectedId.value].push({ id: `local-${Date.now()}`, from: 'doctor', text, at })
-  draft.value = ''
-  await scrollToEnd()
+function connect(id, version) {
+  if (disposed || version !== generation) return
+  const url = new URL(`/ws/chat/${id}`, location.href)
+  url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  url.searchParams.set('token', accessToken())
+  const ws = new WebSocket(url); socket = ws
+  ws.onopen = async () => {
+    if (version !== generation) return ws.close()
+    connected.value = true
+    try { await backfill(id, version) } catch (err) { error.value = err.message }
+  }
+  ws.onmessage = async event => {
+    if (version !== generation) return
+    const data = JSON.parse(event.data)
+    if (data.type === 'ping') ws.send(JSON.stringify({ type: 'pong', data: {} }))
+    if (data.type === 'message') { await add([data.data]); await bottom(); refresh() }
+    if (data.type === 'status') { room.value = data.data; refresh() }
+    if (data.type === 'error') {
+      error.value = data.data.message
+      const row = pending.value.find(row => row.client_id === data.data.client_id)
+      if (row) row.failed = true
+    }
+  }
+  ws.onclose = event => {
+    if (version !== generation || disposed) return
+    connected.value = false
+    pending.value.forEach(row => { row.failed = true })
+    if (event.code === 1008) { error.value = 'Session expired or room access denied. Sign in again or choose another room.'; return }
+    retryTimer = setTimeout(() => connect(id, version), 2000)
+  }
 }
-
-function attachImage() {
-  // T27 uploads to server storage. Until then this only says what it will do.
-  ElMessage.info('Image upload arrives with task T27.')
+async function open(row) {
+  stopSocket(); const version = ++generation
+  room.value = row; messages.value = []; pending.value = []; error.value = ''; more.value = false
+  try {
+    const data = await work(`/consultations/${row.id}/messages?size=20`)
+    if (version !== generation) return
+    await add(data.items); more.value = data.total > data.items.length
+    connect(row.id, version); await bottom()
+  } catch (err) { if (version === generation) error.value = err.message }
 }
-
-function endSession() {
-  ElMessage.info('Ending a session arrives with task T27.')
+async function older() {
+  if (!more.value || busy.value || !messages.value.length) return
+  busy.value = true; const version = generation; const height = scroller.value?.scrollHeight || 0
+  try {
+    const data = await work(`/consultations/${room.value.id}/messages?before_id=${messages.value[0].id}&size=20`)
+    if (version !== generation) return
+    await add(data.items); more.value = data.total > data.items.length
+    await nextTick(); if (scroller.value) scroller.value.scrollTop += scroller.value.scrollHeight - height
+  } catch (err) { error.value = err.message }
+  finally { busy.value = false }
 }
-
-scrollToEnd()
+async function bottom() { await nextTick(); if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight }
+async function move(row, action) {
+  busy.value = true; error.value = ''
+  try {
+    const changed = await work(`/consultations/${row.id}/${action}`, 'POST', {})
+    status.value = changed.status; page.value = 1; await refresh(); await open(changed)
+  } catch (err) { error.value = err.message }
+  finally { busy.value = false }
+}
+async function deliver(row) {
+  const version = generation, roomId = room.value.id
+  row.failed = false
+  try {
+    if (connected.value && socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'message', data: { content: row.content, image_url: row.image_url, client_id: row.client_id } }))
+      setTimeout(() => { if (pending.value.includes(row)) row.failed = true }, 8000)
+    } else {
+      const saved = await work(`/consultations/${roomId}/messages`, 'POST', { content: row.content, image_url: row.image_url, client_id: row.client_id })
+      if (generation !== version) return
+      await add([saved]); refresh()
+    }
+  } catch (err) { if (generation === version) { row.failed = true; error.value = err.message } }
+  await bottom()
+}
+async function send(image_url = null) {
+  if (!writable.value || (!text.value.trim() && !image_url)) return
+  const row = { client_id: crypto.randomUUID(), content: text.value.trim(), image_url, failed: false }
+  pending.value.push(row); text.value = ''; await deliver(row)
+}
+async function upload(event) {
+  const file = event.target.files[0]; event.target.value = ''
+  if (!file) return
+  if (file.size > 5 * 1024 * 1024) { error.value = 'Image exceeds the 5MB limit'; return }
+  const version = generation
+  busy.value = true
+  try {
+    const form = new FormData(); form.append('file', file)
+    const result = await work('/uploads/images', 'POST', form)
+    if (version === generation) await send(result.url)
+  } catch (err) { error.value = err.message }
+  finally { busy.value = false }
+}
+onMounted(refresh)
+onUnmounted(() => { disposed = true; generation++; stopSocket() })
 </script>
-
 <template>
-  <div class="page page-wide">
-    <header class="page-head">
-      <div>
-        <h2 class="page-heading">Consultations</h2>
-        <p class="page-sub">
-          <span>Text and image sessions with patients</span>
-          <span>Video calls open from Remote Consultation</span>
-        </p>
-      </div>
-    </header>
-
-    <div class="workbench">
-      <!-- Queue ------------------------------------------------------------ -->
-      <section class="panel queue">
-        <div class="filters" role="tablist">
-          <button
-            v-for="item in FILTERS"
-            :key="item.key"
-            type="button"
-            role="tab"
-            class="filter"
-            :class="{ 'is-active': filter === item.key }"
-            :aria-selected="filter === item.key"
-            @click="filter = item.key"
-          >
-            {{ item.label }}
-            <span class="filter-count data">{{ countFor(item.key) }}</span>
-          </button>
-        </div>
-
-        <ul class="sessions">
-          <li v-for="item in visibleSessions" :key="item.id">
-            <button
-              type="button"
-              class="session"
-              :class="{ 'is-selected': item.id === selectedId }"
-              :data-severity="STATE_SEVERITY[item.state]"
-              @click="open(item.id)"
-            >
-              <span class="session-head">
-                <span class="session-name">{{ item.patient }}</span>
-                <span class="session-id data">#{{ item.patientId }}</span>
-                <span class="session-time data">{{ item.lastAt }}</span>
-              </span>
-              <span class="session-topic">{{ item.topic }}</span>
-              <span class="session-preview">{{ item.preview }}</span>
-              <span class="session-foot">
-                <span class="chip">{{ STATE_LABELS[item.state] }}</span>
-                <span v-if="item.unread" class="unread data">{{ item.unread }}</span>
-              </span>
-            </button>
-          </li>
-        </ul>
-      </section>
-
-      <!-- Conversation ----------------------------------------------------- -->
-      <section v-if="session" class="panel conversation">
-        <header class="panel-head">
-          <h3>{{ session.patient }}</h3>
-          <span class="chip" :data-severity="STATE_SEVERITY[session.state]">
-            {{ STATE_LABELS[session.state] }}
-          </span>
-          <span class="panel-tail conv-topic">{{ session.topic }}</span>
-          <el-button
-            size="small"
-            :disabled="session.state !== 'active'"
-            @click="endSession"
-          >
-            End session
-          </el-button>
-        </header>
-
-        <div ref="thread" class="thread">
-          <template v-for="message in messages" :key="message.id">
-            <p v-if="message.kind === 'system'" class="system">
-              <span>{{ message.text }}</span>
-              <span class="data">{{ message.at }}</span>
-            </p>
-
-            <article
-              v-else
-              class="bubble-row"
-              :class="message.from === 'doctor' ? 'is-doctor' : 'is-patient'"
-            >
-              <div class="bubble">
-                <p v-if="message.text" class="bubble-text">{{ message.text }}</p>
-
-                <figure v-else-if="message.kind === 'image'" class="attachment">
-                  <span class="attachment-art" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" width="20" height="20">
-                      <path
-                        d="M4 7.5h3l1.4-2h7.2l1.4 2h3v11H4z"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.5"
-                        stroke-linejoin="round"
-                      />
-                      <circle cx="12" cy="12.6" r="3.1" fill="none" stroke="currentColor" stroke-width="1.5" />
-                    </svg>
-                  </span>
-                  <figcaption class="attachment-meta">
-                    <span class="attachment-name data">{{ message.file }}</span>
-                    <span class="attachment-size data">{{ message.size }}</span>
-                    <span class="attachment-caption">{{ message.caption }}</span>
-                  </figcaption>
-                </figure>
-
-                <span class="bubble-time data">{{ message.at }}</span>
-              </div>
-            </article>
-          </template>
-        </div>
-
-        <div class="composer">
-          <el-input
-            v-model="draft"
-            type="textarea"
-            :rows="2"
-            resize="none"
-            :disabled="composerDisabled"
-            :placeholder="
-              composerDisabled
-                ? 'This session has ended. The transcript stays readable.'
-                : 'Write to the patient'
-            "
-            @keydown.enter.exact.prevent="send"
-          />
-          <div class="composer-actions">
-            <el-button :icon="Paperclip" :disabled="composerDisabled" @click="attachImage">
-              Attach image
-            </el-button>
-            <el-button
-              type="primary"
-              :icon="Promotion"
-              :disabled="composerDisabled || !draft.trim()"
-              @click="send"
-            >
-              Send
-            </el-button>
-          </div>
-        </div>
-      </section>
-
-      <!-- Patient context -------------------------------------------------- -->
-      <div class="stack">
-        <section class="panel">
-          <header class="panel-head">
-            <h3>Patient</h3>
-            <span class="panel-tail data">#{{ consultPatient.id }}</span>
-          </header>
-          <dl class="kv">
-            <div>
-              <dt>Name</dt>
-              <dd>{{ consultPatient.name }}</dd>
-            </div>
-            <div>
-              <dt>Age and sex</dt>
-              <dd class="data">{{ consultPatient.age }} · {{ consultPatient.sex }}</dd>
-            </div>
-            <div>
-              <dt>Department</dt>
-              <dd>{{ consultPatient.department }}</dd>
-            </div>
-            <div>
-              <dt>Problem</dt>
-              <dd>{{ consultPatient.problem }}</dd>
-            </div>
-          </dl>
-        </section>
-
-        <section class="panel">
-          <header class="panel-head">
-            <h3>Current medication</h3>
-          </header>
-          <ul class="meds">
-            <li v-for="item in consultPatient.medication" :key="item">{{ item }}</li>
-          </ul>
-        </section>
-
-        <section class="panel">
-          <header class="panel-head">
-            <h3>Last reading</h3>
-          </header>
-          <dl class="kv kv-lg">
-            <div>
-              <dt>Blood pressure</dt>
-              <dd class="data">{{ consultPatient.lastReading }}</dd>
-            </div>
-            <div>
-              <dt>Taken</dt>
-              <dd class="data">{{ consultPatient.lastReadingAt }}</dd>
-            </div>
-          </dl>
-        </section>
-
-        <p class="conn">
-          <span class="conn-dot" aria-hidden="true"></span>
-          Connected over WebSocket
-        </p>
-      </div>
+  <section class="consult-work">
+    <p v-if="error" role="alert" class="error">{{ error }}</p>
+    <div class="toolbar">
+      <el-input v-model="patientNo" placeholder="Patient number" clearable style="width:210px" />
+      <el-button @click="page = 1; refresh()">Search</el-button>
+      <el-button type="primary" :disabled="!patientNo.trim() || busy" @click="create">New consultation</el-button>
     </div>
-  </div>
+    <div class="columns">
+      <aside class="panel">
+        <el-radio-group v-model="status" @change="page = 1; refresh()"><el-radio-button value="waiting">Waiting</el-radio-button><el-radio-button value="active">Active</el-radio-button><el-radio-button value="ended">Ended</el-radio-button></el-radio-group>
+        <p v-if="!rooms.length" class="muted">No consultations in this view.</p>
+        <article v-for="item in rooms" :key="item.id" :class="['room', { selected: room?.id === item.id }]">
+          <button class="room-open" @click="open(item)"><strong>{{ item.patient_name }}</strong> · {{ item.patient_no }}<p>{{ item.last_message || 'No messages yet' }}</p><small>{{ time(item.last_message_at || item.created_at) }}</small></button>
+          <el-button v-if="item.status === 'waiting'" size="small" :disabled="busy" @click="move(item, 'accept')">Accept</el-button>
+          <small v-if="item.ended_at">Ended {{ time(item.ended_at) }}</small>
+        </article>
+        <el-pagination v-model:current-page="page" :total="total" :page-size="20" layout="prev, pager, next" @current-change="refresh" />
+      </aside>
+      <section class="panel chat">
+        <template v-if="room">
+          <header><div><strong>{{ room.patient_name }}</strong><p class="muted">{{ room.status }} · {{ connected ? 'Connected' : 'Offline — reconnecting / HTTP fallback' }}</p></div><el-button v-if="writable" :disabled="busy" @click="move(room, 'end')">End consultation</el-button></header>
+          <div ref="scroller" class="messages" role="log" aria-live="polite" @scroll="scroller.scrollTop < 30 && older()">
+            <el-button v-if="more" :loading="busy" @click="older">Load earlier messages</el-button>
+            <p v-if="!messages.length" class="muted">No messages yet.</p>
+            <article v-for="message in messages" :key="message.id" class="bubble"><strong>{{ message.sender_name }}</strong><small> {{ time(message.sent_at) }} · Delivered</small><p>{{ message.content }}</p><ChatImage v-if="message.image_url" :url="message.image_url" /></article>
+            <article v-for="message in pending" :key="message.client_id" class="bubble pending"><p>{{ message.content || 'Image attachment' }}</p><span>{{ message.failed ? 'Not confirmed' : 'Sending…' }}</span><el-button v-if="message.failed && writable" size="small" @click="deliver(message)">Retry</el-button></article>
+          </div>
+          <form class="composer" @submit.prevent="send()"><el-input v-model="text" :disabled="!writable" placeholder="Write a message" maxlength="10000" /><el-button native-type="submit" type="primary" :disabled="!writable || !text.trim()">Send</el-button><label class="upload">Image<input aria-label="Upload chat image" type="file" accept="image/jpeg,image/png,image/webp" :disabled="!writable || busy" @change="upload" /></label></form>
+          <p v-if="!writable" class="muted">This conversation is read-only.</p>
+        </template>
+        <p v-else class="muted">Choose a consultation to view its conversation.</p>
+      </section>
+    </div>
+  </section>
 </template>
-
 <style scoped>
-.workbench {
-  display: grid;
-  grid-template-columns: 272px minmax(0, 1fr) 296px;
-  gap: 20px;
-  align-items: start;
-}
-
-/* Queue -------------------------------------------------------------------- */
-
-.queue {
-  overflow: hidden;
-}
-
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line-2);
-}
-
-.filter {
-  padding: 5px 9px;
-  font: inherit;
-  font-size: 12.5px;
-  color: var(--ink-2);
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: var(--radius);
-}
-
-.filter:hover {
-  background: var(--surface-2);
-}
-
-.filter.is-active {
-  font-weight: 600;
-  color: var(--teal-dark);
-  background: var(--teal-soft);
-}
-
-.filter-count {
-  margin-left: 4px;
-  font-size: 11.5px;
-  color: var(--ink-3);
-}
-
-.sessions {
-  padding: 6px;
-  margin: 0;
-  list-style: none;
-}
-
-.session {
-  display: block;
-  width: 100%;
-  padding: 10px 12px;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  background: none;
-  border: 0;
-  border-radius: var(--radius);
-}
-
-.session:hover {
-  background: var(--surface-2);
-}
-
-.session.is-selected {
-  background: var(--teal-soft);
-  box-shadow: inset 2px 0 0 var(--teal);
-}
-
-.session-head {
-  display: flex;
-  gap: 7px;
-  align-items: baseline;
-}
-
-.session-name {
-  font-size: 13.5px;
-  font-weight: 600;
-}
-
-.session-id {
-  font-size: 11.5px;
-  color: var(--ink-3);
-}
-
-.session-time {
-  margin-left: auto;
-  font-size: 11.5px;
-  color: var(--ink-3);
-}
-
-.session-topic {
-  display: block;
-  margin-top: 3px;
-  font-size: 12.5px;
-  color: var(--ink-2);
-}
-
-.session-preview {
-  display: -webkit-box;
-  margin-top: 4px;
-  overflow: hidden;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--ink-3);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.session-foot {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-top: 8px;
-}
-
-.unread {
-  padding: 1px 6px;
-  margin-left: auto;
-  font-size: 11px;
-  font-weight: 600;
-  color: #fff;
-  background: var(--teal);
-  border-radius: 9px;
-}
-
-/* Conversation ------------------------------------------------------------- */
-
-.conversation {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.conv-topic {
-  margin-left: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.thread {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  height: 460px;
-  padding: 18px 20px;
-  overflow-y: auto;
-}
-
-.system {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  justify-content: center;
-  margin: 0;
-  font-size: 11.5px;
-  color: var(--ink-3);
-}
-
-.bubble-row {
-  display: flex;
-}
-
-.bubble-row.is-doctor {
-  justify-content: flex-end;
-}
-
-.bubble {
-  max-width: min(78%, 46ch);
-  padding: 9px 13px 7px;
-  background: var(--surface-2);
-  border: 1px solid var(--line-2);
-  border-radius: var(--radius-lg);
-}
-
-.bubble-row.is-doctor .bubble {
-  color: var(--teal-dark);
-  background: var(--teal-soft);
-  border-color: transparent;
-}
-
-.bubble-text {
-  margin: 0;
-  font-size: 13.5px;
-  line-height: 1.55;
-  color: var(--ink);
-}
-
-.bubble-row.is-doctor .bubble-text {
-  color: inherit;
-}
-
-.bubble-time {
-  display: block;
-  margin-top: 3px;
-  font-size: 10.5px;
-  color: var(--ink-3);
-  text-align: right;
-}
-
-.bubble-row.is-doctor .bubble-time {
-  color: var(--teal);
-  opacity: 0.7;
-}
-
-/* An image message reads as a file, because there is no image to show. */
-.attachment {
-  display: flex;
-  gap: 11px;
-  align-items: center;
-  padding: 4px 0 2px;
-  margin: 0;
-}
-
-.attachment-art {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 38px;
-  height: 38px;
-  color: var(--ink-3);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-
-.attachment-meta {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.attachment-name {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.attachment-size {
-  font-size: 11px;
-  color: var(--ink-3);
-}
-
-.attachment-caption {
-  margin-top: 3px;
-  font-size: 12px;
-  color: var(--ink-2);
-}
-
-/* Composer ----------------------------------------------------------------- */
-
-.composer {
-  padding: 14px 20px 16px;
-  border-top: 1px solid var(--line-2);
-}
-
-.composer-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-  margin-top: 10px;
-}
-
-/* Rail --------------------------------------------------------------------- */
-
-.meds {
-  padding: 6px 20px 12px;
-  margin: 0;
-  list-style: none;
-}
-
-.meds li {
-  padding: 7px 0;
-  font-size: 12.5px;
-  line-height: 1.45;
-  color: var(--ink-2);
-  border-bottom: 1px solid var(--line-2);
-}
-
-.meds li:last-child {
-  border-bottom: 0;
-}
-
-.conn {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  margin: 0;
-  font-size: 12px;
-  color: var(--ink-3);
-}
-
-.conn-dot {
-  width: 7px;
-  height: 7px;
-  background: var(--ok);
-  border-radius: 50%;
-}
-
-@media (max-width: 1360px) {
-  .workbench {
-    grid-template-columns: 272px minmax(0, 1fr);
-  }
-
-  .stack {
-    grid-column: 1 / -1;
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-
-  .stack > * {
-    flex: 1 1 240px;
-  }
-
-  .conn {
-    flex-basis: 100%;
-  }
-}
-
-@media (max-width: 940px) {
-  .workbench {
-    grid-template-columns: 1fr;
-  }
-
-  .thread {
-    height: 380px;
-  }
-}
+.toolbar,.composer,header{display:flex;gap:12px;align-items:center;margin-bottom:18px}header{justify-content:space-between}.columns{display:grid;grid-template-columns:minmax(320px,1fr) 2fr;gap:20px}.panel{background:var(--surface,#fff);border:1px solid var(--line,#ddd);border-radius:12px;padding:20px;min-width:0}.room{padding:14px 0;border-bottom:1px solid #e5eceb}.room.selected{background:#edf6f3}.room-open{border:0;background:none;cursor:pointer;text-align:left;width:100%;font:inherit}.room p,.bubble p{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}.messages{height:48vh;min-height:260px;overflow:auto}.bubble{padding:12px;margin:12px 0;background:#eef6f4;border-radius:10px}.bubble small,.muted{color:#657871}.pending{opacity:.7}.error{color:#a42222}.upload{font-size:12px;max-width:160px}.upload input{max-width:150px} @media(max-width:950px){.columns{grid-template-columns:1fr}}
 </style>

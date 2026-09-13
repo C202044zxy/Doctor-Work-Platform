@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import auth, auth_schemas, crypto, face_login, grants, signup
+from app import auth, auth_schemas, chat, crypto, face_login, grants, health_work, orders, signup
 from app.allergies import allergen_name, dictionary, get_patient_allergens
 from app.audit import audit_request, mark_audit
 from app.config import Settings
@@ -188,6 +188,16 @@ def create_app(settings: Settings | None = None):
                 max_instances=1,
                 coalesce=True,
             )
+            scheduler.add_job(
+                health_work.fire_reminders,
+                "cron",
+                second=0,
+                args=[app.state.sessions, settings.reminder_timezone],
+                id="health_reminders",
+                max_instances=1,
+                coalesce=True,
+                replace_existing=True,
+            )
             scheduler.start()
         app.state.scheduler = scheduler
         try:
@@ -206,6 +216,11 @@ def create_app(settings: Settings | None = None):
     app.include_router(signup.router)
     app.include_router(face_login.router)
     app.include_router(grants.router)
+    app.include_router(chat.router)
+    app.include_router(chat.socket_router)
+    app.include_router(health_work.router)
+    app.include_router(orders.router)
+    app.state.chat = chat.ChatHub()
     app.state.sessions = session_factory(engine)
     app.state.engine = engine
     app.state.cache = cache

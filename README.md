@@ -479,3 +479,13 @@ No database migration is needed: enrollment uses the existing user status field.
 SMTP port `465` uses implicit TLS (`SMTP_SSL`); other ports use STARTTLS when
 `SMTP_STARTTLS=true`. For a 163 Mail sender, use `smtp.163.com`, port `465`,
 `SMTP_STARTTLS=false`, and the mailbox SMTP authorization code as `SMTP_PASSWORD`.
+
+## B W2/W3 implementation and single-server configuration
+
+B's consultation workspace, health plans and reminders now use real APIs. See
+[the B W2/W3 walkthrough](docs/B-W2-W3-walkthrough.md) for ownership boundaries,
+acceptance results and the remaining A/D integration points. For the requested
+**Redis + backend + SQLite on one cloud server**, use the separate
+[SQLite deployment guide](docs/B-single-server-deployment.md) and
+`compose.sqlite.yaml`. The existing MySQL development instructions above still
+apply to `compose.yaml`.
