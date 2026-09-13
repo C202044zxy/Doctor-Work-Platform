@@ -312,6 +312,26 @@ def test_patient_allergy_scope_and_senior_grant_boundaries(client):
     assert client.get(f"/api/patients/{number}/allergies", headers=junior).status_code == 200
 
 
+def test_department_filter_cannot_widen_department_scope(client):
+    number = patient(client)  # General Medicine, created by the admin in user 1
+    admin = headers(client)
+    junior = headers(client, 3)  # Cardiology
+    assert client.get("/api/patients", headers=admin).json()["data"]["total"] == 1
+
+    # Naming your own department changes nothing, and is not an error.
+    own = client.get("/api/patients", headers=junior, params={"department": "Cardiology"})
+    assert own.status_code == 200
+    assert own.json()["data"]["total"] == 0
+
+    # Naming someone else's department narrows an already-empty scope to empty.
+    # It must not hand the row over: `department` ANDs with `patient_scope`, and
+    # an AND can only ever remove rows.
+    other = client.get("/api/patients", headers=junior, params={"department": "General Medicine"})
+    assert other.status_code == 200
+    assert other.json()["data"]["total"] == 0
+    assert client.get(f"/api/patients/{number}", headers=junior).status_code == 404
+
+
 def test_concurrent_code_consumption_only_issues_one_token(client):
     from concurrent.futures import ThreadPoolExecutor
 

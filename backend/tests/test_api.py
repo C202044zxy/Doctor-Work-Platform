@@ -186,6 +186,44 @@ def test_combined_search_and_ands_every_filter(client):
     assert client.get("/api/patients").json()["data"]["total"] == 4
 
 
+def test_department_filter_stacks_with_the_other_conditions(client):
+    general = create_patient(client, name="赵雷", symptom_tags=["胸痛"], admitted_at="2026-08-15")
+    create_patient(
+        client,
+        name="赵敏",
+        symptom_tags=["胸痛"],
+        admitted_at="2026-08-20",
+        department="Cardiology",
+    )
+
+    only_general = client.get("/api/patients", params={"department": "General Medicine"}).json()[
+        "data"
+    ]
+    assert only_general["total"] == 1
+    assert only_general["items"][0]["patient_no"] == general["patient_no"]
+
+    # It stacks with the four search conditions rather than replacing them: the
+    # same name and tag match one patient in each department, and the department
+    # is what picks which.
+    for department, expected in (("General Medicine", "赵雷"), ("Cardiology", "赵敏")):
+        stacked = client.get(
+            "/api/patients",
+            params={"department": department, "name": "赵", "symptom_tags": "胸痛"},
+        ).json()["data"]
+        assert stacked["total"] == 1
+        assert stacked["items"][0]["name"] == expected
+
+    # The name is an exact match, not a substring or a prefix.
+    assert (
+        client.get("/api/patients", params={"department": "General"}).json()["data"]["total"] == 0
+    )
+    # A department nobody registered is an empty page, not a 404: a filter that
+    # matches nothing is not an error, and `department` is a filter, not a lookup.
+    unknown = client.get("/api/patients", params={"department": "Dermatology"})
+    assert unknown.status_code == 200
+    assert unknown.json()["data"]["total"] == 0
+
+
 def test_admission_range_validation(client):
     response = client.get(
         "/api/patients", params={"admitted_from": "2026-09-01", "admitted_to": "2026-08-01"}
@@ -396,10 +434,15 @@ def test_swagger_documents_every_patient_field(client):
         parameter["name"]: parameter
         for parameter in schema["paths"]["/api/patients"]["get"]["parameters"]
     }
+    # The contract's own parameter list, in full. `group_id` is the one member
+    # missing, and it is missing on purpose: groups are T17, `PatientDetail.groups`
+    # is still a placeholder, and a filter over a table that does not exist would
+    # be a silent no-op of exactly the kind `symptom_tag`/`symptom_tags` warns about.
     assert set(list_parameters) == {
         "name",
         "patient_no",
         "symptom_tags",
+        "department",
         "admitted_from",
         "admitted_to",
         "page",

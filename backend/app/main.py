@@ -302,10 +302,17 @@ def create_app(settings: Settings | None = None):
             "姓名模糊、患者编号精确、症状标签、入院日期区间四个条件可以任意 AND 组合；"
             "症状标签可重复传参，命中任意一个即可；四个条件都留空时返回全量，"
             "默认按 created_at 倒序分页。\n\n"
+            "`department` 是第五个条件，按科室名精确匹配，与上面四个条件叠加而不是替换它们；"
+            "它只能收窄 T09 的科室范围，不能放宽。传入未登记的科室名得到空列表，"
+            "而不是 404：筛选条件不匹配不是错误。\n\n"
             "Fuzzy name, exact patient number, symptom tag and admission-date range "
             "combine with AND; repeat `symptom_tags` to match any of several tags. With "
             "no filter the whole table is returned, ordered by `created_at` descending. "
-            "The payload is `{items, total, page, size}`."
+            "The payload is `{items, total, page, size}`.\n\n"
+            "`department` is a fifth condition that matches the department name exactly "
+            "and stacks with the other four rather than replacing them. It can only narrow "
+            "the T09 scope, never widen it. An unknown department name yields an empty "
+            "list rather than a 404: a filter that matches nothing is not an error."
         ),
         responses={422: {"model": ErrorResponse}},
     )
@@ -324,6 +331,9 @@ def create_app(settings: Settings | None = None):
                 )
             ),
         ] = None,
+        department: str = Query(
+            "", max_length=100, description="科室名称精确匹配 / Exact department name"
+        ),
         admitted_from: Annotated[
             date | None,
             Query(description="入院日期起（含）/ Admission date from, inclusive"),
@@ -351,6 +361,12 @@ def create_app(settings: Settings | None = None):
                     ]
                 )
             )
+        if department:
+            # Stacks on top of `grants.patient_scope` rather than replacing it, so a
+            # non-admin naming someone else's department narrows their own scope to
+            # nothing instead of widening it. `patient_scope` is already in
+            # `conditions`, and AND-ing cannot loosen it.
+            conditions.append(Patient.department.has(Department.name == department))
         if admitted_from:
             conditions.append(Patient.admitted_at >= admitted_from)
         if admitted_to:
