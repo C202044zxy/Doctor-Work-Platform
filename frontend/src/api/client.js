@@ -1,4 +1,5 @@
 import { accessToken, signOut } from '../session.js'
+import { filenameFromDisposition } from './csv.js'
 import { sms as mockSms, face as mockFace } from './mock-auth.js'
 
 const BASE = '/api'
@@ -93,6 +94,58 @@ function form(fields) {
   return { method: 'POST', body }
 }
 
+// T12 签收标准 2. Deliberately not `request()`: that one does `await response.json()`,
+// and the export answers with a CSV file — so a rejected export would be parsed as
+// JSON, found empty, and saved as a zero-byte `.csv`. The backend must return the file
+// raw rather than in the envelope, which means every failure mode has to be handled
+// here, including the one that looks like success: a 200 whose body is not a CSV.
+async function download(path, params) {
+  const token = accessToken()
+  let response
+  try {
+    response = await fetch(`${BASE}${path}?${params}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+  } catch {
+    throw new Error('Cannot reach the service. Is the backend running?')
+  }
+
+  if (!response.ok) {
+    // The failure is JSON even though the success is not, so the reason still has to
+    // be read as JSON.
+    const body = await response.json().catch(() => null)
+    const error = new Error(body?.message || `Export failed (${response.status})`)
+    error.status = response.status
+    // Same split as `request()`: a 401 that carried a token means the session ended,
+    // and a 403 is a permission refusal that should keep the session and go explain
+    // which permission is missing.
+    if (response.status === 401 && token) {
+      signOut()
+      sessionLostHandler?.({ kind: 'session-lost', message: sessionLostCopy(error.message) })
+    }
+    if (response.status === 403) sessionLostHandler?.({ kind: 'forbidden' })
+    throw error
+  }
+
+  // A 200 is not enough. Without this check, anything that answers 200 with the JSON
+  // envelope — a proxy, a path that resolved somewhere else — would write an empty
+  // file named `audit.csv`, and the export would look like it worked.
+  const type = response.headers.get('content-type') ?? ''
+  if (!type.startsWith('text/csv')) {
+    throw new Error('The export answered with something that is not a CSV file.')
+  }
+
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  // The server owns the name because criterion 2 wants it to carry the time range; a
+  // name assembled here could only be a second, worse guess at the same thing.
+  link.download =
+    filenameFromDisposition(response.headers.get('content-disposition')) ?? 'audit.csv'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
 export const health = {
   async ready() {
     // /api/health is T03's endpoint and answers with the dependency report itself,
@@ -172,6 +225,46 @@ export const patients = {
     async remove(id) {
       return request(`/allergies/${id}`, { method: 'DELETE' })
     },
+  },
+}
+
+// One builder for the list and the export, because criterion 2's "the CSV agrees with
+// the list" is only true if both ask the same question — two builders would agree on
+// the day they were written and drift after.
+//
+// An unused optional filter is left out rather than sent blank, for the reason
+// `patients.list` spells out: `from=` is not a date-time, so the server rejects the
+// entire request with 422 and the page reports a failure that is not there. `from` and
+// `to` are the two that cannot survive a blank, and they are the two that are blank by
+// default.
+function auditParams(filters, { paged }) {
+  const params = new URLSearchParams()
+  if (paged) {
+    params.set('page', String(filters.page ?? 1))
+    params.set('size', String(filters.size ?? 20))
+  }
+  if (filters.userId !== null && filters.userId !== undefined && filters.userId !== '') {
+    params.set('user_id', String(filters.userId))
+  }
+  if (filters.action) params.set('action', filters.action)
+  if (filters.objectType) params.set('object_type', filters.objectType)
+  if (filters.from) params.set('from', filters.from)
+  if (filters.to) params.set('to', filters.to)
+  return params
+}
+
+// T12. Admin-only on the server. The client's copy of that rule is `MODULE_ROLES.audit`
+// in `access.js`, and it is only the menu — scenario S2 checks that the API refuses a
+// senior even when the menu is bypassed.
+export const audit = {
+  async list(filters = {}) {
+    return request(`/audit-logs?${auditParams(filters, { paged: true })}`)
+  },
+
+  // The same conditions without pagination: the file covers everything the filter
+  // matched rather than the page that happens to be on screen.
+  async exportCsv(filters = {}) {
+    return download('/audit-logs/export', auditParams(filters, { paged: false }))
   },
 }
 

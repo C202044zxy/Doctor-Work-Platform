@@ -1,84 +1,212 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Download, Search } from '@element-plus/icons-vue'
-import { auditActions, auditRows } from '../api/demo-data'
-import { simulatedActions, simulatedRows } from '../api/mock-audit'
+import { Download, Refresh } from '@element-plus/icons-vue'
+import { audit as auditApi } from '../api/client'
 
-// M8. An append-only trail: every write and every sensitive read, recorded
-// with who did it, when, from where, on what, and how it turned out.
+// M8. An append-only trail: every write and every sensitive read, recorded with who
+// did it, when, from where, on what, and how it turned out.
 //
-// The three filters and the CSV export below really work against the mock
-// rows. Task T11 replaces the array with the query endpoint; the column set
-// here is what that endpoint has to return.
-//
-// Rows from the simulated capabilities are listed alongside the fabricated ones,
-// newest first. That is not a display nicety: §1.1 铁律 2 requires every
-// simulated capability to leave a record, and §3.3.1 keeps the SMS code out of
-// the send response on purpose — this page is the only place it can be read
-// (§3.5 判据②, §6.2 step 4). Both sources are mock, and both go when T11 lands.
+// T12. The rows are real now — `GET /api/audit-logs`, admin-only, paginated and
+// filtered on the server. The CSV is real too, and it is produced by the backend
+// rather than assembled here, because criterion 2 asks for three things the browser
+// cannot promise on its own: the file agrees with the current filter, the filename
+// carries the time range, and the bytes open in Excel without mojibake.
 
-const ALL_ACTIONS = 'All actions'
+const PAGE_SIZE = 20
 
-const action = ref(ALL_ACTIONS)
-const actor = ref('')
-const range = ref(null)
+// The vocabulary the backend actually writes: `audit.ACTIONS` in `backend/app/audit.py`
+// plus the actions marked by hand (patient.view, patient.allergies.view,
+// temp_grant.expire, audit.export). `action` is an exact-match string with no
+// enumeration endpoint, so this list is a convenience rather than the truth — which is
+// why the select allows a typed value. An action added by a later task stays
+// searchable without a change here.
+const ACTION_VOCABULARY = [
+  'patient.view',
+  'patient.create',
+  'patient.update',
+  'patient.delete',
+  'patient.allergies.view',
+  'allergy.create',
+  'allergy.update',
+  'allergy.delete',
+  'auth.login',
+  'auth.send_code',
+  'auth.verify_code',
+  'auth.logout',
+  'temp_grant.create',
+  'temp_grant.revoke',
+  'temp_grant.expire',
+  'audit.export',
+]
 
-const actionOptions = computed(() => [...auditActions, ...simulatedActions.value])
+// `''` is "no condition" for both selects, and it is a real option value rather than a
+// cleared select: `clearable` sets the model to `undefined`, which would leave the state
+// saying "filtered" while nothing was being filtered.
+const filters = reactive({ action: '', actor: '', range: null })
 
-const allRows = computed(() => [...simulatedRows.value, ...auditRows])
+const rows = ref([])
+const actors = ref([])
+const total = ref(0)
+const page = ref(1)
+const loading = ref(false)
+const exporting = ref(false)
+const loadError = ref('')
 
-const filtered = computed(() => {
-  const needle = actor.value.trim().toLowerCase()
-  const [from, to] = range.value ?? []
-
-  return allRows.value.filter((row) => {
-    if (action.value !== ALL_ACTIONS && row.action !== action.value) return false
-    if (needle && !row.actor.toLowerCase().includes(needle)) return false
-    if (from && row.iso < from) return false
-    // The picker gives a day; compare against the end of that day.
-    if (to && row.iso > `${to}T23:59`) return false
-    return true
+// The user filter takes a `user_id`, so the dropdown needs ids. `GET /api/users` is in
+// the contract but not in the repository — user management has no owner yet — so the
+// options come out of the log itself: the newest page of entries, plus whatever is on
+// screen right now, which is what keeps a selected value visible after a search. That
+// is not only a workaround, it is the useful set: an account with no entries cannot be
+// filtered down to anything. Swapping in `/api/users` later changes this one computed.
+const actorOptions = computed(() => {
+  const merged = new Map(actors.value.map((item) => [item.id, item.label]))
+  rows.value.forEach((row) => {
+    if (row.user_id !== null && row.user_id !== undefined && !merged.has(row.user_id)) {
+      merged.set(row.user_id, row.username || `User #${row.user_id}`)
+    }
   })
+  if (filters.actor !== '' && !merged.has(filters.actor)) {
+    merged.set(filters.actor, `User #${filters.actor}`)
+  }
+  return [...merged]
+    .map(([id, label]) => ({ id, label }))
+    .sort((left, right) => left.id - right.id)
 })
 
 const isFiltered = computed(
-  () => action.value !== ALL_ACTIONS || actor.value.trim() !== '' || range.value !== null,
+  () => filters.action !== '' || filters.actor !== '' || filters.range !== null,
 )
 
-function reset() {
-  action.value = ALL_ACTIONS
-  actor.value = ''
-  range.value = null
+// The picker gives a calendar day; the API wants an instant. `new Date('2026-09-13')` is
+// parsed as UTC midnight, which for a UTC+8 reader is 8am the *previous* day, so the
+// local time is built from the parts and `.toISOString()` converts it to the UTC instant
+// the column is actually stored in.
+function localInstant(day, hours, minutes, seconds, milliseconds) {
+  const [year, month, date] = day.split('-').map(Number)
+  return new Date(year, month - 1, date, hours, minutes, seconds, milliseconds).toISOString()
 }
 
-// The export is real: it builds a CSV from exactly the rows on screen.
-function exportCsv() {
-  if (!filtered.value.length) {
+function currentParams() {
+  const [from, to] = filters.range ?? []
+  return {
+    userId: filters.actor === '' ? null : filters.actor,
+    action: filters.action,
+    // The backend also filters on `object_type`. T12's criteria do not ask for it, so
+    // the toolbar does not offer it rather than showing a control nothing demonstrates.
+    objectType: '',
+    from: from ? localInstant(from, 0, 0, 0, 0) : '',
+    // The end of the chosen day, not the start of the next one: the server's `to` is
+    // inclusive, so next-midnight would pull in a row written after the range ended.
+    to: to ? localInstant(to, 23, 59, 59, 999) : '',
+    page: page.value,
+    size: PAGE_SIZE,
+  }
+}
+
+async function load() {
+  loading.value = true
+  loadError.value = ''
+  try {
+    const result = await auditApi.list(currentParams())
+    rows.value = result.items
+    // `total` counts every row matching the filter, not the rows on this page.
+    total.value = result.total
+  } catch (error) {
+    loadError.value = error.message
+    rows.value = []
+    total.value = 0
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadActors() {
+  try {
+    const result = await auditApi.list({ size: 100 })
+    const seen = new Map()
+    result.items.forEach((row) => {
+      if (row.user_id !== null && row.user_id !== undefined) {
+        seen.set(row.user_id, row.username || `User #${row.user_id}`)
+      }
+    })
+    actors.value = [...seen].map(([id, label]) => ({ id, label }))
+  } catch {
+    // `load()` reports the failure. Without this list the table still renders and the
+    // other two conditions still work.
+  }
+}
+
+function search() {
+  // Back to the first page on every new search: staying on page 3 of a result set that
+  // now has one row is how a search looks broken.
+  page.value = 1
+  load()
+}
+
+function clearFilters() {
+  filters.action = ''
+  filters.actor = ''
+  filters.range = null
+  search()
+}
+
+function changePage(next) {
+  page.value = next
+  load()
+}
+
+// `created_at` is a UTC instant and the reader is not. Showing it in local time is not a
+// nicety here: the date filter is stated in local days, so a trail printed in UTC would
+// disagree with the range that selected it.
+function stamp(value) {
+  if (!value) return ''
+  const at = new Date(value)
+  if (Number.isNaN(at.getTime())) return value
+  const pad = (number) => String(number).padStart(2, '0')
+  return (
+    `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}` +
+    ` ${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`
+  )
+}
+
+function target(row) {
+  return [row.object_type, row.object_id].filter(Boolean).join(' ')
+}
+
+// The contract has no `severity` column — the mock invented one for chip colour.
+// `result` is the only outcome the log stores, so a failure is the only thing that earns
+// a colour. A table where every successful read is green says nothing at all.
+function severity(row) {
+  return row.result === 'failure' ? 'alert' : 'info'
+}
+
+async function exportCsv() {
+  if (!total.value) {
     ElMessage.info('Nothing to export with these filters.')
     return
   }
 
-  const header = ['id', 'timestamp', 'actor', 'action', 'target', 'source', 'outcome', 'detail']
-  const escape = (value) => `"${String(value).replaceAll('"', '""')}"`
-  const body = filtered.value.map((row) =>
-    [row.id, row.at, row.actor, row.action, row.target, row.source, row.outcome, row.detail]
-      .map(escape)
-      .join(','),
-  )
-
-  const blob = new Blob([[header.join(','), ...body].join('\r\n')], {
-    type: 'text/csv;charset=utf-8',
-  })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`
-  link.click()
-  URL.revokeObjectURL(url)
-
-  ElMessage.success(`${filtered.value.length} rows exported.`)
+  exporting.value = true
+  try {
+    // The same conditions the list is showing, and no page number: the file covers every
+    // match rather than the page on screen (criterion 2).
+    await auditApi.exportCsv(currentParams())
+    ElMessage.success(`${total.value} rows exported.`)
+  } catch (error) {
+    // The server's `message` is written for developers and does not go on screen, so the
+    // reader gets copy that says what to do about it.
+    console.error(error)
+    ElMessage.error('The export could not be produced. Try again in a moment.')
+  } finally {
+    exporting.value = false
+  }
 }
+
+onMounted(() => {
+  loadActors()
+  load()
+})
 </script>
 
 <template>
@@ -92,27 +220,35 @@ function exportCsv() {
         </p>
       </div>
       <div class="page-actions">
-        <el-button :icon="Download" @click="exportCsv">Export CSV</el-button>
+        <el-button :icon="Download" :loading="exporting" @click="exportCsv">Export CSV</el-button>
       </div>
     </header>
 
     <section class="panel">
       <div class="toolbar">
         <div class="filters">
-          <el-select v-model="action" class="filter-action" aria-label="Action">
-            <el-option v-for="item in actionOptions" :key="item" :label="item" :value="item" />
+          <el-select v-model="filters.action" class="filter-action" aria-label="Action">
+            <el-option label="All actions" value="" />
+            <el-option v-for="item in ACTION_VOCABULARY" :key="item" :label="item" :value="item" />
           </el-select>
 
-          <el-input
-            v-model="actor"
+          <el-select
+            v-model="filters.actor"
             class="filter-actor"
-            clearable
-            placeholder="Search by account"
-            :prefix-icon="Search"
-          />
+            filterable
+            aria-label="Account"
+          >
+            <el-option label="All accounts" value="" />
+            <el-option
+              v-for="item in actorOptions"
+              :key="item.id"
+              :label="item.label"
+              :value="item.id"
+            />
+          </el-select>
 
           <el-date-picker
-            v-model="range"
+            v-model="filters.range"
             type="daterange"
             value-format="YYYY-MM-DD"
             start-placeholder="From"
@@ -122,64 +258,86 @@ function exportCsv() {
         </div>
 
         <div class="toolbar-right">
-          <span class="result-count">
-            <span class="data">{{ filtered.length }}</span>
-            of <span class="data">{{ allRows.length }}</span> entries
-          </span>
-          <el-button v-if="isFiltered" link @click="reset">Clear filters</el-button>
+          <span class="result-count"><span class="data">{{ total }}</span> entries</span>
+          <el-button v-if="isFiltered" link @click="clearFilters">Clear filters</el-button>
         </div>
       </div>
 
-      <el-table :data="filtered" class="table" row-key="id">
+      <div v-if="loadError" class="load-error">
+        <div>
+          <p class="load-error-title">Could not load the audit log</p>
+          <p class="load-error-detail">{{ loadError }}</p>
+        </div>
+        <el-button :icon="Refresh" :loading="loading" @click="load">Try again</el-button>
+      </div>
+
+      <el-table v-else v-loading="loading" :data="rows" class="table" row-key="id">
         <el-table-column type="expand">
           <template #default="{ row }">
-            <p class="detail">{{ row.detail }}</p>
+            <pre v-if="row.detail" class="detail">{{ JSON.stringify(row.detail, null, 2) }}</pre>
+            <p v-else class="detail detail-empty">This entry records no detail.</p>
           </template>
         </el-table-column>
 
         <el-table-column label="Time" width="184">
           <template #default="{ row }">
-            <span class="data">{{ row.at }}</span>
+            <span class="data">{{ stamp(row.created_at) }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="Account" prop="actor" min-width="210" />
-
-        <el-table-column label="Action" width="150">
+        <el-table-column label="Account" min-width="180">
           <template #default="{ row }">
-            <span class="chip" :data-severity="row.severity">{{ row.action }}</span>
+            <span>{{ row.username || `User #${row.user_id}` }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="Action" width="190">
+          <template #default="{ row }">
+            <span class="chip" :data-severity="severity(row)">{{ row.action }}</span>
           </template>
         </el-table-column>
 
         <el-table-column label="Target" min-width="150">
           <template #default="{ row }">
-            <span class="data">{{ row.target }}</span>
+            <span class="data">{{ target(row) }}</span>
           </template>
         </el-table-column>
 
         <el-table-column label="Source" width="132">
           <template #default="{ row }">
-            <span class="data">{{ row.source }}</span>
+            <span class="data">{{ row.ip }}</span>
           </template>
         </el-table-column>
 
         <el-table-column label="Outcome" width="110">
           <template #default="{ row }">
-            <span :class="row.outcome === 'ok' ? 'outcome' : 'outcome outcome-bad'">
-              {{ row.outcome }}
+            <span :class="row.result === 'success' ? 'outcome' : 'outcome outcome-bad'">
+              {{ row.result }}
             </span>
           </template>
         </el-table-column>
 
         <template #empty>
-          <p class="empty">No entries match these filters.</p>
+          <p class="empty">
+            {{ isFiltered ? 'No entries match these filters.' : 'The audit log is empty.' }}
+          </p>
         </template>
       </el-table>
 
+      <footer v-if="total > PAGE_SIZE" class="pager">
+        <el-pagination
+          layout="prev, pager, next"
+          :current-page="page"
+          :page-size="PAGE_SIZE"
+          :total="total"
+          @current-change="changePage"
+        />
+      </footer>
+
       <p class="panel-foot table-foot">
-        Every field shown here is a stored column. Rows are inserted, never updated or deleted, and
-        the database account holds no UPDATE or DELETE grant on this table — which is what makes the
-        trail worth reading.
+        Every field here is a stored column. Rows are inserted, never updated or deleted —
+        the database refuses both — which is what makes the trail worth reading. Expand a row
+        to see the detail its writer recorded.
       </p>
     </section>
   </div>
@@ -193,11 +351,11 @@ function exportCsv() {
 }
 
 .filter-action {
-  width: 168px;
+  width: 190px;
 }
 
 .filter-actor {
-  width: 220px;
+  width: 200px;
 }
 
 .filter-range {
@@ -215,16 +373,54 @@ function exportCsv() {
   color: var(--ink-2);
 }
 
+/* T15's second scenario stops the service and expects "load failed, click to retry"
+   rather than a spinner that never resolves or a blank panel. Same block as the
+   patient list, which is scoped there rather than shared. */
+.load-error {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  margin: 0;
+  background: var(--alert-soft);
+}
+
+.load-error-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--alert-dark);
+}
+
+.load-error-detail {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
 .table {
   width: 100%;
 }
 
+/* `detail` is a JSON object, not a sentence: it gets the data font and keeps its own
+   line breaks, or the one thing the row was expanded to read is the one thing that
+   becomes unreadable. */
 .detail {
-  padding: 4px 16px 6px 48px;
+  padding: 6px 16px 8px 48px;
   margin: 0;
-  font-size: 13px;
-  line-height: 1.55;
+  font-family: var(--font-data);
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--ink-2);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.detail-empty {
+  font-family: var(--font-ui);
+  font-style: italic;
+  color: var(--ink-3);
 }
 
 .outcome {
@@ -235,6 +431,13 @@ function exportCsv() {
 .outcome-bad {
   font-weight: 600;
   color: var(--alert);
+}
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px 20px;
+  border-top: 1px solid var(--line-2);
 }
 
 .table-foot {
