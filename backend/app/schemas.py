@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -378,6 +378,76 @@ class PatientListData(BaseModel):
 
 class PatientListResponse(SuccessBase):
     data: PatientListData
+
+
+class AuditLogRead(BaseModel):
+    """The contract's AuditLog, and nothing else.
+
+    `patient_id` and `status_code` are columns on the table but not properties of
+    the contract's schema, so they are deliberately absent: `response_model` drops
+    whatever is not declared here, which makes this class the thing that keeps the
+    endpoint from drifting past `docs/api/openapi.yaml`.
+
+    Most fields are nullable even though the contract marks several of them
+    required. The columns are nullable because the audit writer runs on requests
+    that failed before an identity was resolved, and `user_id`/`result` are
+    genuinely NULL on those rows -- see `test_default_protection_and_uniform_errors`.
+    A stricter model would not return a wrong answer, it would return a 500 on the
+    one page whose whole purpose is being readable.
+    """
+
+    id: int = Field(description="主键 / Primary key", examples=[1])
+    user_id: int | None = Field(default=None, description="操作者主键 / Acting user id")
+    action: str = Field(description="语义化动作 / Semantic action key", examples=["patient.view"])
+    # Snapshotted at write time rather than joined, so a later rename cannot
+    # rewrite what the log says happened.
+    username: str | None = Field(default=None, description="操作当时的账号 / Account as recorded")
+    object_type: str | None = Field(
+        default=None, description="对象类型 / Object type", examples=["patient"]
+    )
+    object_id: str | None = Field(
+        default=None, description="对象标识 / Object identifier", examples=["P20260001"]
+    )
+    ip: str | None = Field(default=None, description="来源地址 / Source address")
+    method: str | None = Field(
+        default=None, description="HTTP 方法 / HTTP method", examples=["POST"]
+    )
+    path: str | None = Field(
+        default=None, description="路由模板 / Route template", examples=["/api/patients"]
+    )
+    result: str | None = Field(default=None, description="成功或失败 / success or failure")
+    detail: dict | None = Field(
+        default=None,
+        description="结构化摘要，绝不存请求体 / Structured summary, never a request body",
+    )
+    created_at: datetime = Field(description="写入时间 / Time written")
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _assume_utc(cls, value):
+        """Tag a naive datetime as UTC.
+
+        SQLite hands back naive datetimes for a column that is always written in
+        UTC (`main.py` has `_as_utc` for the same reason). Without the offset the
+        browser reads "10:00" as ten o'clock local and the trail shows the wrong
+        hour -- which is exactly what T12's "filter by today" scenario checks.
+        """
+        if isinstance(value, datetime) and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+
+
+class AuditLogListData(BaseModel):
+    items: list[AuditLogRead] = Field(description="当前页日志 / Audit entries on this page")
+    total: int = Field(description="满足筛选条件的总条数 / Total matching records", examples=[42])
+    page: int = Field(description="当前页码，从 1 开始 / Current page, starting at 1", examples=[1])
+    size: int = Field(description="每页条数 / Page size", examples=[20])
+
+
+class AuditLogListResponse(SuccessBase):
+    data: AuditLogListData
 
 
 class PatientResponse(SuccessBase):
