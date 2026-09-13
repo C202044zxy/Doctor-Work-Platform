@@ -83,7 +83,7 @@ admin 按签收矩阵不自动获得临床审阅权限。senior/admin 可以管�
 
 新迁移只扩展审计表，不重建 A 的用户/授权模型。audit_logs.patient_id 改为可空，以容纳登录等不关联患者的事件。
 
-MySQL最小权限模板：`scripts/audit_permissions.sql`。使用管理账号迁移/seed后创建全新的 doctor_runtime 账号，业务表授予所需读写，audit_logs只SELECT/INSERT。脚本中的本地密码占位符必须自行替换，不能提交真实值。不要对该账号授予 database.* / *.* 广域权限；MySQL权限叠加，表级REVOKE不能抵消广域授权。默认Compose账号用于开发迁移，不代表生产最小权限账号。
+MySQL最小权限模板：`scripts/audit_permissions.sql`。使用管理账号迁移/seed后创建全新的 doctor_runtime 账号，业务表授予所需读写，audit_logs只SELECT/INSERT。脚本中的本地密码占位符必须自行替换，不能提交真实值。不要对该账号授予 database.* / *.* 广域权限；MySQL权限叠加，表级REVOKE不能抵消广域授权。默认Compose账号用于开发迁移，不代表生产最小权限账号。Compose只在本地/CI MySQL开启 `log_bin_trust_function_creators`，用于让迁移账号创建审计触发器；生产应由独立迁移管理员执行迁移，不要给runtime账号SUPER或DDL权限。
 
 触发器还可阻止开发账号UPDATE/DELETE；不阻止有DDL权限的管理员DROP/TRUNCATE，runtime无DDL权限是前提。降级迁移会删除触发器和新增审计列，属于有损管理操作，不用于日常运行。
 

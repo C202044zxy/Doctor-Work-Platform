@@ -1,6 +1,10 @@
 services:
   mysql:
     image: mysql:8.4
+    # The local/CI migration account creates the append-only audit triggers.
+    # Production should run migrations with a dedicated admin account and use
+    # scripts/audit_permissions.sql for the restricted runtime account.
+    command: ["--log-bin-trust-function-creators=1"]
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-doctor_platform}
       MYSQL_USER: ${MYSQL_USER:-doctor}
