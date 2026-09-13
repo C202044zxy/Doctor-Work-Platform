@@ -125,6 +125,9 @@ def test_audit_metadata_and_failure_isolation(client, monkeypatch, caplog):
             ("patient.view", number, "success"),
         ]
         assert all(row.user_id == 1 and row.ip and row.method for row in logs)
+        # T12 lists the actor by name. It is snapshotted at write time rather
+        # than joined on read, so a later rename cannot rewrite the past.
+        assert all(row.username == "admin" for row in logs)
 
     def broken(**values):
         raise RuntimeError("private database connection details")
