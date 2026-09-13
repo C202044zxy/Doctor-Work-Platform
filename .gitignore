@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 *.pyc
 *.db
+*.db.bak*
 node_modules/
 dist/
 backups/
