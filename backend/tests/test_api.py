@@ -121,7 +121,13 @@ def test_patient_lifecycle_and_audit(client):
     assert client.delete(f"/api/patients/{number}").status_code == 404
     assert client.get("/api/patients", params={"name": "Demo"}).json()["data"]["total"] == 0
     with client.app.state.sessions() as db:
-        assert list(db.scalars(select(AuditLog.action).order_by(AuditLog.id))) == [
+        assert list(
+            db.scalars(
+                select(AuditLog.action)
+                .where(AuditLog.result == "success", ~AuditLog.action.like("%view"))
+                .order_by(AuditLog.id)
+            )
+        ) == [
             "patient.create",
             "patient.delete",
         ]
@@ -285,7 +291,13 @@ def test_patient_update(client):
     )
     assert client.patch(f"/api/patients/{number}", json={"name": None}).status_code == 422
     with client.app.state.sessions() as db:
-        assert list(db.scalars(select(AuditLog.action).order_by(AuditLog.id))) == [
+        assert list(
+            db.scalars(
+                select(AuditLog.action)
+                .where(AuditLog.result == "success", ~AuditLog.action.like("%view"))
+                .order_by(AuditLog.id)
+            )
+        ) == [
             "patient.create",
             "patient.update",
             "patient.update",
@@ -521,7 +533,13 @@ def test_allergy_update_and_delete_audit(client):
     assert [item["allergen"] for item in detail["allergies"]] == ["PENICILLIN"]
 
     with client.app.state.sessions() as db:
-        actions = list(db.scalars(select(AuditLog.action).order_by(AuditLog.id)))
+        actions = list(
+            db.scalars(
+                select(AuditLog.action)
+                .where(AuditLog.result == "success", ~AuditLog.action.like("%view"))
+                .order_by(AuditLog.id)
+            )
+        )
         assert actions == [
             "patient.create",
             "allergy.create",

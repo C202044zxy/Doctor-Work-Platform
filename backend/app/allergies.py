@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Allergy, Patient
+from app.patients import patient_scope
 
 # The five families T14 criterion 3 requires, plus anything a clinic adds later.
 # Codes are the vocabulary the order-validation engine compares against
@@ -30,7 +31,10 @@ def dictionary(db: Session) -> list[dict[str, str]]:
     back to the code itself.
     """
     built_in = {entry["code"] for entry in DICTIONARY}
-    recorded = db.scalars(select(Allergy.allergen).distinct())
+    query = select(Allergy.allergen).join(Patient).where(Patient.deleted_at.is_(None))
+    if "user" in db.info:
+        query = query.where(patient_scope(db.info["user"]))
+    recorded = db.scalars(query.distinct())
     custom = [
         {"code": code, "name": _NAMES.get(code, code)}
         for code in sorted(code for code in recorded if code not in built_in)
@@ -58,6 +62,7 @@ def get_patient_allergens(db: Session, patient_no: str) -> list[Allergy]:
         select(Patient.id).where(
             Patient.patient_no == patient_no,
             Patient.deleted_at.is_(None),
+            patient_scope(db.info["user"]) if "user" in db.info else True,
         )
     )
     if patient_id is None:
