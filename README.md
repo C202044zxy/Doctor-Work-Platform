@@ -1,15 +1,19 @@
 # Doctor Work Platform
 
 A runnable foundation for the school project's doctor workspace: FastAPI, Vue 3,
-SQLAlchemy/Alembic, and a Docker Compose stack with MySQL 8.4 and Redis 7.
-Scope and future clinical workflows are tracked in [project_plan.md](docs/project_plan.md).
+SQLAlchemy/Alembic, SQLite, and Redis 7.
+Scope, task numbering, ownership and status are tracked in
+[docs/01-任务安排.md](docs/01-任务安排.md); what is actually built is in
+[docs/03-实现现状.md](docs/03-实现现状.md); the rest of the doc set is indexed in
+[docs/README.md](docs/README.md).
 Setting the project up for the first time? Follow [docs/onboarding.md](docs/onboarding.md).
 
 ## Prerequisites
 
-Install these once per machine. Do not install Python, MySQL, or Redis: uv downloads and
-manages the Python 3.12 interpreter, and local mode stores data in SQLite with Redis
-disabled.
+Install these once per machine. Do not install Python or Redis: uv downloads and manages
+the Python 3.12 interpreter, and the startup scripts find a Redis server if one is on
+`PATH`, otherwise unpack a portable one into the gitignored `backend/runtime/`. There is
+no database to install at all: the database is a SQLite file, `backend/doctor.db`.
 
 The startup scripts therefore check for uv, Node.js, and Docker, but deliberately not for
 Python: uv resolves the interpreter itself, so a host Python installation is neither
@@ -48,8 +52,8 @@ Clone the repository with git instead of downloading a zip: a zip adds a mark of
 that can make Windows refuse to run `dev.ps1`, and it leaves you without the branch
 history the team works from.
 
-Docker Desktop is optional. It is only needed for the MySQL/Redis stack described under
-Quick start.
+Docker Desktop is optional. It is only needed for the Compose stack described under
+Quick start. Both modes use SQLite; neither installs a database on the host.
 
 ### Tool versions
 
@@ -58,9 +62,9 @@ Quick start.
 | uv | 0.9 or newer (0.12.12 verified) | Also downloads and manages the Python interpreter |
 | Python | 3.12 or newer | Managed by uv; required by `backend/pyproject.toml`. Do not install it separately |
 | Node.js | 22.12 or newer | Required by Vite 7. Version 20.19 works, but 22.12 is the target |
-| Docker Engine | 24 or newer, with Compose v2 | Optional; only for the MySQL/Redis stack |
-| MySQL | 8.4 | Runs in `compose.yaml`; never installed on the host |
-| Redis | 7 | Runs in `compose.yaml`; never installed on the host |
+| Docker Engine | 24 or newer, with Compose v2 | Optional; only for the Compose stack |
+| Redis | 7 | Required by authentication. The startup scripts use a server from `PATH`, or unpack a portable one into `backend/runtime/`; Compose runs `redis:7-alpine` |
+| SQLite | — | No install: it is a file, `backend/doctor.db`. Compose keeps it on the `sqlite_data` volume |
 | Git | any recent version | Clone the repository with git, never from a zip |
 
 ## Quick start
@@ -81,12 +85,17 @@ macOS, Linux, or WSL:
 ./scripts/dev.sh
 ```
 
-Either script installs locked dependencies, applies migrations, seeds departments and
-roles, and starts both servers. It waits for the API to answer before printing the URLs.
-Open http://127.0.0.1:5173; API documentation is at http://127.0.0.1:8000/docs. Run the
-command again to restart; records persist in `backend/doctor.db`. Local mode uses SQLite
-and disables Redis unless `REDIS_URL` is configured in `backend/.env`. Authentication
-requires Redis; use Compose or configure a reachable Redis for authenticated APIs.
+Either script installs locked dependencies, prepares Redis, applies migrations, seeds
+master data and the demo baseline, and starts both servers. It waits for the API to answer
+before printing the URLs. Open http://127.0.0.1:5173; API documentation is at
+http://127.0.0.1:8000/docs. Run the command again to restart; records persist in
+`backend/doctor.db`.
+
+Redis is a hard dependency of the login flow (tickets, verification codes, the JWT
+blacklist, and login rate limiting), so the script makes sure one is running before it
+starts the API. If it finds no `redis-server` on `PATH` it unpacks a portable build into
+`backend/runtime/` (gitignored). When Redis is genuinely unreachable the app still serves
+other endpoints, reporting `redis: "down"` in the health body.
 
 Windows notes:
 
@@ -99,7 +108,7 @@ Windows notes:
 - In Git Bash, prefer `dev.ps1`: `dev.sh` runs there too, but Ctrl+C may leave an
   orphaned `uvicorn` process.
 
-For the MySQL/Redis stack, install Docker with Compose v2 and run:
+For the Compose stack, install Docker with Compose v2 and run:
 
 ```powershell
 .\scripts\dev.ps1 docker
@@ -109,10 +118,11 @@ For the MySQL/Redis stack, install Docker with Compose v2 and run:
 ./scripts/dev.sh docker
 ```
 
-Compose applies the same migrations and seeds automatically. MySQL and Redis use
-persistent named volumes and are accessible only inside the Compose network.
+Compose applies the same migrations and seeds automatically. The SQLite file and Redis use
+persistent named volumes (`sqlite_data`, `redis_data`) and are reachable only inside the
+Compose network. There is no database container.
 The frontend and API use the same local URLs. Stop with Ctrl+C or `docker compose down`;
-normal shutdown preserves the database volumes.
+normal shutdown preserves the volumes.
 
 Extra arguments are forwarded to `docker compose up`, which is how CI starts the stack
 without tying up a terminal:
@@ -132,13 +142,13 @@ and never passes it to Docker.
 
 | Mode | Command | Running services | Data stores | Use it for |
 | ---- | ------- | ---------------- | ----------- | ---------- |
-| local (default) | `.\scripts\dev.ps1` / `./scripts/dev.sh` | FastAPI and the Vite dev server | SQLite, Redis disabled | Day-to-day work, especially frontend, because Vite serves with hot reload |
-| docker | `.\scripts\dev.ps1 docker` / `./scripts/dev.sh docker` | MySQL 8.4, Redis 7, FastAPI, and the built frontend behind Nginx | MySQL and Redis, in named volumes | The full stack: integration, verification, and demonstrations |
+| local (default) | `.\scripts\dev.ps1` / `./scripts/dev.sh` | Redis, FastAPI, and the Vite dev server | SQLite file, Redis | Day-to-day work, especially frontend, because Vite serves with hot reload |
+| docker | `.\scripts\dev.ps1 docker` / `./scripts/dev.sh docker` | Redis 7, FastAPI, and the built frontend behind Nginx | SQLite and Redis, in named volumes | The full stack: integration, verification, and demonstrations |
 
 Local mode is the default so that nobody needs Docker to write code. The full stack named
-in the task acceptance criteria (MySQL + Redis + backend + frontend) is the `docker` mode,
-which serves the frontend as a static production build through Nginx and therefore has no
-hot reload.
+in the task acceptance criteria (Redis + backend + frontend, on SQLite) is the `docker`
+mode, which serves the frontend as a static production build through Nginx and therefore
+has no hot reload.
 
 ### Stopping
 
@@ -146,7 +156,7 @@ hot reload.
   close with it. If a window stays open, close it manually.
 - macOS and Linux: press Ctrl+C; the script kills both servers.
 - Docker mode: press Ctrl+C, or run `docker compose down`. Shutting down normally keeps
-  the MySQL and Redis volumes.
+  the SQLite and Redis volumes.
 
 ## Startup troubleshooting
 
@@ -184,17 +194,20 @@ It does not change your global npm configuration.
   masked values only, such as `138****1234`.
 - Soft-delete patients while retaining their allergy rows; the deletion policy is written
   out under [Patient API](#patient-api-task-t13).
-- Seed two departments and the contract roles `admin`, `senior`, and `junior` idempotently.
+- Seed the three departments (`Information Technology`, `Cardiology`, `Neurology` -- in
+  that order) and the roles `admin`, `senior`, and `junior` idempotently.
 - Check liveness at `/api/health/live` and database/Redis readiness at `/api/health/ready`.
-  Readiness returns HTTP 503 if a configured dependency is unavailable.
+  Readiness returns HTTP 503 if a configured dependency is unavailable. `/health` and
+  `/api/health` are different: they are byte-identical aliases that always return 200 and
+  report dependency state in the body.
 - Inspect and exercise the documented API through FastAPI Swagger.
 
-Owner A's Sprint 1 backend (T01, T02, T05, T10) now includes bcrypt, the two-step
-login ticket/JWT exchange, logout revocation, department patient scope, and temporary
-grants with a minute expiry scan. Patient and allergy APIs require a bearer token.
-The existing frontend session is still a mock: C's T07 must attach the token and restore
-`/api/me`. B's T06 SMTP code sender and the remaining T08/T11 administration/audit APIs
-are separate work. See [Sprint 1 hand-off](docs/sprint1_owner_a.md).
+The authentication backend is complete: bcrypt, the two-step login ticket/JWT exchange,
+logout revocation, department patient scope, temporary grants with a minute expiry scan,
+email signup with activation, and login rate limiting. Patient and allergy APIs require a
+bearer token. The frontend session is real -- it attaches the token and restores `/api/me`
+-- and `PatientListView` is the one business screen talking to the live service. Everything
+else on the frontend is still fabricated; see [docs/03-实现现状.md](docs/03-实现现状.md) §6.
 
 ### Provision an account
 
@@ -202,15 +215,15 @@ Run from `backend/`, after migrations and seed. The password is prompted without
 there are no seeded passwords or automatically created privileged accounts.
 
 ```bash
-uv run python -m app.create_user --username admin_zhang --name "Zhang Wei" --email admin@example.test --title admin --department "General Medicine"
+uv run python -m app.create_user --username admin_zhang --name "Zhang Wei" --email admin@example.test --title admin --department "Information Technology"
 ```
 
-For this workspace, the requested remote MySQL connection is configured in the ignored
-`backend/.env`, using the `doctor` database. The schema is installed through Alembic.
-Configure `REDIS_URL` for the runtime and retain the same `JWT_SECRET` and
-`PATIENT_DATA_KEY` across backend processes. Credentials must not be committed.
+The database is the SQLite file named by `DATABASE_URL` (default `backend/doctor.db`); the
+schema is installed through Alembic. Configure `REDIS_URL` for the runtime and retain the
+same `JWT_SECRET` and `PATIENT_DATA_KEY` across backend processes. Credentials must not be
+committed.
 
-### Patient API (task T13)
+### Patient API
 
 `GET /api/patients` accepts `name`, `patient_no`, repeated `symptom_tags`,
 `admitted_from`, `admitted_to`, `page`, and `size`. Filters combine with AND, with any
@@ -229,52 +242,53 @@ Allergies and audit records remain; the patient disappears from API reads.
 ## Layout
 
 ```text
-backend/app/          Configuration, database models, API, schemas, seed command
+backend/app/          Configuration, database models, API, schemas, seed commands
 backend/migrations/   Versioned Alembic schema migrations
 backend/tests/        API, persistence, validation, and dependency health tests
+backend/start.sh      One-command startup for macOS, Linux, and WSL
+backend/start.ps1     One-command startup for Windows PowerShell
 frontend/src/         Vue patient workspace and styles
-scripts/dev.sh        Local and Docker startup for macOS, Linux, and WSL
-scripts/dev.ps1       Local and Docker startup for Windows PowerShell
+scripts/dev.sh        Thin forwarder to backend/start.sh, plus a docker mode
+scripts/dev.ps1       Thin forwarder to backend/start.ps1, plus a docker mode
 scripts/dev.cmd       Windows wrapper that bypasses the PowerShell execution policy
-scripts/backup.sh     mysqldump or SQLite backup, written into backups/
+scripts/backup.sh     SQLite online-backup snapshot, written into backups/
 scripts/smoke.py      Checks a running stack through the frontend API proxy
-compose.yaml          MySQL, Redis, API, and frontend services
-docs/onboarding.md    Step-by-step fresh-machine walkthrough for a new teammate
+compose.yaml          Redis, API, and frontend services (SQLite on a volume)
+docs/                 The document set; start at docs/README.md
 ```
 
 ## Configuration
 
 Copy `backend/.env.example` to `backend/.env` for local overrides. Compose uses the
 root `.env.example` as a reference: copy it to `.env` to override demo credentials.
-Neither file is committed. Percent-encode special characters in credentials when
-constructing a `DATABASE_URL`. Restart services after configuration changes.
-SMTP delivery and the frontend session integration are still required for an end-to-end login demo.
+Neither file is committed. Restart services after configuration changes.
+
+SMTP is required for the password/email login flow, so an end-to-end login demo needs the
+`SMTP_*` values below. Redis is required too, and the startup scripts arrange it.
 
 ### Environment variables
 
 | Variable | Read by | Default | Purpose |
 | -------- | ------- | ------- | ------- |
-| `DATABASE_URL` | backend | `sqlite:///./doctor.db` | SQLAlchemy connection URL. Compose overrides it with a `mysql+pymysql://` URL. Percent-encode special characters in credentials. |
-| `REDIS_URL` | backend | unset | Redis connection URL. While unset, Redis stays disabled and `/api/health/ready` reports `redis: disabled`. |
-| `JWT_SECRET` | backend/Compose | development-only placeholder | HS256 signing secret; replace outside isolated development. |
-| `SCHEDULER_ENABLED` | backend | `true` | Start the T10 minute expiry job; atomic updates prevent duplicate worker audits. |
-| `PATIENT_DATA_KEY` | backend | `dev-only-insecure-patient-data-key` | Passphrase hashed into the AES-256 key for the patient phone and ID columns (T13). Every process that reads the table must use the same value; change it outside a local demo. |
-| `MYSQL_DATABASE` | Compose | `doctor_platform` | Database created by the MySQL service. |
-| `MYSQL_USER` | Compose | `doctor` | Application database user. |
-| `MYSQL_PASSWORD` | Compose | `doctor_local_password` | Application database password. |
-| `MYSQL_ROOT_PASSWORD` | Compose | `root_local_password` | MySQL root password. |
+| `DATABASE_URL` | backend | `sqlite:///./doctor.db` | SQLAlchemy connection URL. Compose overrides it with `sqlite:////data/doctor.db`, backed by the `sqlite_data` volume. |
+| `REDIS_URL` | backend | unset | Redis connection URL. While unset, Redis stays disabled and `/health` reports `redis: "disabled"`. |
+| `JWT_SECRET` | backend/Compose | unset | HS256 signing secret; must be set, and is one of the values that yields 503 when missing. Replace outside isolated development. |
+| `PATIENT_DATA_KEY` | backend | `dev-only-insecure-patient-data-key` | Passphrase hashed into the AES-256 key for the patient phone and ID columns. Every process that reads the table must use the same value; change it outside a local demo. |
+| `SCHEDULER_ENABLED` | backend | `true` | Start the minute-expiry job that revokes lapsed temporary grants; atomic updates prevent duplicate worker audits. |
+| `DEMO_PASSWORD` | `app.seed_demo` | `Demo@2026` | Shared password for the four demo accounts. Local demo data only. |
 | `npm_config_registry` | dev scripts | `https://registry.npmjs.org` | Registry used by `npm ci`. |
 | `HTTPS_PROXY` and `HTTP_PROXY` | dev scripts | unset | Forwarded to `npm ci` as `--proxy` and `--https-proxy`. |
 | `SMOKE_BASE_URL` | `scripts/smoke.py` | `http://127.0.0.1:5173` | Base URL the smoke test calls. |
 | `SMOKE_ACCESS_TOKEN` | smoke script | unset | Required for authenticated patient smoke checks; CI provisions a disposable identity inside Compose. |
-| `SMOKE_REQUIRE_REDIS` | `scripts/smoke.py` | `1` | Set it to `0` when Redis is disabled, which is the case in local mode. |
-| `BACKUP_DIR` | `scripts/backup.sh` | `backups` | Directory that receives database dumps. |
+| `SMOKE_REQUIRE_REDIS` | `scripts/smoke.py` | `1` | Set it to `0` when running against a deployment with Redis disabled. |
+| `BACKUP_DIR` | `scripts/backup.sh` | `backups` | Directory that receives database snapshots. |
 | `BACKUP_KEEP` | `scripts/backup.sh` | `7` | How many of the newest archives to keep. |
 
 ## Deployment
 
-Minimum single-host deployment. Configure Redis and private JWT/encryption secrets;
-complete T06/T07 before treating the browser login flow as integrated.
+Minimum single-host deployment. Configure Redis, `JWT_SECRET`, and `PATIENT_DATA_KEY`;
+SMTP for the email login channel. **Do not expose the face login route.** See
+`CLAUDE.md` for the reason.
 
 ### Backend under uvicorn
 
@@ -285,6 +299,8 @@ uv sync --frozen --no-dev
 uv run alembic upgrade head
 uv run python -m app.seed
 ```
+
+Add `uv run python -m app.seed_demo` only if you want the demo accounts and patients.
 
 Then run uvicorn on the loopback interface so that only the reverse proxy is publicly
 reachable:
@@ -328,28 +344,22 @@ without it every entry shows the proxy address instead.
 
 ### Backups
 
-`scripts/backup.sh` dumps the MySQL database, or copies the SQLite file, into `backups/`,
-then deletes everything beyond the newest `BACKUP_KEEP` archives (7 by default).
+`scripts/backup.sh` snapshots the SQLite database into `backups/`, then deletes everything
+beyond the newest `BACKUP_KEEP` archives (7 by default). Both modes use SQLite's online
+backup API rather than copying the file, so a snapshot taken while the API is writing is
+still consistent.
 
 ```bash
-./scripts/backup.sh          # docker mode: mysqldump inside the MySQL container
-./scripts/backup.sh sqlite   # local mode: copy backend/doctor.db
+./scripts/backup.sh          # docker mode: snapshot inside the backend container
+./scripts/backup.sh sqlite   # local mode: snapshot backend/doctor.db (also `local`)
 ```
 
-Run it from Git Bash or WSL on Windows. Without either, the same dump from PowerShell:
+Run it from Git Bash or WSL on Windows. The snapshot lands in `backups/` as
+`doctor-YYYYMMDD-HHMMSS.db`. Restore by stopping the stack, replacing `backend/doctor.db`
+with the snapshot, and restarting.
 
-```powershell
-docker compose exec -T mysql sh -c 'exec mysqldump --single-transaction --databases "$MYSQL_DATABASE" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD"' > backups\mysql.sql
-```
-
-Restore a dump with:
-
-```bash
-docker compose exec -T mysql sh -c 'exec mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD"' < backups/mysql-YYYYMMDD-HHMMSS.sql
-```
-
-The Compose stack also keeps MySQL and Redis data in named volumes, so stopping the stack
-is not a backup: run this script before wiping volumes or reinstalling.
+The Compose stack also keeps the SQLite file and Redis data in named volumes, so stopping
+the stack is not a backup: run this script before wiping volumes or reinstalling.
 
 ## Development and verification
 
@@ -367,9 +377,9 @@ uv run python -m app.seed
 
 For schema changes, update models, run `uv run alembic revision --autogenerate -m
 "describe change"`, review the migration, then apply it. Tests migrate isolated
-SQLite databases; Redis readiness uses a test double. They do not validate MySQL
-server behavior. The CI jobs described under [What CI verifies](#what-ci-verifies)
-separately exercise real MySQL and Redis.
+SQLite databases and use a Redis test double, so they never touch a real Redis or a
+real server process. The CI jobs described under [What CI verifies](#what-ci-verifies)
+separately exercise real Redis behavior.
 
 Frontend commands run from `frontend/`:
 
@@ -404,12 +414,11 @@ red run is the first sign that the one-command startup broke.
 
 | Job | Runner | What it proves |
 | --- | ------ | -------------- |
-| `checks` | ubuntu-latest | Backend tests and Ruff, frontend production build, then `scripts/dev.sh docker` starts MySQL, Redis, backend, and frontend; `scripts/smoke.py` exercises the API through the frontend proxy; `scripts/backup.sh docker` writes a MySQL dump |
-| `windows-one-command` | windows-latest | One command, `scripts\dev.ps1`, on a clean checkout with only uv and Node installed: it installs dependencies, migrates, seeds, and serves both servers; startup/readiness and refusal of anonymous patient access are checked through the Vite proxy |
+| `checks` | ubuntu-latest | Backend tests and Ruff, frontend production build, then `scripts/dev.sh docker` starts Redis, backend, and frontend; `scripts/smoke.py` exercises the API through the frontend proxy; the real SQLite/Redis security behavior is verified; `scripts/backup.sh docker` snapshots the SQLite database |
+| `windows-one-command` | windows-latest | One command, `scripts\dev.ps1`, on a clean checkout with only uv and Node installed: it installs dependencies, prepares Redis, migrates, seeds, and serves both servers; startup/readiness and refusal of anonymous patient access are checked through the Vite proxy |
 
-The Windows job runs local mode, so it sets `SMOKE_REQUIRE_REDIS=0`; local mode disables
-Redis by design. Read the per-step durations in the Actions log when you need evidence for
-the ten-minute first-run budget.
+The Windows job runs local mode. Read the per-step durations in the Actions log when you
+need evidence for the ten-minute first-run budget.
 
 To reproduce the missing-dependency scenario locally, run a startup script on a machine
 without Docker and check that it prints the install hint and exits non-zero:
@@ -418,7 +427,7 @@ without Docker and check that it prints the install hint and exits non-zero:
 bash scripts/dev.sh docker; echo "exit=$?"
 ```
 
-### Face login (M1 / T05, T07)
+### Face login (M1)
 
 Enter an existing account username, select **Sign in with face**, allow camera
 access, then select **Capture photo and sign in**. The browser captures a JPEG
@@ -457,7 +466,7 @@ needed. Redis is required for session revocation and email verification. SMTP
 uses a 10-second timeout; delivery is limited to one attempt per minute and 20
 per UTC day per account. SMTP failures consume an attempt.
 
-### Email signup (M1, T05/T06/T08 extension)
+### Email signup (M1 extension)
 
 Choose **Create an account with email** on the login page. Enter a username, full
 name, email, password (at least eight characters, at most 72 UTF-8 bytes), and an
@@ -470,7 +479,7 @@ check staff identity and confirm the department before activating it locally:
 
 ```sh
 cd backend
-uv run python -m app.activate_user --username new_doctor --department "General Medicine"
+uv run python -m app.activate_user --username new_doctor --department "Cardiology"
 ```
 
 After activation, use the existing username/password and email-code sign-in flow.

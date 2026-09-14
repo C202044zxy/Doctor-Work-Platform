@@ -51,7 +51,9 @@ uv --version
 node --version
 ```
 
-`node --version` must report v22.12 or newer. Do not install Python, MySQL, or Redis.
+`node --version` must report v22.12 or newer. Do not install Python or Redis; the startup
+script unpacks a Redis binary into `backend/runtime/` when it needs one. There is no MySQL
+any more — the database is a SQLite file.
 
 ## 3. First run: local mode
 
@@ -74,27 +76,27 @@ Check that it works:
 
 - http://127.0.0.1:8000/docs shows the API documentation.
 - http://127.0.0.1:5173 shows the patient workspace and its Department dropdown lists
-  General Medicine and Cardiology. This one check proves the frontend, the API proxy,
-  FastAPI, the database migration, and the seed data all work.
+  Information Technology, Cardiology, and Neurology. This one check proves the frontend,
+  the API proxy, FastAPI, the database migration, and the seed data all work.
 - http://127.0.0.1:8000/api/health/ready reports
-  `{"status":"ok","checks":{"database":"ok","redis":"disabled"}}`. Redis is disabled in
-  local mode, which is expected.
+  `{"status":"ok","checks":{"db":"ok","redis":"disabled"}}`. Redis is disabled in local
+  mode, which is expected.
 
-> **Two different health checks, don't confuse them.** The one above is the legacy
-> readiness probe; it reports its own `{"status", "checks"}` shape and returns a non-200
-> when a dependency is down, because CI's `smoke.py` depends on it.
+> **Two different health checks, don't confuse them.** The one above is the readiness
+> probe; it reports its own `{"status", "checks"}` shape and **returns 503 when a
+> dependency is down**, because CI's `smoke.py` depends on that.
 >
 > The check the API contract defines is **`GET /health`** (with `GET /api/health` as the
 > same body under the `/api` prefix): it returns the standard envelope
 > `{code: 0, data: {db, redis}}`, **always with status 200** — a dependency being down
-> only flips `db`/`redis` to `"down"`, it never produces a 5xx. See
-> [`API-索引.md`](api/API-索引.md) §2.1. `live`/`ready` are not part of the contract and
-> are not what the sign-off scenario calls.
+> only flips `db`/`redis` to `"down"`, it never produces a 5xx. Note the key is **`db`**,
+> not `database`. See [`API-索引.md`](api/API-索引.md) §2.1.
 
 ## 4. Full stack: docker mode
 
-Needed for MySQL and Redis, which is how the project is verified and demonstrated.
-Install Docker Desktop with Compose v2 first.
+Needed for Redis, which is how the project is verified and demonstrated. Install Docker
+Desktop with Compose v2 first. (The database is still a SQLite file on a volume — there
+is no database container.)
 
 ```powershell
 .\scripts\dev.ps1 docker

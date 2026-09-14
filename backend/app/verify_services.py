@@ -1,4 +1,4 @@
-"""Run against disposable CI MySQL/Redis; no real SMTP is required."""
+"""Run against a disposable SQLite/Redis stack; no real SMTP is required."""
 
 import secrets
 
@@ -15,8 +15,10 @@ from app.otp import reserve_send
 
 def main():
     settings = Settings()
-    if not settings.redis_url or not settings.database_url.startswith("mysql"):
-        raise RuntimeError("Requires migrated MySQL and real Redis")
+    # The audit append-only check below relies on the triggers the migration
+    # installs for both SQLite and MySQL, so either engine works here.
+    if not settings.redis_url:
+        raise RuntimeError("Requires a real Redis: set REDIS_URL")
     cache = Redis.from_url(settings.redis_url, socket_timeout=3)
     engine = make_engine(settings.database_url)
     uid = secrets.randbelow(1_000_000_000) + 1_000_000_000
@@ -44,7 +46,7 @@ def main():
             else:
                 raise AssertionError("Audit mutation was accepted")
         print(
-            "Real MySQL/Redis checks passed: audit mutation rejected, send reservation and OTP TTL verified"
+            "Real SQLite/Redis checks passed: audit mutation rejected, send reservation and OTP TTL verified"
         )
     finally:
         keys = [ticket_key(ticket), code_key(uid), f"auth:send:cooldown:{uid}"]

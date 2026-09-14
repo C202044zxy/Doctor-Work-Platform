@@ -148,7 +148,7 @@ class CurrentUser(BaseModel):
     name: str = Field(..., examples=["Zhang Wei"])
     title: Role = Field(
         ...,
-        description="The caller's role. Named `title` because that is the field the JWT payload\ncarries and the field T05 scenario S1 asserts on `/api/me`\n(`department=信息科`, `title=admin`). Do not rename it to `role` on the wire.\n",
+        description="The caller's role. Named `title` because that is the field the JWT payload\ncarries and the field T05 scenario S1 asserts on `/api/me`\n(`department=Information Technology`, `title=admin`). Do not rename it to `role`\non the wire.\n",
     )
     department: str = Field(..., examples=["Information Technology"])
 

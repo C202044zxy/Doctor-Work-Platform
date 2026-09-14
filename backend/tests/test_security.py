@@ -46,7 +46,7 @@ def create_patient(client):
     response = client.post(
         "/api/patients",
         headers=headers(client),
-        json={"name": "Audit Example", "gender": "male", "department": "General Medicine"},
+        json={"name": "Audit Example", "gender": "male", "department": "Information Technology"},
     )
     assert response.status_code == 200
     return response.json()["data"]["patient_no"]

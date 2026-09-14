@@ -8,3 +8,7 @@ __pycache__/
 node_modules/
 dist/
 backups/
+
+# A Redis unpacked by backend/start.* when none was installed. Binaries must
+# never be committed: the startup script re-downloads them on demand.
+backend/runtime/
