@@ -25,7 +25,7 @@ jobs:
         working-directory: backend
       - run: npm ci && npm run build
         working-directory: frontend
-      # T04 acceptance S1: start MySQL, Redis, backend, and frontend with the
+      # T04 acceptance S1: start SQLite, Redis, backend, and frontend with the
       # documented one-command script, exactly as a newcomer would.
       - name: Start the full stack with scripts/dev.sh docker
         run: bash scripts/dev.sh docker --detach --wait --wait-timeout 300
@@ -34,9 +34,9 @@ jobs:
           SMOKE_ACCESS_TOKEN=$(docker compose exec -T backend .venv/bin/python -m app.smoke_identity)
           export SMOKE_ACCESS_TOKEN
           python3 scripts/smoke.py
-      - name: Verify real MySQL and Redis security behavior
+      - name: Verify real SQLite and Redis security behavior
         run: docker compose exec -T backend .venv/bin/python -m app.verify_services
-      - name: Verify scripts/backup.sh dumps the MySQL database
+      - name: Verify scripts/backup.sh snapshots the SQLite database
         run: bash scripts/backup.sh docker
       - if: failure()
         run: docker compose logs

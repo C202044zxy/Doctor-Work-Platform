@@ -236,6 +236,9 @@ def create_app(settings: Settings | None = None):
     @app.get("/health", response_model=auth_schemas.HealthResponse)
     @app.get("/api/health", response_model=auth_schemas.HealthResponse)
     def health():
+        # The key is "db", not "database": HealthResponse in docs/api/openapi.yaml
+        # is the source of truth, and backend/app/auth_schemas.py is generated
+        # from it by scripts/generate_auth_schemas.py.
         checks = {"db": "ok", "redis": "disabled"}
         try:
             with engine.connect() as connection:
@@ -269,27 +272,28 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/health/ready")
     def ready():
-        checks = {"database": "ok", "redis": "disabled"}
+        # Same key and vocabulary as /health, so one consumer can read both.
+        checks = {"db": "ok", "redis": "disabled"}
         try:
             with engine.connect() as connection:
                 connection.execute(text("SELECT 1"))
                 connection.execute(select(Department.id).limit(1))
         except SQLAlchemyError:
-            checks["database"] = "unavailable"
+            checks["db"] = "down"
         if app.state.cache is not None:
             try:
                 app.state.cache.ping()
                 checks["redis"] = "ok"
             except RedisError:
-                checks["redis"] = "unavailable"
-        available = "unavailable" not in checks.values()
+                checks["redis"] = "down"
+        available = "down" not in checks.values()
         return JSONResponse(
             status_code=200 if available else 503,
             content={
                 "code": 0 if available else 503,
                 "message": "ok" if available else "Dependencies unavailable",
                 "data": checks,
-                "status": "ok" if available else "unavailable",
+                "status": "ok" if available else "down",
                 "checks": checks,
             },
         )

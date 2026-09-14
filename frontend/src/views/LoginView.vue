@@ -262,7 +262,7 @@ async function resend() {
             </label>
             <label class="field">
               <span class="field-label">Department</span>
-              <el-input v-model="department" size="large" placeholder="e.g. General Medicine" maxlength="100" :disabled="busy" required />
+              <el-input v-model="department" size="large" placeholder="e.g. Cardiology" maxlength="100" :disabled="busy" required />
             </label>
           </template>
           <label class="field">

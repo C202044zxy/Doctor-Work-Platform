@@ -167,7 +167,7 @@ def patient(client):
     response = client.post(
         "/api/patients",
         headers=headers(client),
-        json={"name": "Synthetic", "gender": "unknown", "department": "General Medicine"},
+        json={"name": "Synthetic", "gender": "unknown", "department": "Information Technology"},
     )
     assert response.status_code == 200, response.text
     return response.json()["data"]["patient_no"]
@@ -298,7 +298,7 @@ def test_patient_allergy_scope_and_senior_grant_boundaries(client):
             json={
                 "name": "Outside",
                 "gender": "unknown",
-                "department": "General Medicine",
+                "department": "Information Technology",
             },
         ).status_code
         == 403
