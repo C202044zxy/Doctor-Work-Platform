@@ -3,23 +3,104 @@ import { computed, nextTick, onUnmounted, ref, useTemplateRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { signIn } from '../session'
 
-import { authentication } from '../api/client'
-import { capturePhoto, openCamera, stopCamera } from '../face-camera'
+import { USE_MOCK_AUTH, authentication } from '../api/client'
+import CameraCapture from '../components/CameraCapture.vue'
+import MockBadge from '../components/MockBadge.vue'
+import SmsCodeInput from '../components/SmsCodeInput.vue'
 
-const CODE_TTL_SECONDS = 300 // five minutes, matching the planned Redis expiry
+// Two different clocks, and conflating them was the bug: the *code* lives for
+// five minutes (the Redis TTL), but you may only ask for a *new* one once every
+// sixty. The contract states both — "TTL of 300 seconds" and "One send per
+// account per 60 seconds".
+const CODE_TTL_SECONDS = 300
+const SEND_COOLDOWN_SECONDS = 60
 
 const route = useRoute()
 const router = useRouter()
 
-const step = ref('credentials')
+// The page is two steps, and the order carries the meaning: credentials first,
+// then one of three ways to prove the second factor. The channel is a choice of
+// *how* to verify an already-password-checked identity, so it cannot sit beside
+// the password as a peer entry point. Plan M1 §3.2 and S2-05 name the three —
+// `email` / `sms` / `face`, 三选一 — and M1-08 makes a failure on any of them
+// count against the same lockout counter.
+const step = ref('credentials') // 'credentials' | 'choose' | 'code'
+const channel = ref('email') // 'email' | 'sms' | 'face'
+
+const channels = [
+  { value: 'email', label: 'Email code' },
+  { value: 'sms', label: 'SMS code' },
+  { value: 'face', label: 'Face' },
+]
+
 const registering = ref(false)
 const name = ref('')
 const email = ref('')
 const department = ref('')
 const notice = ref('')
 
+const username = ref('')
+const ticket = ref('')
+const password = ref('')
+const code = ref('')
+const error = ref('')
+const busy = ref(false)
+const codeInput = useTemplateRef('codeInput')
+const photo = ref(null)
+const faceBusy = ref(false)
+
+// Picking a channel must only pick it. Sending is a separate, deliberate press,
+// so that the button — and the wait it reports — is something the user can see
+// rather than a side effect of choosing where to look.
+const codeSent = ref(false)
+const cooldownLeft = ref(0) // gates "Send code"; the server's 60s window
+const expiresLeft = ref(0) // the code's own five minutes; display only
+let timer = null
+
+const heading = computed(() => {
+  if (step.value === 'choose') {
+    if (channel.value === 'sms') return 'Verify by SMS'
+    if (channel.value === 'face') return 'Verify with your face'
+    return 'Verify by email'
+  }
+  if (step.value === 'code') return 'Check your email'
+  return registering.value ? 'Create an account' : 'Sign in'
+})
+
+const expiryCountdown = computed(() => {
+  const minutes = Math.floor(expiresLeft.value / 60)
+  return `${minutes}:${String(expiresLeft.value % 60).padStart(2, '0')}`
+})
+
+onUnmounted(() => clearInterval(timer))
+
+function tick() {
+  if (cooldownLeft.value > 0) cooldownLeft.value -= 1
+  if (expiresLeft.value > 0) expiresLeft.value -= 1
+  if (cooldownLeft.value <= 0 && expiresLeft.value <= 0) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+function ensureTimer() {
+  if (timer === null) timer = setInterval(tick, 1000)
+}
+
+function startClocks() {
+  cooldownLeft.value = SEND_COOLDOWN_SECONDS
+  expiresLeft.value = CODE_TTL_SECONDS
+  ensureTimer()
+}
+
+function stopClocks() {
+  clearInterval(timer)
+  timer = null
+  cooldownLeft.value = 0
+  expiresLeft.value = 0
+}
+
 function toggleSignup() {
-  closeCamera()
   useAnotherAccount()
   registering.value = !registering.value
   password.value = ''
@@ -32,76 +113,18 @@ async function requestSignup() {
     name: name.value.trim(), email: email.value.trim(), department: department.value.trim(),
   })
 }
-const username = ref('')
-const ticket = ref('')
-const cameraOpen = ref(false)
-const cameraReady = ref(false)
-const cameraVideo = useTemplateRef('cameraVideo')
-let cameraStream = null
-let disposed = false
-const password = ref('')
-const code = ref('')
-const error = ref('')
-const busy = ref(false)
-const secondsLeft = ref(0)
-const codeInput = useTemplateRef('codeInput')
 
-let timer = null
-
-const countdown = computed(() => {
-  const minutes = Math.floor(secondsLeft.value / 60)
-  const seconds = String(secondsLeft.value % 60).padStart(2, '0')
-  return `${minutes}:${seconds}`
-})
-
-onUnmounted(() => {
-  disposed = true
-  clearInterval(timer)
-  closeCamera()
-})
-
-function closeCamera() {
-  stopCamera(cameraStream)
-  cameraStream = null
-  cameraOpen.value = false
-  cameraReady.value = false
+function submit() {
+  if (step.value === 'credentials') return submitCredentials()
+  if (step.value === 'code') return submitCode()
+  if (channel.value === 'email' && codeSent.value) return submitCode()
 }
 
-async function startCamera() {
-  error.value = ''
-  if (!username.value.trim()) {
-    error.value = 'Enter your username.'
-    return
-  }
-  busy.value = true
-  try {
-    const stream = await openCamera()
-    if (disposed) { stopCamera(stream); return }
-    cameraStream = stream
-    cameraOpen.value = true
-    await nextTick()
-    cameraVideo.value.srcObject = stream
-    await cameraVideo.value.play()
-  } catch (err) {
-    closeCamera()
-    error.value = err.message
-  } finally { busy.value = false }
-}
-
-function startCountdown() {
-  secondsLeft.value = CODE_TTL_SECONDS
-  clearInterval(timer)
-  timer = setInterval(() => {
-    if (secondsLeft.value <= 0) {
-      clearInterval(timer)
-      return
-    }
-    secondsLeft.value -= 1
-  }, 1000)
-}
-
+// Step 1 only establishes *who* you are. It no longer sends anything: which code
+// goes out is decided by the press in step 2, and mailing a code the user has not
+// asked for yet would be a send against their daily cap for a path they may not
+// take.
 async function submitCredentials() {
-  closeCamera()
   error.value = ''
   if (!username.value.trim()) {
     error.value = 'Enter your username.'
@@ -114,15 +137,68 @@ async function submitCredentials() {
 
   busy.value = true
   try {
-    const result = registering.value
-      ? await requestSignup()
-      : await authentication.login(username.value.trim(), password.value)
-    ticket.value = result.ticket
-    step.value = 'code'
-    if (!registering.value) await authentication.sendCode(ticket.value)
-    startCountdown()
+    if (registering.value) {
+      // Signup has one channel by definition — there is no account to match a
+      // face against yet — so it skips the chooser.
+      const result = await requestSignup()
+      ticket.value = result.ticket
+      step.value = 'code'
+      startClocks()
+      await nextTick()
+      codeInput.value?.focus()
+    } else {
+      const result = await authentication.login(username.value.trim(), password.value)
+      ticket.value = result.ticket
+      channel.value = 'email'
+      step.value = 'choose'
+    }
+  } catch (err) { error.value = err.message }
+  finally { busy.value = false }
+}
+
+function chooseChannel(value) {
+  if (busy.value || faceBusy.value) return
+  channel.value = value
+  error.value = ''
+  notice.value = ''
+  // A photo belongs to one attempt; switching away must not leave it behind as
+  // "already captured".
+  photo.value = null
+}
+
+async function sendEmailCode() {
+  if (cooldownLeft.value > 0 || busy.value) return
+  error.value = ''
+  busy.value = true
+  try {
+    await authentication.sendCode(ticket.value)
+    codeSent.value = true
+    startClocks()
     await nextTick()
     codeInput.value?.focus()
+  } catch (err) {
+    error.value = err.message
+    // The server refuses a repeat inside its own window and names the remaining
+    // seconds ("Please retry in about 45 seconds"). Mirror that onto the button
+    // so the wait is visible instead of the button reading as broken.
+    const wait = /(\d+)\s*second/i.exec(err.message ?? '')
+    if (wait) {
+      cooldownLeft.value = Number(wait[1])
+      ensureTimer()
+    }
+  } finally { busy.value = false }
+}
+
+// Signup has no ticket to re-send against — the account does not exist yet — so
+// asking again means repeating the signup call, which mails a fresh code.
+async function resendSignup() {
+  if (cooldownLeft.value > 0 || busy.value) return
+  error.value = ''
+  busy.value = true
+  try {
+    const result = await requestSignup()
+    ticket.value = result.ticket
+    startClocks()
   } catch (err) { error.value = err.message }
   finally { busy.value = false }
 }
@@ -153,41 +229,58 @@ async function submitCode() {
   finally { busy.value = false }
 }
 
-async function faceLogin() {
-  error.value = ''
-  busy.value = true
-  try {
-    const photo = capturePhoto(cameraVideo.value)
-    const data = await authentication.faceLogin(username.value.trim(), photo)
-    closeCamera()
+// The SMS panel reports its own errors, so the only thing left here is what to do
+// with a success. See the same note on the face channel below.
+function handleSmsSuccess(data) {
+  notice.value = ''
+  if (data?.access_token) {
     finish(data)
+    return
   }
-  catch (err) { error.value = err.message }
-  finally { busy.value = false }
+  // No session came back. In the mock that is by design — it cannot mint a JWT,
+  // and pretending otherwise would leave the user inside a shell where every
+  // request 401s (§1.1 rule 3). Once `/api/auth/sms/*` lands, a response that is
+  // not a token means the shape changed, and saying so beats a silent loop.
+  notice.value = 'Simulated step reached the end of the flow. No session was issued: the SMS endpoints are still being built.'
+}
+
+function handleCaptured(blob) {
+  photo.value = blob
+  error.value = ''
+}
+
+// §4.3.1 ② — the photo is matched against the account named in step 1, so the
+// username comes from there rather than being asked for again. `faceVerify` runs
+// the dHash comparison (§2 冲突 1 方案 A) in the mock, which means "a different
+// face is refused" is a real check and not a constant.
+async function submitFace() {
+  error.value = ''
+  if (!photo.value) {
+    error.value = 'Take a photo first.'
+    return
+  }
+  faceBusy.value = true
+  try {
+    const data = await authentication.faceVerify(username.value.trim(), photo.value)
+    notice.value = ''
+    if (data?.simulated) {
+      notice.value = 'Simulated step reached the end of the flow. No session was issued: the face endpoint is still being built.'
+      return
+    }
+    finish(data)
+  } catch (err) { error.value = err.message }
+  finally { faceBusy.value = false }
 }
 
 function useAnotherAccount() {
-  clearInterval(timer)
-  secondsLeft.value = 0
+  stopClocks()
   code.value = ''
+  codeSent.value = false
   error.value = ''
+  notice.value = ''
+  photo.value = null
+  channel.value = 'email'
   step.value = 'credentials'
-}
-
-async function resend() {
-  code.value = ''
-  error.value = ''
-  busy.value = true
-  try {
-    if (registering.value) {
-      const result = await requestSignup()
-      ticket.value = result.ticket
-    } else {
-      await authentication.sendCode(ticket.value)
-    }
-    startCountdown()
-  } catch (err) { error.value = err.message }
-  finally { busy.value = false }
 }
 </script>
 
@@ -219,7 +312,7 @@ async function resend() {
         <ul class="pitch-points">
           <li>
             <strong>Two-factor sign-in</strong>
-            Password plus a one-time code sent by email.
+            Your password, then a code by email or SMS, or a face match.
           </li>
           <li>
             <strong>Scoped access</strong>
@@ -236,20 +329,33 @@ async function resend() {
     </section>
 
     <section class="form-side">
-      <form class="form" @submit.prevent="step === 'credentials' ? submitCredentials() : submitCode()">
-        <h2 class="form-title">
-          {{ step === 'credentials' ? (registering ? 'Create an account' : 'Sign in') : 'Check your email' }}
-        </h2>
+      <form class="form" @submit.prevent="submit">
+        <div class="form-head">
+          <h2 class="form-title">
+            {{ heading }}
+          </h2>
+          <MockBadge />
+        </div>
         <p class="form-lede">
           <template v-if="step === 'credentials'">
             {{ registering ? 'Verify your email, then ask an administrator to activate your staff account.' : 'Use your hospital account.' }}
           </template>
-          <template v-else>
+          <template v-else-if="step === 'code'">
             Enter the code sent to your account’s registered email address.
+          </template>
+          <template v-else-if="channel === 'sms'">
+            Enter the code sent to your registered mobile number.
+          </template>
+          <template v-else-if="channel === 'face'">
+            Look at the camera to confirm it's you.
+          </template>
+          <template v-else>
+            We'll email a 6-digit code to your account’s registered address.
           </template>
         </p>
 
-        <p v-if="notice" role="status">{{ notice }}</p>
+        <p v-if="notice" class="form-notice" role="status">{{ notice }}</p>
+
         <template v-if="step === 'credentials'">
           <template v-if="registering">
             <label class="field">
@@ -294,7 +400,94 @@ async function resend() {
           </label>
         </template>
 
-        <template v-else>
+        <template v-else-if="step === 'choose'">
+          <div class="methods" role="group" aria-label="Verification method">
+            <button
+              v-for="option in channels"
+              :key="option.value"
+              type="button"
+              class="method"
+              :class="{ active: channel === option.value }"
+              :aria-pressed="channel === option.value"
+              :disabled="busy || faceBusy"
+              @click="chooseChannel(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+
+          <div v-if="channel === 'email'" class="panel">
+            <el-button
+              type="primary"
+              size="large"
+              class="submit"
+              :loading="busy"
+              :disabled="cooldownLeft > 0 || busy"
+              @click="sendEmailCode"
+            >
+              {{ codeSent ? 'Send a new code' : 'Send verification code' }}
+            </el-button>
+            <p v-if="cooldownLeft > 0" class="cooldown" role="status">
+              Wait <span class="data">{{ cooldownLeft }}s</span> before requesting another code.
+            </p>
+          </div>
+
+          <SmsCodeInput
+            v-else-if="channel === 'sms'"
+            scene="login"
+            @success="handleSmsSuccess"
+          />
+
+          <div v-else class="panel">
+            <CameraCapture purpose="verify" :busy="faceBusy" @captured="handleCaptured" />
+            <el-button
+              v-if="photo"
+              type="primary"
+              class="submit"
+              :loading="faceBusy"
+              :disabled="faceBusy"
+              @click="submitFace"
+            >
+              Verify and sign in
+            </el-button>
+          </div>
+
+          <template v-if="channel === 'email' && codeSent">
+            <label class="field">
+              <span class="field-label">6-digit code</span>
+              <el-input
+                ref="codeInput"
+                v-model="code"
+                size="large"
+                class="code-input"
+                inputmode="numeric"
+                maxlength="6"
+                autocomplete="one-time-code"
+                placeholder="000000"
+                :disabled="busy"
+              />
+            </label>
+
+            <p class="expiry">
+              <template v-if="expiresLeft > 0">
+                Code expires in <span class="data">{{ expiryCountdown }}</span>
+              </template>
+              <template v-else> The code has expired. </template>
+            </p>
+
+            <el-button
+              type="primary"
+              size="large"
+              class="submit"
+              :loading="busy"
+              @click="submitCode"
+            >
+              Verify and sign in
+            </el-button>
+          </template>
+        </template>
+
+        <template v-else-if="step === 'code'">
           <label class="field">
             <span class="field-label">6-digit code</span>
             <el-input
@@ -311,24 +504,33 @@ async function resend() {
           </label>
 
           <p class="expiry">
-            <template v-if="secondsLeft > 0">
-              Code expires in <span class="data">{{ countdown }}</span>
+            <template v-if="expiresLeft > 0">
+              Code expires in <span class="data">{{ expiryCountdown }}</span>
             </template>
             <template v-else> The code has expired. </template>
-            <button
-              type="button"
-              class="resend"
-              :disabled="secondsLeft > 0 || busy"
-              @click="resend"
+          </p>
+
+          <div class="panel">
+            <el-button
+              type="primary"
+              size="large"
+              class="submit"
+              :loading="busy"
+              :disabled="cooldownLeft > 0 || busy"
+              @click="resendSignup"
             >
               Send a new code
-            </button>
-          </p>
+            </el-button>
+            <p v-if="cooldownLeft > 0" class="cooldown" role="status">
+              Wait <span class="data">{{ cooldownLeft }}s</span> before requesting another code.
+            </p>
+          </div>
         </template>
 
         <p v-if="error" class="form-error" role="alert">{{ error }}</p>
 
         <el-button
+          v-if="step === 'credentials' || step === 'code'"
           type="primary"
           size="large"
           native-type="submit"
@@ -338,29 +540,29 @@ async function resend() {
           {{ step === 'credentials' ? 'Continue' : (registering ? 'Verify email and create account' : 'Verify and sign in') }}
         </el-button>
 
+        <p v-if="step === 'choose'" class="back">
+          <button type="button" class="resend" :disabled="busy || faceBusy" @click="useAnotherAccount">
+            Use a different account
+          </button>
+        </p>
+
         <p v-if="step === 'code'" class="back">
           <button type="button" class="resend" :disabled="busy" @click="useAnotherAccount">
             Use a different account
           </button>
         </p>
 
-        <p v-if="step === 'credentials'" class="back">
+        <p v-if="step === 'credentials' && !registering" class="back">
           <button type="button" class="resend" :disabled="busy" @click="toggleSignup">
-            {{ registering ? 'Already have an account? Sign in' : 'Create an account with email' }}
+            Create an account with email
           </button>
         </p>
-        <div v-if="step === 'credentials' && !registering" class="back">
-          <el-button v-if="!cameraOpen" :disabled="busy" @click="startCamera">Sign in with face</el-button>
-          <template v-else>
-            <video ref="cameraVideo" class="camera-preview" autoplay muted playsinline aria-label="Camera preview" @loadeddata="cameraReady = true" />
-            <p>Look at the camera, then capture your photo to sign in as {{ username }}.</p>
-            <el-button type="primary" :disabled="busy || !cameraReady" @click="faceLogin">Capture photo and sign in</el-button>
-            <el-button :disabled="busy" @click="closeCamera">Cancel</el-button>
-          </template>
-        </div>
+
         <p v-if="!registering" class="demo-note">
-          Face sign-in sends a camera photo to the server. Photos are not saved.
-          Demo mode: face matching always succeeds for an existing active username.
+          SMS and face recognition are simulated: the pages, the countdown, the
+          lockout and the photo capture are real, but nothing leaves for a real
+          gateway or provider. Sign-in still needs the endpoints being built for
+          T41 and T42.
         </p>
       </form>
     </section>
@@ -368,12 +570,6 @@ async function resend() {
 </template>
 
 <style scoped>
-.camera-preview {
-  width: 100%;
-  border-radius: var(--radius);
-  transform: scaleX(-1);
-}
-
 .login {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -475,6 +671,72 @@ async function resend() {
   letter-spacing: -0.015em;
 }
 
+.form-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.methods {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  margin-bottom: 22px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+}
+
+.method {
+  flex: 1;
+  padding: 9px 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+}
+
+.method.active {
+  color: var(--teal);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(20 33 43 / 8%);
+}
+
+.method:hover:not(.active):not(:disabled) {
+  color: var(--teal);
+}
+
+.method:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.panel {
+  margin-bottom: 4px;
+}
+
+.cooldown {
+  margin: 9px 0 0;
+  font-size: 12.5px;
+  text-align: center;
+  color: var(--ink-3);
+}
+
+.form-notice {
+  padding: 10px 12px;
+  margin: -4px 0 16px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
+
 .form-lede {
   margin: 8px 0 28px;
   font-size: 13.5px;
@@ -543,6 +805,11 @@ async function resend() {
 
 .submit {
   width: 100%;
+}
+
+.submit + .submit,
+.panel + .field {
+  margin-top: 16px;
 }
 
 .back {

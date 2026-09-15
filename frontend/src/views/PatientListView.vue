@@ -1,15 +1,22 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Refresh } from '@element-plus/icons-vue'
 import { departments as departmentsApi, patients as patientsApi } from '../api/client'
 
-// The one screen wired to the running service. Search, paging, create and
-// delete all round-trip to FastAPI for real.
+// T15. The four search conditions the contract defines — fuzzy name, exact
+// patient number, symptom tag, admission-date range — combine with AND, and all
+// four may be sent at once.
 //
-// The toolbar searches by name; patient number, symptom tags and admission-date
-// filters land with task T15, so the note under the search box says so rather
-// than offering controls that quietly do nothing.
+// This screen talks to the real service and only to the real service. There is
+// no offline mode: a second data path meant a second thing to keep correct, and
+// the one it was hiding was a real bug — the mock read a blank admission date as
+// "no filter" while the service answers a blank one with 422.
+//
+// The one thing the service cannot supply is the symptom-tag vocabulary: no
+// endpoint exposes it, and `symptom_tags` arrives with the rows. So the tag
+// control is free-text (`allow-create`) and the note under the toolbar says so,
+// rather than offering a dropdown whose options were invented here.
 
 const PAGE_SIZE = 20
 
@@ -17,25 +24,61 @@ const rows = ref([])
 const departments = ref([])
 const total = ref(0)
 const page = ref(1)
-const query = ref('')
 const loading = ref(false)
 const loadError = ref('')
+
+const filters = reactive({ name: '', patientNo: '', symptomTags: [], admitted: null })
 
 const dialogOpen = ref(false)
 const saving = ref(false)
 const formError = ref('')
 const form = reactive({ name: '', gender: 'male', department: '', notes: '' })
 
+const hasFilters = computed(
+  () =>
+    filters.name.trim() !== '' ||
+    filters.patientNo.trim() !== '' ||
+    filters.symptomTags.length > 0 ||
+    filters.admitted !== null,
+)
+
+// Age is derived rather than stored: `PatientSummary` carries a birth date, and a
+// stored age would be wrong the day after it was written.
+function ageFrom(birthDate) {
+  if (!birthDate) return null
+  const born = new Date(`${birthDate}T00:00:00Z`)
+  if (Number.isNaN(born.getTime())) return null
+  const now = new Date()
+  let age = now.getUTCFullYear() - born.getUTCFullYear()
+  const month = now.getUTCMonth() - born.getUTCMonth()
+  if (month < 0 || (month === 0 && now.getUTCDate() < born.getUTCDate())) age -= 1
+  return age
+}
+
+function genderLabel(gender) {
+  return { male: 'Male', female: 'Female' }[gender] ?? 'Unknown'
+}
+
+function sexAge(row) {
+  const age = ageFrom(row.birth_date)
+  return age === null ? genderLabel(row.gender) : `${genderLabel(row.gender)} · ${age}`
+}
+
 async function load() {
   loading.value = true
   loadError.value = ''
   try {
     const result = await patientsApi.list({
-      name: query.value.trim(),
+      name: filters.name.trim(),
+      patientNo: filters.patientNo.trim(),
+      symptomTags: filters.symptomTags,
+      admittedFrom: filters.admitted?.[0] ?? '',
+      admittedTo: filters.admitted?.[1] ?? '',
       page: page.value,
       size: PAGE_SIZE,
     })
     rows.value = result.items
+    // `total` counts every row matching the filter, not the rows on this page.
     total.value = result.total
   } catch (error) {
     loadError.value = error.message
@@ -47,8 +90,18 @@ async function load() {
 }
 
 function search() {
+  // Back to the first page on every new search: staying on page 3 of a result
+  // set that now has one row is how a search looks broken.
   page.value = 1
   load()
+}
+
+function clearFilters() {
+  filters.name = ''
+  filters.patientNo = ''
+  filters.symptomTags = []
+  filters.admitted = null
+  search()
 }
 
 function changePage(next) {
@@ -139,10 +192,10 @@ onMounted(async () => {
     </header>
 
     <section class="panel">
-      <div class="toolbar">
+      <div class="toolbar filters">
         <form class="search" @submit.prevent="search">
           <el-input
-            v-model="query"
+            v-model="filters.name"
             placeholder="Search by name"
             clearable
             :disabled="loading"
@@ -150,45 +203,107 @@ onMounted(async () => {
           />
           <el-button native-type="submit" :loading="loading">Search</el-button>
         </form>
-        <p class="toolbar-note">
-          Patient number, symptom tag and admission-date filters arrive with task T15.
-        </p>
+
+        <el-input
+          v-model="filters.patientNo"
+          class="filter-no"
+          placeholder="Patient number"
+          clearable
+          :disabled="loading"
+          @keyup.enter="search"
+          @clear="search"
+        />
+
+        <el-select
+          v-model="filters.symptomTags"
+          class="filter-tags"
+          multiple
+          filterable
+          allow-create
+          default-first-option
+          collapse-tags
+          clearable
+          placeholder="Symptom tags"
+          :disabled="loading"
+          @change="search"
+        />
+
+        <el-date-picker
+          v-model="filters.admitted"
+          class="filter-range"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          start-placeholder="Admitted from"
+          end-placeholder="to"
+          :disabled="loading"
+          @change="search"
+        />
+
+        <el-button v-if="hasFilters" link @click="clearFilters">Clear filters</el-button>
       </div>
 
-      <el-alert
-        v-if="loadError"
-        class="alert"
-        type="error"
-        :closable="false"
-        show-icon
-        :title="loadError"
-      />
+      <p class="toolbar-note">
+        All four conditions are sent to the service. The list is limited to your own
+        department unless you are an administrator. Symptom tags are typed rather than
+        chosen — no endpoint publishes the tag vocabulary.
+      </p>
 
-      <el-table v-loading="loading" :data="rows" class="table">
-        <el-table-column label="Patient" prop="name" min-width="170" />
-        <el-table-column label="Record ID" width="130">
+      <div v-if="loadError" class="load-error">
+        <div>
+          <p class="load-error-title">Could not load the patient list</p>
+          <p class="load-error-detail">{{ loadError }}</p>
+        </div>
+        <el-button :icon="Refresh" :loading="loading" @click="load">Try again</el-button>
+      </div>
+
+      <el-table v-else v-loading="loading" :data="rows" class="table">
+        <el-table-column label="Patient number" width="150">
           <template #default="{ row }">
             <span class="data">{{ row.patient_no }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="Gender" width="110">
-          <template #default="{ row }">{{ row.gender }}</template>
-        </el-table-column>
-        <el-table-column label="Department" prop="department" min-width="150" />
-        <el-table-column label="Allergies" width="110">
+
+        <el-table-column label="Name" min-width="180">
           <template #default="{ row }">
-            <span v-if="row.allergy_count" class="data">
-              {{ row.allergy_count }}<template v-if="row.has_severe_allergy"> ⚠</template>
+            <span class="name">{{ row.name }}</span>
+            <!-- Already masked by the server; showing it in the data face keeps
+                 it from being mistaken for something a reader can dial. -->
+            <span v-if="row.phone_masked" class="phone data">{{ row.phone_masked }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="Sex · Age" width="118">
+          <template #default="{ row }">{{ sexAge(row) }}</template>
+        </el-table-column>
+
+        <el-table-column label="Department" prop="department" min-width="150" />
+
+        <el-table-column label="Symptom tags" min-width="210">
+          <template #default="{ row }">
+            <template v-if="row.symptom_tags?.length">
+              <span v-for="tag in row.symptom_tags" :key="tag" class="tag">{{ tag }}</span>
+            </template>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="Allergies" width="118">
+          <template #default="{ row }">
+            <!-- The server computes the severity flag so the list does not walk
+                 the allergy array; the colour is what makes it readable at a
+                 glance, which is the point of computing it at all. -->
+            <span
+              v-if="row.allergy_count"
+              class="chip"
+              :data-severity="row.has_severe_allergy ? 'alert' : 'info'"
+            >
+              {{ row.allergy_count }}
+              {{ row.has_severe_allergy ? 'severe' : 'recorded' }}
             </span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="Notes" min-width="200">
-          <template #default="{ row }">
-            <span v-if="row.notes" class="notes">{{ row.notes }}</span>
-            <span v-else class="muted">—</span>
-          </template>
-        </el-table-column>
+
         <el-table-column width="96" align="right">
           <template #default="{ row }">
             <el-button link @click="remove(row)">Delete</el-button>
@@ -198,8 +313,8 @@ onMounted(async () => {
         <template #empty>
           <p class="empty">
             {{
-              query
-                ? `No records match “${query}”. Try a shorter name fragment.`
+              hasFilters
+                ? 'No records match these filters. Clear one and try again.'
                 : 'No patient records yet. Create one to get started.'
             }}
           </p>
@@ -268,28 +383,79 @@ onMounted(async () => {
 <!-- Page furniture (.page, .page-head, .panel, .toolbar, .field, .empty, .muted)
      lives in src/style.css; only what is specific to this screen is here. -->
 <style scoped>
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .search {
   display: flex;
   gap: 8px;
-  width: min(100%, 380px);
+  width: min(100%, 320px);
 }
 
-.alert {
-  width: auto;
-  margin: 16px 20px 0;
+.filter-no {
+  width: 168px;
+}
+
+.filter-tags {
+  width: 240px;
+}
+
+.filter-range {
+  width: 280px;
+}
+
+.name {
+  display: block;
+}
+
+.phone {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.tag {
+  display: inline-block;
+  padding: 1px 7px;
+  margin: 0 4px 2px 0;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
 }
 
 .table {
   width: 100%;
 }
 
-.notes {
-  display: inline-block;
-  max-width: 42ch;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  vertical-align: bottom;
+/* T15's second scenario stops the service and expects "load failed, click to
+   retry" rather than a spinner that never resolves or a blank panel. */
+.load-error {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  margin: 0;
+  background: var(--alert-soft);
+}
+
+.load-error-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--alert-dark);
+}
+
+.load-error-detail {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
 }
 
 .pager {
@@ -297,5 +463,13 @@ onMounted(async () => {
   justify-content: flex-end;
   padding: 14px 20px;
   border-top: 1px solid var(--line-2);
+}
+
+@media (max-width: 900px) {
+  .filter-no,
+  .filter-tags,
+  .filter-range {
+    width: 100%;
+  }
 }
 </style>

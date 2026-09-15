@@ -91,9 +91,14 @@ class Allergy(Base):
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id: Mapped[int] = mapped_column(primary_key=True)
-    action: Mapped[str] = mapped_column(String(50))
+    action: Mapped[str] = mapped_column(String(50), index=True)
     patient_id: Mapped[int | None] = mapped_column()  # Preserve deleted references.
-    user_id: Mapped[int | None] = mapped_column()
+    user_id: Mapped[int | None] = mapped_column(index=True)
+    # Snapshotted rather than joined: the log has to say who acted at the time,
+    # and a join would let a later rename or deletion rewrite the past. The
+    # append-only trigger means this can never be backfilled, so rows written
+    # before this column existed keep NULL for good.
+    username: Mapped[str | None] = mapped_column(String(100))
     ip: Mapped[str | None] = mapped_column(String(45))
     method: Mapped[str | None] = mapped_column(String(10))
     path: Mapped[str | None] = mapped_column(String(500))
@@ -104,7 +109,7 @@ class AuditLog(Base):
     # T14 scenario S2 reads the deleted allergen's name back out of this column.
     detail: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
     )
 
 
