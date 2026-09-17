@@ -34,6 +34,7 @@ fact; run `git rm 新任务安排.md` when you have the permissions.
 - `frontend/src/` -- Vue 3 single-page workspace and styles.
 - `backend/start.sh` / `backend/start.ps1` -- the real one-command deploy scripts (POSIX and Windows). `scripts/dev.sh` / `dev.ps1` / `dev.cmd` are thin forwarders to them that also accept a `docker` mode.
 - `scripts/smoke.py` -- checks a running stack.
+- `scripts/build_db.py` -- builds the local SQLite database from scratch: snapshot the previous file, apply every migration, run both seeders, then verify the result against its own schema contract. It is a developer tool; `backend/start.*` and the Compose image keep running alembic and the seeders directly, as §8.2 of `docs/01-任务安排.md` requires.
 - `compose.yaml` -- Redis 7, API, and frontend services. There is no database container: the database is a SQLite file on a volume. `.github/workflows/ci.yml` starts that stack through `scripts/dev.sh docker`, then runs the stack smoke test, pytest, Ruff, the frontend build, and the backup script.
 
 ## Stack
@@ -63,11 +64,21 @@ From `frontend/`: `npm ci`, `npm run dev`, `npm run build`.
 
 From the repository root: `./scripts/dev.sh` or `.\scripts\dev.ps1` prepares and starts the local stack; the `docker` argument starts the Compose stack; `-NoServe` prepares without starting servers. Arguments after `docker` are forwarded to `docker compose up`, so `--detach --wait` starts it in the background; use long-form flags on Windows, because `-d` binds to PowerShell's own `-Debug`. These commands work unchanged in PowerShell, Git Bash, and WSL.
 
+To rebuild the local SQLite database from scratch -- the way to get a clean baseline, and the way to prove that a schema change still builds -- run this from the repository root:
+
+```bash
+uv run --project backend python scripts/build_db.py
+```
+
+It snapshots any existing database into `backups/prebuild-<timestamp>.db` (pruned to `BACKUP_KEEP`, 7 by default), deletes it, applies every migration, runs `app.seed` and `app.seed_demo`, and verifies the result before reporting success. `--no-demo` stops after master data; `--db PATH` builds a different file. If any step fails it puts the previous database back and exits non-zero. It needs the stack stopped, because a running API holds the file open on Windows.
+
 ## Coding Style & Naming Conventions
 
 - Python: four-space indentation, double quotes, Ruff formatting with `line-length = 100`.
 - API: `docs/api/openapi.yaml` is the **source of truth for request and response shape**, and `docs/api/API-索引.md` is its index. Generate from it rather than inventing fields. It is tracked in git, so pull before generating: a stale copy silently produces the wrong fields.
 - `backend/app/auth_schemas.py` is **generated** by `scripts/generate_auth_schemas.py` from `openapi.yaml`'s `components.schemas`. Never hand-edit it; change the YAML and regenerate.
+- **The database is rebuilt, never committed.** `backend/doctor.db` is a build artifact: `.gitignore` excludes `*.db`, because a binary database cannot be reviewed and two people editing their own copy of one always conflict on merge. Build it with `uv run --project backend python scripts/build_db.py` from the repository root. Never commit a database file, and never treat editing one in a GUI as a schema change -- schema reaches a database only through a revision in `backend/migrations/`.
+- **A table change and `scripts/build_db.py` change in the same commit.** The script's `EXPECTED_TABLES` and `EXPECTED_TRIGGERS` are a contract its build enforces: a freshly built database must contain exactly that set of tables, plus the append-only triggers on `audit_logs`. Add the model, add the revision, update those constants, and run the script -- the build fails loudly until all four agree, and it never leaves a half-built database behind.
 - API envelope: every JSON response is `{code, message, data}`, with `code: 0` for success. Lists are paginated as `data: {items, total, page, size}`; errors carry a non-zero `code` and a human-readable `message`, not a nested `error` object. The single exception is `GET /metrics`, which speaks Prometheus text format.
 - API paths live under `/api`, **except** the health check: `GET /health` is a required alias of `GET /api/health` with a byte-identical body. The health payload's database key is `db` (values `ok` / `down` / `disabled`), and a dependency outage never changes the status code.
 - Roles are `admin` / `senior` / `junior`. The JWT claim carrying the role is named `title`. Departments are, in this fixed order, `Information Technology`, `Cardiology`, `Neurology` -- tests index into that order, so never reorder them.
