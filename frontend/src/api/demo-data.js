@@ -2,19 +2,23 @@
 // Keeping every invented value in one file makes the mock boundary obvious and
 // the deletions trivial as each module lands:
 //
-//   worklist, schedule, counts   -> M2 history, M4 queue, M6 thresholds, M8 panel
+//   worklist, schedule, counts   -> M2 history, M4 queue, M8 panel
 //   allergens                    -> M2 allergy table
 //   record, versions, formulary  -> M4 records, M4 medical orders
 //   consult*                     -> M3 consultation workbench
 //   meeting                      -> M5 remote consultation
-//   vitals, carePlan, ...        -> M6 health management
 //   review*                      -> M4 chief-physician review
 //   auditRows                    -> M8 audit search and export
 //
 // Clinical values use the units Chinese hospitals report in: mmHg for blood
 // pressure, mmol/L for glucose, bpm for heart rate, g and MU for drug doses.
 //
-// Only the patient directory reads real data today (see views/PatientListView).
+// M6's health management block is gone: the module has a real backend, so its
+// readings, plans, reminders and assessments come from the API and nothing here
+// stands in for them.
+//
+// Real data today: the patient directory (views/PatientListView), the audit log
+// (views/AuditLogView) and every M6 panel (components/PatientHealth).
 
 export const worklist = [
   {
@@ -449,129 +453,6 @@ export const meeting = {
     },
   ],
 }
-
-// ---------------------------------------------------------------------------
-// M6 - patient health management
-// ---------------------------------------------------------------------------
-
-// Readings run late August to 10 September. Blood pressure and glucose start
-// above their reference range and settle after treatment; the single raised
-// heart rate is a one-off episode rather than a trend.
-export const vitalMetrics = [
-  {
-    key: 'bp',
-    label: 'Blood pressure',
-    unit: 'mmHg',
-    // Two lines share one axis, so both threshold pairs are drawn.
-    series: [
-      {
-        name: 'Systolic',
-        high: 139,
-        points: [152, 148, 155, 146, 141, 144, 138, 139, 142, 135, 137, 134],
-      },
-      {
-        name: 'Diastolic',
-        high: 89,
-        points: [96, 94, 98, 92, 90, 91, 88, 87, 90, 86, 85, 84],
-      },
-    ],
-  },
-  {
-    key: 'glucose',
-    label: 'Blood glucose',
-    unit: 'mmol/L',
-    series: [
-      {
-        name: 'Fasting glucose',
-        high: 6.1,
-        low: 3.9,
-        points: [7.8, 7.4, 7.1, 6.9, 7.2, 6.6, 6.4, 6.1, 6.3, 5.9, 5.7, 5.6],
-      },
-    ],
-  },
-  {
-    key: 'heartRate',
-    label: 'Heart rate',
-    unit: 'bpm',
-    series: [
-      {
-        name: 'Resting heart rate',
-        high: 100,
-        low: 60,
-        points: [88, 84, 79, 76, 104, 74, 71, 69, 73, 68, 66, 70],
-      },
-    ],
-  },
-]
-
-export const vitalDates = [
-  '28 Aug',
-  '29 Aug',
-  '31 Aug',
-  '1 Sep',
-  '2 Sep',
-  '4 Sep',
-  '5 Sep',
-  '6 Sep',
-  '7 Sep',
-  '8 Sep',
-  '9 Sep',
-  '10 Sep',
-]
-
-export const carePlan = {
-  title: 'Hypertension management plan',
-  startedOn: '28 August 2026',
-  owner: 'Dr. Chen',
-  items: [
-    { text: 'Amlodipine 5 mg once daily', done: true },
-    { text: 'Home blood pressure readings twice weekly', done: true },
-    { text: 'Reduce dietary sodium below 5 g per day', done: false },
-    { text: 'Repeat lipid panel in three months', done: false },
-  ],
-}
-
-export const reminders = [
-  {
-    id: 'rem-1',
-    text: 'Take the morning blood pressure reading',
-    when: 'Daily at 08:00',
-    state: 'due',
-  },
-  {
-    id: 'rem-2',
-    text: 'Cardiology clinic visit',
-    when: '18 September 2026, 09:30',
-    state: 'scheduled',
-  },
-  {
-    id: 'rem-3',
-    text: 'Repeat lipid panel',
-    when: 'Due 1 December 2026',
-    state: 'scheduled',
-  },
-]
-
-export const assessments = [
-  {
-    id: 'as-1',
-    date: '10 September 2026',
-    author: 'Dr. Chen',
-    verdict: 'Controlled',
-    severity: 'ok',
-    summary:
-      'Twelve readings reviewed. Both systolic and diastolic values have fallen into range over six weeks. No adverse effects reported.',
-  },
-  {
-    id: 'as-2',
-    date: '27 August 2026',
-    author: 'Dr. Chen',
-    verdict: 'Above target',
-    severity: 'warn',
-    summary:
-      'Baseline assessment before treatment. Average 151/96 mmHg across four readings. Started on amlodipine 5 mg once daily.',
-  },
-]
 
 // ---------------------------------------------------------------------------
 // M4 - chief physician review queue
