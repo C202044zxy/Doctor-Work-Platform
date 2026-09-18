@@ -59,15 +59,21 @@ EXPECTED_TABLES = frozenset(
         "allergies",
         "audit_logs",
         "departments",
+        "health_assessments",
+        "health_plans",
         "meeting_materials",
         "meeting_participants",
         "meeting_reports",
         "meetings",
         "passkeys",
         "patients",
+        "reminder_logs",
+        "reminder_rules",
         "roles",
         "temp_grant",
         "users",
+        "vital_signs",
+        "vital_thresholds",
     }
 )
 
