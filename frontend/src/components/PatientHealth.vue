@@ -100,9 +100,12 @@ const loadingReviews = ref(false)
 const chartEl = useTemplateRef('chart')
 let chartInstance = null
 
+// `toLocaleString(undefined, ...)` means "whatever the reader's machine is set
+// to", which on a zh-CN browser renders "2026年9月18日" inside otherwise English
+// copy. Every date on this screen is English, so the locale is named.
 function stamp(value) {
   if (!value) return '—'
-  return new Date(value).toLocaleString(undefined, {
+  return new Date(value).toLocaleString('en-GB', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -113,7 +116,7 @@ function stamp(value) {
 
 function day(value) {
   if (!value) return '—'
-  return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return new Date(value).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })
 }
 
 function isoDay(date) {
@@ -1102,20 +1105,34 @@ watch(
 .readings,
 .assess,
 .reminders,
-.rules,
-.plan-items {
+.rules {
   padding: 0 20px;
   margin: 0;
   list-style: none;
 }
 
+/* A care plan is a block, not a row: its title, dates, prose and items belong on
+   one inset line, so the inset goes on the block. Padding the item list instead
+   left the title and goals flush against the panel edge, one step to the left of
+   everything they describe. */
+.plan-items {
+  padding: 0;
+  margin: 6px 0 0;
+  list-style: none;
+}
+
 .reading,
 .assessment,
-.plan,
 .rule,
 .reminder {
   position: relative;
   padding: 14px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.plan {
+  position: relative;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--line-2);
 }
 
@@ -1192,8 +1209,10 @@ watch(
   line-height: 1.6;
 }
 
+/* A fixed column, not intrinsic width: "medication" and "followup" are different
+   lengths, and sizing to the text would leave every value starting at its own x. */
 .plan-kind {
-  padding-right: 8px;
+  flex: 0 0 92px;
   font-size: 11.5px;
   color: var(--ink-3);
   text-transform: capitalize;
