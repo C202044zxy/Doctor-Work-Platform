@@ -64,6 +64,16 @@ failure. **Do not read it as fact.** Delete it with `git rm 新任务安排.md` 
 - All user-facing frontend text is English. Do not add Chinese UI strings.
 - `audit_logs` is append-only, enforced by database triggers from migration
   `c0311060809b`. Do not add update or delete paths.
+- **The database is rebuilt, never committed.** `backend/doctor.db` is a build artifact and
+  `.gitignore` excludes `*.db`: a binary database cannot be reviewed, and two people editing
+  their own copy of one always conflict on merge. Build it with
+  `uv run --project backend python scripts/build_db.py` from the repository root, and never
+  treat editing a database in a GUI as a schema change.
+- **A table change is not finished until `scripts/build_db.py` agrees with it.** Changing a
+  model means all four, in one commit: the model, a revision in `backend/migrations/`, the
+  `EXPECTED_TABLES` / `EXPECTED_TRIGGERS` constants in that script, and a successful run of
+  it. The script's build fails loudly until they agree -- it also runs `alembic check` -- and
+  it restores the previous database rather than leaving a half-built one behind.
 - Never commit `.env`, `JWT_SECRET`, `PATIENT_DATA_KEY`, SMTP credentials, the SQLite
   database file, or the Redis binaries unpacked under `backend/runtime/`.
 
@@ -82,4 +92,7 @@ npm ci && npm run build
 
 # whole stack (from the repository root)
 ./scripts/dev.sh          # or .\scripts\dev.ps1 on Windows; add `docker` for Compose
+
+# rebuild the local SQLite database from scratch (snapshot -> migrate -> seed -> verify)
+uv run --project backend python scripts/build_db.py
 ```

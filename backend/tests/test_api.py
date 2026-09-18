@@ -197,8 +197,8 @@ def test_combined_search_and_ands_every_filter(client):
 
 
 def test_department_filter_stacks_with_the_other_conditions(client):
-    neurology = create_patient(
-        client, name="赵雷", symptom_tags=["胸痛"], admitted_at="2026-08-15", department="Neurology"
+    technology = create_patient(
+        client, name="赵雷", symptom_tags=["胸痛"], admitted_at="2026-08-15"
     )
     create_patient(
         client,
@@ -208,14 +208,16 @@ def test_department_filter_stacks_with_the_other_conditions(client):
         department="Cardiology",
     )
 
-    only_neurology = client.get("/api/patients", params={"department": "Neurology"}).json()["data"]
-    assert only_neurology["total"] == 1
-    assert only_neurology["items"][0]["patient_no"] == neurology["patient_no"]
+    only_technology = client.get(
+        "/api/patients", params={"department": "Information Technology"}
+    ).json()["data"]
+    assert only_technology["total"] == 1
+    assert only_technology["items"][0]["patient_no"] == technology["patient_no"]
 
     # It stacks with the four search conditions rather than replacing them: the
     # same name and tag match one patient in each department, and the department
     # is what picks which.
-    for department, expected in (("Neurology", "赵雷"), ("Cardiology", "赵敏")):
+    for department, expected in (("Information Technology", "赵雷"), ("Cardiology", "赵敏")):
         stacked = client.get(
             "/api/patients",
             params={"department": department, "name": "赵", "symptom_tags": "胸痛"},
@@ -223,8 +225,12 @@ def test_department_filter_stacks_with_the_other_conditions(client):
         assert stacked["total"] == 1
         assert stacked["items"][0]["name"] == expected
 
-    # The name is an exact match, not a substring or a prefix.
-    assert client.get("/api/patients", params={"department": "Neuro"}).json()["data"]["total"] == 0
+    # The name is an exact match, not a substring or a prefix: "Information" is a
+    # real department's prefix and must still select nothing.
+    assert (
+        client.get("/api/patients", params={"department": "Information"}).json()["data"]["total"]
+        == 0
+    )
     # A department nobody registered is an empty page, not a 404: a filter that
     # matches nothing is not an error, and `department` is a filter, not a lookup.
     unknown = client.get("/api/patients", params={"department": "Dermatology"})
