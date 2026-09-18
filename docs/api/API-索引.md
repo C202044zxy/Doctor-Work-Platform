@@ -623,7 +623,7 @@
 | GET | `/api/meetings/{id}/report/print` | 参与人 | 返回可打印的 HTML（Jinja2 渲染） | M5-03 |
 | GET | `/api/meetings/doctors` | 🔒 | **契约之外**：专家候选目录（`id/username/name/title/department`，**不含邮箱**）。契约里 `/api/users` 是管理员专属，喂不了 `junior` 发起的专家选择框；M1-07 落地后删除 | M5-01 |
 
-- **实现状态（2026-09-17）**：上表 11 条契约路径 + 1 条契约外新增（`/api/meetings/doctors`）全部落地于 `backend/app/meetings.py`，`backend/tests/test_meetings.py` **17 个用例通过**；前端 `/remote-consultation` 与患者详情「会诊记录」Tab 已接真实接口。
+- **实现状态（2026-09-17）**：上表 11 条契约路径 + 1 条契约外新增（`/api/meetings/doctors`）全部落地于 `backend/app/meetings.py`，`backend/tests/test_meetings.py` **17 个用例通过**；前端 `/remote-consultation` 与患者详情「会诊记录」Tab 已接真实接口。该页自 2026-09-18 起作为 `ConsultationsView.vue` 的子组件挂在 `/consultations?tab=remote` 上，`RemoteConsultationView.vue` 本身未改；旧路径 `/remote-consultation` 保留为重定向。
 - **发起人可以是 `junior`。** 场景 M5-T1 的原文就是"**`dr_wang` 对 `P20260001` 发起会诊邀请 `dr_chen`**"，而 `dr_wang` 是 junior。早期草稿把发起限死为 `senior`，**会让流程 2 的演示跑不起来**。
 - **状态机非法跳转返回 409**（如 `requested` 直接跳 `completed`；场景 M5-T3）。
 - 非受邀人访问该会诊 → 403/404，不泄露存在性。
@@ -808,8 +808,8 @@
 
 ## 3. 前端页面 ↔ 接口对照
 
-> 本表按 `frontend/src/router/index.js`、`frontend/src/views/`、`frontend/src/api/` 的**代码事实**填写（2026-09-14 核对），**不含负责人/归属列**——任务归属见 `docs/01-任务安排.md`。
-> "现状"只有两种取值：**真实接口**（`import ... from '../api/client'`）与 **假数据**（`import ... from '../api/demo-data'`）。
+> 本表按 `frontend/src/router/index.js`、`frontend/src/views/`、`frontend/src/api/` 的**代码事实**填写（2026-09-18 核对），**不含负责人/归属列**——任务归属见 `docs/01-任务安排.md`。
+> "现状"取值：**真实接口**（`import ... from '../api/client'`）、**假数据**（`import ... from '../api/demo-data'`）、**空态**（模块零代码，页面写明这一点，既无接口也无假数据）。第三种是为 `/consultations` 的「Patient consultation」Tab 立的——那个模块还没有代码，而它原来的假数据已经删掉，两种旧取值都描述不了它。
 
 **路由与视图（`frontend/src/router/index.js`）**
 
@@ -820,8 +820,9 @@
 | `/patients` | `PatientListView.vue` | `GET /api/patients`、`POST /api/patients`、`DELETE /api/patients/{patient_no}`、`GET /api/departments` | ✅ **真实接口** |
 | `/patients/:patientNo` | `PatientDetailView.vue` | `GET /api/patients/{patient_no}`、`GET /api/meetings?patient_no=…`、`GET /api/meetings/{id}/report`（`?version=` 读历史版本）、`GET /api/meetings/{id}/report/print`（仅参与人）；「Health data」Tab（`components/PatientHealth.vue`，M6）消费 `/api/patients/{no}/vitals`、`/vitals/trend`、`/api/health-plans`、`/api/reminder-rules`、`/api/reminders`、`/unread-count`、`/api/patients/{no}/assessments`、`/api/assessments/{id}` | ✅ **真实接口**（**「会诊记录」Tab** 属 M5、**「Health data」Tab** 属 M6，其余 Tab 属 M2-04） |
 | `/records` | `MedicalRecordView.vue` | 计划消费 `/api/emr/templates`、`/api/emr/records`、`PATCH /api/emr/records/{id}`、`/api/drugs`、`POST /api/emr/orders/validate` | ⚠️ **假数据** |
-| `/consultations` | `ConsultationsView.vue` | 计划消费 `/api/consultations`、`GET /api/consultations/{id}/messages`、`WS /ws/chat/{room_id}`、`POST /api/uploads/images` | ⚠️ **假数据** |
-| `/remote-consultation` | `RemoteConsultationView.vue` | `GET/POST /api/meetings`、`/accept`、`/decline`、`/start`、`/complete`、`/api/meetings/doctors`、`/api/meetings/{id}/materials`、`/api/materials/{id}/download`、`/api/meetings/{id}/report`、`/report/print` | ✅ **真实接口** |
+| `/consultations` | `ConsultationsView.vue` | **两个 Tab**：「Patient consultation」（M3，**零代码**，当前是写明未做的空态，不消费任何接口，也没有假数据）；「Remote consultation」（M5，消费列在下一行的那组接口） | ⚠️ **一半真实、一半空态** |
+| `/consultations?tab=remote` | `RemoteConsultationView.vue`（作为子组件） | `GET/POST /api/meetings`、`/accept`、`/decline`、`/start`、`/complete`、`/api/meetings/doctors`、`/api/meetings/{id}/materials`、`/api/materials/{id}/download`、`/api/meetings/{id}/report`、`/report/print` | ✅ **真实接口** |
+| `/remote-consultation` | — | 无（重定向到 `/consultations?tab=remote`） | ➡️ **重定向** |
 | `/review` | `ReviewQueueView.vue` | 计划消费 `/api/emr/reviews`、`POST /api/emr/records/{id}/review`、`GET /api/emr/my-submissions` | ⚠️ **假数据** |
 | `/audit` | `AuditLogView.vue` | `GET /api/audit-logs`（筛选 / 分页）、`GET /api/audit-logs/export`（服务端 CSV） | ✅ **真实接口**（T12） |
 
@@ -845,7 +846,7 @@
 | 医嘱面板 | M4-06 | 现由 `MedicalRecordView` 以假数据承担 |
 | 系统监控页 / 设备管理页 / 回放页 / 权限矩阵页 | S5 / S4 / S3 / S6 | 模拟模块，均零代码 |
 
-> **⚠️ 演示红线**：`demo-data.js` 目前被 **4 个 View + `App.vue`** 直接 import（`DashboardView` / `ConsultationsView` / `MedicalRecordView` / `ReviewQueueView` 与外壳的 `counts`）。**在 M9-05 收口前，这些页面上的任何数字都不是真实数据**，不得进入演示路径。`/login`、`/patients`、`/patients/:patientNo`（含 M6 的「Health data」Tab）、`/remote-consultation`、`/audit` 以及外壳的会话/登出/探针走真实接口——`RemoteConsultationView`（M5）、`AuditLogView`（T12）与健康管理面板（M6，原 `/health` 页已于 2026-09-18 并入患者详情）已退出这份名单。
+> **⚠️ 演示红线**：`demo-data.js` 目前被 **3 个 View + `App.vue`** 直接 import（`DashboardView` / `MedicalRecordView` / `ReviewQueueView` 与外壳的 `counts`）。**在 M9-05 收口前，这些页面上的任何数字都不是真实数据**，不得进入演示路径。`/login`、`/patients`、`/patients/:patientNo`（含 M6 的「Health data」Tab）、`/consultations` 的「Remote consultation」Tab、`/audit` 以及外壳的会话/登出/探针走真实接口——`RemoteConsultationView`（M5）、`AuditLogView`（T12）、健康管理面板（M6，原 `/health` 页已于 2026-09-18 并入患者详情）与问诊页的「Patient consultation」Tab（M3，假数据已删，现为空态）已退出这份名单。
 
 ---
 

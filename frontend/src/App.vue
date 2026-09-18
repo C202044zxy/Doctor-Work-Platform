@@ -12,7 +12,6 @@ import {
   SwitchButton,
   Tickets,
   User,
-  VideoCamera,
 } from '@element-plus/icons-vue'
 
 import { navigation } from './router'
@@ -29,7 +28,6 @@ const ICONS = {
   User,
   Document,
   ChatDotRound,
-  VideoCamera,
   Checked,
   Tickets,
 }

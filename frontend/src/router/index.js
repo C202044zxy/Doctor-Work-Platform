@@ -17,7 +17,6 @@ export const navigation = [
   { name: 'patients', label: 'Patients', icon: 'User' },
   { name: 'records', label: 'Medical Records', icon: 'Document' },
   { name: 'consultations', label: 'Consultations', icon: 'ChatDotRound' },
-  { name: 'remote-consultation', label: 'Remote Consultation', icon: 'VideoCamera' },
   { name: 'review', label: 'Review Queue', icon: 'Checked', roles: MODULE_ROLES.review },
   { name: 'audit', label: 'Audit Log', icon: 'Tickets', roles: MODULE_ROLES.audit },
 ]
@@ -57,24 +56,30 @@ const routes = [
   // The remaining modules. Each screen is built and navigable; the content
   // behind it is fabricated (see api/demo-data.js) until the owning backend
   // task lands. Patients, the two patient-detail tabs (consultation records and
-  // health data) and remote consultation read the real service today.
+  // health data) and the remote-consultation tab under /consultations read the
+  // real service today.
   {
     path: '/records',
     name: 'records',
     component: () => import('../views/MedicalRecordView.vue'),
     meta: { title: 'Medical Records' },
   },
+  // M3 + M5 behind one entry: the patient thread and the expert consultation are
+  // the two halves of `ConsultationsView.vue`, which picks between them with a tab
+  // in the query string.
   {
     path: '/consultations',
     name: 'consultations',
     component: () => import('../views/ConsultationsView.vue'),
     meta: { title: 'Consultations' },
   },
+  // M5 shipped remote consultation as a page of its own. The path stays as a
+  // redirect so a link written before the merge -- a bookmark, a scenario sheet,
+  // a screenshot in a slide -- still lands on the right tab. Deliberately no
+  // sidebar entry: it is the same screen the entry above opens, one tab over.
   {
     path: '/remote-consultation',
-    name: 'remote-consultation',
-    component: () => import('../views/RemoteConsultationView.vue'),
-    meta: { title: 'Remote Consultation' },
+    redirect: { name: 'consultations', query: { tab: 'remote' } },
   },
   {
     path: '/review',

@@ -5,20 +5,24 @@
 //   worklist, schedule, counts   -> M2 history, M4 queue, M8 panel
 //   allergens                    -> M2 allergy table
 //   record, versions, formulary  -> M4 records, M4 medical orders
-//   consult*                     -> M3 consultation workbench
-//   meeting                      -> M5 remote consultation
 //   review*                      -> M4 chief-physician review
 //   auditRows                    -> M8 audit search and export
 //
 // Clinical values use the units Chinese hospitals report in: mmHg for blood
 // pressure, mmol/L for glucose, bpm for heart rate, g and MU for drug doses.
 //
-// M6's health management block is gone: the module has a real backend, so its
-// readings, plans, reminders and assessments come from the API and nothing here
-// stands in for them.
+// Two blocks have left for the same reason -- their module landed -- and the
+// deletions are in the history: M6's health management values (readings, plans,
+// reminders, assessments now come from the API) and M5's `meeting`.
+//
+// M3's `consult*` block is gone for the opposite reason: the module still has no
+// code, and its mock workbench announced "Connected over WebSocket" on a build
+// with no WebSocket route in it. Rather than carry that into the demo path, the
+// Consultations screen states the gap and M3 fills it in.
 //
 // Real data today: the patient directory (views/PatientListView), the audit log
-// (views/AuditLogView) and every M6 panel (components/PatientHealth).
+// (views/AuditLogView), every M6 panel (components/PatientHealth) and the
+// remote-consultation tab of views/ConsultationsView.
 
 export const worklist = [
   {
@@ -203,256 +207,6 @@ export const formulary = [
   { drug: 'Ceftriaxone', class: 'Cephalosporin', route: 'IV', unit: 'g', typical: 2, max: 4 },
   { drug: 'Vancomycin', class: 'Glycopeptide', route: 'IV', unit: 'g', typical: 1, max: 1.5 },
 ]
-
-// ---------------------------------------------------------------------------
-// M3 - online consultation
-// ---------------------------------------------------------------------------
-
-export const consultSessions = [
-  {
-    id: 1,
-    patient: 'Wu Min',
-    patientId: 4,
-    state: 'waiting',
-    topic: 'Recurrent migraine — follow-up',
-    preview: 'The tablets helped for about a week, then the headaches came back.',
-    lastAt: '10:42',
-    unread: 2,
-  },
-  {
-    id: 2,
-    patient: 'Liu Yang',
-    patientId: 2,
-    state: 'active',
-    topic: 'Blood pressure review',
-    preview: 'I have the readings from the last two weeks ready.',
-    lastAt: '10:31',
-    unread: 0,
-  },
-  {
-    id: 3,
-    patient: 'Sun Qi',
-    patientId: 6,
-    state: 'ended',
-    topic: 'Inhaler technique',
-    preview: 'Thank you, that is much clearer now.',
-    lastAt: 'Yesterday',
-    unread: 0,
-  },
-  {
-    id: 4,
-    patient: 'Li Na',
-    patientId: 7,
-    state: 'ended',
-    topic: 'Iron tablets and stomach upset',
-    preview: 'I will try taking them with food.',
-    lastAt: '8 September',
-    unread: 0,
-  },
-]
-
-export const consultMessages = {
-  2: [
-    { id: 'm1', kind: 'system', text: 'Session started', at: '10:02' },
-    {
-      id: 'm2',
-      from: 'patient',
-      text: 'Good morning doctor. I have the readings from the last two weeks ready.',
-      at: '10:04',
-    },
-    {
-      id: 'm3',
-      from: 'doctor',
-      text: 'Good morning. Please read them out, and tell me whether you took each one at the same time of day.',
-      at: '10:06',
-    },
-    {
-      id: 'm4',
-      from: 'patient',
-      kind: 'image',
-      file: 'home-readings.jpg',
-      size: '1.4 MB',
-      caption: 'My notebook from the last two weeks',
-      at: '10:09',
-    },
-    {
-      id: 'm5',
-      from: 'doctor',
-      text: 'Thank you, that is legible. The trend is improving. Let us keep the same dose and review again in four weeks.',
-      at: '10:14',
-    },
-    {
-      id: 'm6',
-      from: 'patient',
-      text: 'Understood. Should I keep taking it in the morning?',
-      at: '10:31',
-    },
-  ],
-  1: [
-    { id: 'n1', kind: 'system', text: 'Waiting for a clinician to accept', at: '10:30' },
-    {
-      id: 'n2',
-      from: 'patient',
-      text: 'The tablets helped for about a week, then the headaches came back.',
-      at: '10:40',
-    },
-    { id: 'n3', from: 'patient', text: 'They are worse in the morning now.', at: '10:42' },
-  ],
-  3: [
-    { id: 's1', kind: 'system', text: 'Session started', at: '14:02' },
-    {
-      id: 's2',
-      from: 'doctor',
-      text: 'Show me how you hold the inhaler, as if I were in the room with you.',
-      at: '14:04',
-    },
-    {
-      id: 's3',
-      from: 'patient',
-      kind: 'image',
-      file: 'inhaler-technique.jpg',
-      size: '980 KB',
-      caption: 'How I hold it',
-      at: '14:07',
-    },
-    {
-      id: 's4',
-      from: 'doctor',
-      text: 'Your thumb is blocking the vent. Move it to the side and shake before each puff.',
-      at: '14:09',
-    },
-    { id: 's5', from: 'patient', text: 'Thank you, that is much clearer now.', at: '14:12' },
-    { id: 's6', kind: 'system', text: 'Session ended by Dr. Chen', at: '14:15' },
-  ],
-  4: [
-    { id: 't1', kind: 'system', text: 'Session started', at: '09:40' },
-    {
-      id: 't2',
-      from: 'patient',
-      text: 'The iron tablets are giving me stomach pain in the mornings.',
-      at: '09:42',
-    },
-    {
-      id: 't3',
-      from: 'doctor',
-      text: 'Take them with food rather than on an empty stomach. If the pain persists, we will switch to a different preparation.',
-      at: '09:45',
-    },
-    { id: 't4', from: 'patient', text: 'I will try taking them with food.', at: '09:47' },
-    { id: 't5', kind: 'system', text: 'Session ended by Dr. Chen', at: '09:50' },
-  ],
-}
-
-export const consultPatient = {
-  id: 2,
-  name: 'Liu Yang',
-  age: 54,
-  sex: 'Female',
-  department: 'Cardiology',
-  problem: 'Type 2 diabetes with raised blood pressure',
-  medication: ['Metformin 500 mg twice daily', 'Amlodipine 5 mg once daily'],
-  lastReading: '138/86 mmHg',
-  lastReadingAt: '8 September 2026',
-}
-
-// ---------------------------------------------------------------------------
-// M5 - remote consultation
-// ---------------------------------------------------------------------------
-
-export const meeting = {
-  id: 'RC-2026-0031',
-  patient: 'Zhao Lei',
-  patientId: 5,
-  age: 61,
-  sex: 'Male',
-  topic: 'Anticoagulation after myocardial infarction',
-  requestedBy: 'Dr. Chen',
-  openedAt: '09:15',
-  // The state machine the module implements. `at` is absent on states the
-  // consultation has not reached.
-  states: [
-    { key: 'requested', label: 'Requested', at: '08:40' },
-    { key: 'confirmed', label: 'Confirmed', at: '08:52' },
-    { key: 'in_progress', label: 'In progress', at: '09:15' },
-    { key: 'report', label: 'Report' },
-    { key: 'archived', label: 'Archived' },
-  ],
-  // expiresInSeconds drives the live countdown. It is the time-limited access
-  // grant that M5 issues and revokes; when it reaches zero the row locks.
-  participants: [
-    {
-      name: 'Dr. Chen',
-      department: 'Cardiology',
-      role: 'Requesting clinician',
-      initials: 'DC',
-      expiresInSeconds: null,
-    },
-    {
-      name: 'Dr. Lin',
-      department: 'Neurology',
-      role: 'Invited specialist',
-      initials: 'DL',
-      expiresInSeconds: 2530,
-    },
-    {
-      name: 'Dr. Guo',
-      department: 'Hematology',
-      role: 'Invited specialist',
-      initials: 'DG',
-      expiresInSeconds: 215,
-    },
-  ],
-  materials: [
-    {
-      id: 'mat-1',
-      name: 'Coronary angiogram report',
-      kind: 'PDF',
-      size: '820 KB',
-      sharedBy: 'Dr. Chen',
-      at: '09:17',
-    },
-    {
-      id: 'mat-2',
-      name: 'Discharge summary, August admission',
-      kind: 'PDF',
-      size: '310 KB',
-      sharedBy: 'Dr. Chen',
-      at: '09:17',
-    },
-    {
-      id: 'mat-3',
-      name: 'Coagulation panel, 9 September',
-      kind: 'PDF',
-      size: '145 KB',
-      sharedBy: 'Dr. Guo',
-      at: '09:22',
-    },
-    {
-      id: 'mat-4',
-      name: 'Twelve-lead ECG strip',
-      kind: 'PNG',
-      size: '2.1 MB',
-      sharedBy: 'Dr. Chen',
-      at: '09:18',
-    },
-  ],
-  opinions: [
-    {
-      id: 'op-1',
-      author: 'Dr. Guo',
-      department: 'Hematology',
-      at: '09:26',
-      text: 'Renal function is stable and the platelet count is normal. A direct oral anticoagulant is reasonable. I would avoid a loading dose given the bleeding history.',
-    },
-    {
-      id: 'op-2',
-      author: 'Dr. Lin',
-      department: 'Neurology',
-      at: '09:31',
-      text: 'No prior stroke or transient ischaemic attack. Agree with anticoagulation; no neurological contraindication.',
-    },
-  ],
-}
 
 // ---------------------------------------------------------------------------
 // M4 - chief physician review queue
