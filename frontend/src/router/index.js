@@ -43,10 +43,22 @@ const routes = [
     component: () => import('../views/PatientListView.vue'),
     meta: { title: 'Patients' },
   },
+  // M5-T7. The consultation report is archived into the patient record, and the
+  // tab that reads it back has to hang off a patient-scoped screen. M2-04 owns
+  // this page; what stands here today is the header plus that one tab.
+  {
+    path: '/patients/:patientNo',
+    name: 'patient-detail',
+    component: () => import('../views/PatientDetailView.vue'),
+    // The number is a prop so the view never reaches into the route object.
+    props: true,
+    meta: { title: 'Patient detail' },
+  },
 
-  // The remaining six modules. Each screen is built and navigable; the content
+  // The remaining modules. Each screen is built and navigable; the content
   // behind it is fabricated (see api/demo-data.js) until the owning backend
-  // task lands. Patients is the only screen talking to the real service today.
+  // task lands. Patients, the patient-detail consultation tab and remote
+  // consultation read the real service today.
   {
     path: '/records',
     name: 'records',

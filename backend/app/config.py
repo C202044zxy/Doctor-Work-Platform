@@ -4,6 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./doctor.db"
+    # T31's shared upload component writes here. Relative paths resolve against
+    # the backend working directory, which is where the startup scripts run.
+    upload_dir: str = "uploads"
     jwt_secret: str = Field(default="", repr=False)
     smtp_host: str | None = None
     smtp_port: int = 587

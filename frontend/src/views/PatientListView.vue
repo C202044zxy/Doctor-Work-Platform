@@ -265,7 +265,15 @@ onMounted(async () => {
 
         <el-table-column label="Name" min-width="180">
           <template #default="{ row }">
-            <span class="name">{{ row.name }}</span>
+            <!-- M5-T7. The consultation report is archived into the patient
+                 record, and the tab that reads it back lives on the detail
+                 screen, so the name is the way in rather than a dead label. -->
+            <router-link
+              class="name-link"
+              :to="{ name: 'patient-detail', params: { patientNo: row.patient_no } }"
+            >
+              <span class="name">{{ row.name }}</span>
+            </router-link>
             <!-- Already masked by the server; showing it in the data face keeps
                  it from being mistaken for something a reader can dial. -->
             <span v-if="row.phone_masked" class="phone data">{{ row.phone_masked }}</span>
@@ -410,6 +418,17 @@ onMounted(async () => {
 
 .name {
   display: block;
+}
+
+/* The name keeps the table's ink and gains an underline on hover: a blue link
+   in a clinical table reads as a different kind of thing than it is. */
+.name-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.name-link:hover .name {
+  text-decoration: underline;
 }
 
 .phone {

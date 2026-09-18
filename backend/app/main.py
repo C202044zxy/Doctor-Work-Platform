@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import auth, auth_schemas, crypto, face_login, grants, signup
+from app import auth, auth_schemas, crypto, face_login, grants, meetings, signup
 from app.allergies import allergen_name, dictionary, get_patient_allergens
 from app.audit import audit_request, mark_audit
 from app.audit_export import audit_csv, content_disposition, filename_range
@@ -259,6 +259,11 @@ def create_app(settings: Settings | None = None):
     app.include_router(signup.router)
     app.include_router(face_login.router)
     app.include_router(grants.router)
+    # T30/T31/T32. Uploaded materials live under `uploads/meeting/` and are
+    # served by `GET /api/materials/{id}/download` rather than by StaticFiles:
+    # T31 scenario S2 requires a non-participant's downloaded URL to answer 403,
+    # and a static mount would hand the bytes over without asking.
+    app.include_router(meetings.router)
     app.state.sessions = session_factory(engine)
     app.state.engine = engine
     app.state.cache = cache
