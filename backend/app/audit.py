@@ -21,6 +21,12 @@ ACTIONS = {
     "logout": "auth.logout",
     "create_grant": "temp_grant.create",
     "revoke_grant": "temp_grant.revoke",
+    "create_meeting": "meeting.create",
+    "accept_meeting": "meeting.accept",
+    "decline_meeting": "meeting.decline",
+    "start_meeting": "meeting.start",
+    "complete_meeting": "meeting.complete",
+    "upload_meeting_material": "meeting.material.upload",
 }
 
 

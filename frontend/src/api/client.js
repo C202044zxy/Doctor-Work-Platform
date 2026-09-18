@@ -161,6 +161,124 @@ export const departments = {
   },
 }
 
+// M5. The consultation module: its state machine, the materials its participants
+// share, and the report that archives to the patient record.
+//
+// Everything goes through `request()` except the two calls whose answers are not
+// the JSON envelope -- a file and an HTML sheet. Those are below, and each
+// repeats the 401/403 handling `request()` does, because they cannot use it.
+export const meetings = {
+  async list({ status = '', patientNo = '', page = 1, size = 20 } = {}) {
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    // An unused filter is left out rather than sent blank, for the reason
+    // `patients.list` spells out: the server validates the ones it receives.
+    if (status) params.set('status', status)
+    if (patientNo) params.set('patient_no', patientNo)
+    return request(`/meetings?${params}`)
+  },
+
+  async get(id) {
+    return request(`/meetings/${id}`)
+  },
+
+  async create(payload) {
+    return request('/meetings', json(payload))
+  },
+
+  async accept(id) { return request(`/meetings/${id}/accept`, json({})) },
+  async decline(id) { return request(`/meetings/${id}/decline`, json({})) },
+  async start(id) { return request(`/meetings/${id}/start`, json({})) },
+  async complete(id) { return request(`/meetings/${id}/complete`, json({})) },
+
+  // The invite picker's directory. `/api/users` exists in the contract but is
+  // administrator-only, so it cannot feed a junior's picker (T30 S1 has a junior
+  // initiate the consultation). This returns identity and department only.
+  async doctors({ q = '', department = '', size = 50 } = {}) {
+    const params = new URLSearchParams({ size: String(size) })
+    if (q) params.set('q', q)
+    if (department) params.set('department', department)
+    return request(`/meetings/doctors?${params}`)
+  },
+
+  async materials(id) {
+    return request(`/meetings/${id}/materials`)
+  },
+
+  async uploadMaterial(id, file) {
+    // `form()` leaves Content-Type off on purpose so the browser can set the
+    // multipart boundary.
+    return request(`/meetings/${id}/materials`, form({ file }))
+  },
+
+  async report(id, version) {
+    return request(`/meetings/${id}/report${version ? `?version=${version}` : ''}`)
+  },
+
+  async saveReport(id, payload) {
+    return request(`/meetings/${id}/report`, json(payload))
+  },
+}
+
+// The two M5 answers that are not the envelope. `request()` would `await
+// response.json()` on them and report a parse failure that is not there, so the
+// authorised fetch is repeated here -- including the 401 that ends a session and
+// the 403 that is a permission refusal, which is the same split `download()` makes
+// for the audit CSV.
+async function fetchAuthorised(path) {
+  const token = accessToken()
+  let response
+  try {
+    response = await fetch(`${BASE}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+  } catch {
+    throw new Error('Cannot reach the service. Is the backend running?')
+  }
+  if (!response.ok) {
+    // The failure is JSON even though the success is not.
+    const body = await response.json().catch(() => null)
+    const error = new Error(body?.message || `Request failed (${response.status})`)
+    error.status = response.status
+    if (response.status === 401 && token) {
+      signOut()
+      sessionLostHandler?.({ kind: 'session-lost', message: sessionLostCopy(error.message) })
+    }
+    throw error
+  }
+  return response
+}
+
+// T31. The server keeps the original filename -- it is the last place the Chinese
+// name still exists intact -- so it is read back out of `Content-Disposition`
+// rather than guessed from the numeric id in the URL.
+export async function downloadMaterial(materialId) {
+  const response = await fetchAuthorised(`/materials/${materialId}/download`)
+  const name =
+    filenameFromDisposition(response.headers.get('content-disposition')) ??
+    `material-${materialId}`
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+// T32. The printable sheet is HTML rendered by the backend, so it is fetched with
+// the token and written into a fresh window: neither `window.open(href)` nor an
+// `<a href>` can carry an Authorization header, and the route is participants-only.
+export async function openReportSheet(meetingId, version) {
+  const response = await fetchAuthorised(
+    `/meetings/${meetingId}/report/print${version ? `?version=${version}` : ''}`,
+  )
+  const html = await response.text()
+  const sheet = window.open('', '_blank')
+  if (!sheet) throw new Error('The print window was blocked. Allow pop-ups for this site.')
+  sheet.document.write(html)
+  sheet.document.close()
+  sheet.focus()
+}
+
 export const allergens = {
   async list() {
     return request('/allergens')

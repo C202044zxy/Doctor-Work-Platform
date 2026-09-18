@@ -10,6 +10,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -137,3 +138,119 @@ class Passkey(Base):
     credential_hash: Mapped[str] = mapped_column(String(64), unique=True)
     public_key: Mapped[bytes] = mapped_column(LargeBinary(2048))
     sign_count: Mapped[int] = mapped_column(BigInteger)
+
+
+class Meeting(Base):
+    """T30's remote consultation and its state machine.
+
+    `status` only ever holds the five values the contract's `MeetingStatus`
+    enum defines: requested, accepted, declined, in_progress, completed. There
+    is deliberately no `archived` -- what gets archived is the *report*, which
+    lands in `meeting_reports` and stays readable from the patient record.
+    """
+
+    __tablename__ = "meetings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    initiator_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    # 会诊目的. Required on create and returned by every read, because T30 §4
+    # requires the detail view to display it.
+    purpose: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(
+        String(20), default="requested", server_default="requested", index=True
+    )
+    # Always set: a request that carries no `scheduled_at` is stored with the
+    # moment of the request, so every invitee's grant window stays bounded.
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+    patient: Mapped[Patient] = relationship(lazy="joined")
+    initiator: Mapped[User] = relationship(foreign_keys=[initiator_id], lazy="joined")
+    participants: Mapped[list["MeetingParticipant"]] = relationship(
+        back_populates="meeting",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="MeetingParticipant.id",
+    )
+
+
+class MeetingParticipant(Base):
+    """One invited specialist, with the invitation's own status.
+
+    This status (`invited` / `accepted` / `declined`) is separate from the
+    meeting's: one expert declining does not move the meeting out of
+    `requested`, and the meeting only starts once an invitee has accepted.
+    """
+
+    __tablename__ = "meeting_participants"
+    __table_args__ = (UniqueConstraint("meeting_id", "user_id", name="uq_meeting_participant"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    meeting_id: Mapped[int] = mapped_column(
+        ForeignKey("meetings.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(
+        String(20), default="invited", server_default="invited", index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    meeting: Mapped[Meeting] = relationship(back_populates="participants")
+    user: Mapped[User] = relationship(lazy="joined")
+
+
+class MeetingMaterial(Base):
+    """T31's shared file. `stored_name` is the randomised name on disk.
+
+    The original name lives in `filename` and only leaves the server in the
+    download's `Content-Disposition` header, which is what keeps a Chinese
+    filename readable end to end.
+    """
+
+    __tablename__ = "meeting_materials"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    meeting_id: Mapped[int] = mapped_column(
+        ForeignKey("meetings.id", ondelete="CASCADE"), index=True
+    )
+    filename: Mapped[str] = mapped_column(String(255))
+    stored_name: Mapped[str] = mapped_column(String(255), unique=True)
+    content_type: Mapped[str] = mapped_column(String(120))
+    size_bytes: Mapped[int] = mapped_column()
+    uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+    uploader: Mapped[User] = relationship(foreign_keys=[uploaded_by], lazy="joined")
+
+
+class MeetingReport(Base):
+    """T32's report: one opinion per expert plus a single conclusion.
+
+    Every save inserts a new row and `version` counts up, so a conclusion is
+    never silently rewritten -- reading a report returns the highest version,
+    and an earlier version stays readable by asking for it.
+    """
+
+    __tablename__ = "meeting_reports"
+    __table_args__ = (UniqueConstraint("meeting_id", "version", name="uq_meeting_report_version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    meeting_id: Mapped[int] = mapped_column(
+        ForeignKey("meetings.id", ondelete="CASCADE"), index=True
+    )
+    expert_opinions: Mapped[list] = mapped_column(JSON, default=list)
+    conclusion: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="final", server_default="final")
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+    author: Mapped[User] = relationship(foreign_keys=[created_by], lazy="joined")

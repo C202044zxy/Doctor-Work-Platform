@@ -41,7 +41,11 @@ def make_rows(client):
     number = client.post(
         "/api/patients",
         headers=headers(client, 1),
-        json={"name": "Audit Subject", "gender": "unknown", "department": "General Medicine"},
+        json={
+            "name": "Audit Subject",
+            "gender": "unknown",
+            "department": "Information Technology",
+        },
     ).json()["data"]["patient_no"]
     for uid in (1, 2):
         assert (

@@ -1,0 +1,347 @@
+{#
+  T32's printable sheet. The browser prints this page; no server-side PDF
+  library is involved. Everything below the toolbar is sized so that Ctrl+P on
+  A4 clips nothing: `@page` sets the sheet, the blocks avoid breaking across
+  pages, and the print rules drop the screen chrome.
+
+  Rendered by app/meetings.py `print_meeting_report`, which is participants
+  only -- the same check the JSON route makes.
+#}
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>远程会诊报告 #{{ meeting.id }} · Remote Consultation Report</title>
+    <style>
+      :root {
+        --ink: #1b2430;
+        --ink-2: #5a6675;
+        --ink-3: #8b95a3;
+        --line: #d8dee7;
+        --line-2: #eceff3;
+        --teal: #0f766e;
+        --surface: #f7f9fb;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        padding: 26px 16px 40px;
+        font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+        font-size: 13px;
+        line-height: 1.65;
+        color: var(--ink);
+        background: #eef1f5;
+      }
+
+      .toolbar {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        justify-content: space-between;
+        width: 210mm;
+        max-width: 100%;
+        padding: 10px 14px;
+        margin: 0 auto 14px;
+        font-size: 12.5px;
+        color: var(--ink-2);
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      .toolbar button {
+        padding: 6px 14px;
+        font: inherit;
+        font-weight: 600;
+        color: #fff;
+        cursor: pointer;
+        background: var(--teal);
+        border: 0;
+        border-radius: 6px;
+      }
+
+      /* A4 sheet -------------------------------------------------------------- */
+
+      .sheet {
+        width: 210mm;
+        min-height: 297mm;
+        padding: 16mm 15mm 14mm;
+        margin: 0 auto;
+        background: #fff;
+        box-shadow: 0 1px 4px rgb(15 23 42 / 14%);
+      }
+
+      .sheet-head {
+        display: flex;
+        gap: 16px;
+        align-items: flex-start;
+        justify-content: space-between;
+        padding-bottom: 12px;
+        border-bottom: 2px solid var(--ink);
+      }
+
+      .org { font-size: 12.5px; color: var(--ink-2); }
+
+      .org strong { display: block; font-size: 15px; color: var(--ink); }
+
+      .doc-title { margin: 3px 0 0; font-size: 19px; letter-spacing: 0.01em; }
+
+      .doc-sub { margin: 2px 0 0; font-size: 11.5px; color: var(--ink-2); }
+
+      .doc-ref { text-align: right; }
+
+      .doc-ref .ref-line { font-size: 11.5px; color: var(--ink-2); }
+
+      .doc-ref .ref-no {
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--teal);
+        letter-spacing: 0.03em;
+      }
+
+      .section { margin-top: 20px; }
+
+      .section-title {
+        padding-bottom: 5px;
+        margin: 0 0 10px;
+        font-size: 13.5px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .section-title span { font-weight: 400; color: var(--ink-3); }
+
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0 24px;
+      }
+
+      .meta-row {
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        padding: 5px 0;
+        border-bottom: 1px solid var(--line-2);
+      }
+
+      .meta-row dt { color: var(--ink-2); }
+
+      .meta-row dd { margin: 0; text-align: right; }
+
+      dl, ol, ul { margin: 0; }
+
+      .participants { padding-left: 18px; }
+
+      .opinion {
+        padding: 11px 13px;
+        margin-bottom: 9px;
+        background: var(--surface);
+        border-left: 3px solid var(--teal);
+        border-radius: 0 6px 6px 0;
+      }
+
+      .opinion-head {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+        margin-bottom: 4px;
+      }
+
+      .opinion-author { font-weight: 700; }
+
+      .opinion-ref { font-size: 11.5px; color: var(--ink-3); }
+
+      .opinion-text { margin: 0; white-space: pre-wrap; }
+
+      .conclusion {
+        padding: 13px 15px;
+        font-size: 13.5px;
+        line-height: 1.7;
+        white-space: pre-wrap;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+
+      .sheet-foot {
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+        padding-top: 10px;
+        margin-top: 26px;
+        font-size: 11px;
+        color: var(--ink-3);
+        border-top: 1px solid var(--line);
+      }
+
+      .signature { margin-top: 30px; font-size: 12px; color: var(--ink-2); }
+
+      /* Print ----------------------------------------------------------------- */
+
+      @page {
+        size: A4;
+        margin: 14mm 13mm 15mm;
+      }
+
+      @media print {
+        body {
+          padding: 0;
+          font-size: 11pt;
+          line-height: 1.55;
+          background: #fff;
+        }
+
+        .toolbar { display: none !important; }
+
+        .sheet {
+          width: auto;
+          min-height: 0;
+          padding: 0;
+          margin: 0;
+          box-shadow: none;
+        }
+
+        /* Nothing that carries meaning may be split across two sheets. */
+        .opinion,
+        .conclusion,
+        .section-title,
+        .sheet-head { break-inside: avoid; page-break-inside: avoid; }
+
+        .sheet-foot { break-inside: avoid; page-break-inside: avoid; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <span>
+        预览即 A4 纸面。按 Ctrl+P（macOS 为 Cmd+P）打印或另存为 PDF。
+        <em>Print preview is sized to A4 — nothing is clipped.</em>
+      </span>
+      <button type="button" onclick="window.print()">打印 / Print</button>
+    </div>
+
+    <article class="sheet">
+      <header class="sheet-head">
+        <div class="org">
+          <strong>Doctor Work Platform</strong>
+          远程会诊中心 · Remote Consultation Centre
+          <p class="doc-title">远程会诊报告</p>
+          <p class="doc-sub">Remote Consultation Report</p>
+        </div>
+        <div class="doc-ref">
+          <div class="ref-no">RC-{{ "%05d"|format(meeting.id) }}-v{{ report.version }}</div>
+          <div class="ref-line">会诊编号 / Meeting ID: {{ meeting.id }}</div>
+          <div class="ref-line">
+            报告版本 / Version {{ report.version }} of {{ versions }}
+          </div>
+          <div class="ref-line">
+            状态 / Status: {{ "定稿" if report.status == "final" else "草稿" }}
+            ({{ report.status }})
+          </div>
+        </div>
+      </header>
+
+      <section class="section">
+        <h2 class="section-title">患者信息 <span>/ Patient</span></h2>
+        <div class="meta-grid">
+          <dl class="meta-row"><dt>姓名 / Name</dt><dd>{{ patient.name }}</dd></dl>
+          <dl class="meta-row">
+            <dt>患者编号 / Patient no.</dt><dd>{{ patient.patient_no }}</dd>
+          </dl>
+          <dl class="meta-row">
+            <dt>性别 / 年龄</dt>
+            <dd>
+              {{ patient.gender }}{% if patient.age is not none %} · {{ patient.age }} 岁{% endif %}
+            </dd>
+          </dl>
+          <dl class="meta-row"><dt>科室 / Department</dt><dd>{{ patient.department }}</dd></dl>
+          {% if patient.admitted_at %}
+          <dl class="meta-row">
+            <dt>入院日期 / Admitted</dt><dd>{{ patient.admitted_at }}</dd>
+          </dl>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">会诊信息 <span>/ Consultation</span></h2>
+        <div class="meta-grid">
+          <dl class="meta-row"><dt>主题 / Title</dt><dd>{{ meeting.title }}</dd></dl>
+          <dl class="meta-row"><dt>发起人 / Initiated by</dt><dd>{{ initiator }}</dd></dl>
+          <dl class="meta-row">
+            <dt>计划时间 / Scheduled</dt>
+            <dd>{{ meeting.scheduled_at.strftime("%Y-%m-%d %H:%M") }} UTC</dd>
+          </dl>
+          {% if meeting.started_at %}
+          <dl class="meta-row">
+            <dt>开始时间 / Started</dt>
+            <dd>{{ meeting.started_at.strftime("%Y-%m-%d %H:%M") }} UTC</dd>
+          </dl>
+          {% endif %}
+          {% if meeting.completed_at %}
+          <dl class="meta-row">
+            <dt>结束时间 / Completed</dt>
+            <dd>{{ meeting.completed_at.strftime("%Y-%m-%d %H:%M") }} UTC</dd>
+          </dl>
+          {% endif %}
+        </div>
+        <div class="section" style="margin-top: 12px">
+          <div class="meta-row"><dt>会诊目的 / Purpose</dt><dd>{{ meeting.purpose }}</dd></div>
+        </div>
+        <div class="section" style="margin-top: 12px">
+          <div style="color: var(--ink-2); margin-bottom: 4px">
+            受邀专家 / Invited specialists
+          </div>
+          <ul class="participants">
+            {% for row in meeting.participants %}
+            <li>
+              {{ row.name }} · {{ row.department }}
+              <span class="opinion-ref">（{{ row.status }}）</span>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">
+          专家意见 <span>/ Expert opinions ({{ report.expert_opinions|length }})</span>
+        </h2>
+        {% for opinion in report.expert_opinions %}
+        <div class="opinion">
+          <div class="opinion-head">
+            <span class="opinion-author">
+              {{ opinion.expert_name or ("专家 #" ~ opinion.expert_id) }}
+            </span>
+            <span class="opinion-ref">expert_id {{ opinion.expert_id }}</span>
+          </div>
+          <p class="opinion-text">{{ opinion.opinion }}</p>
+        </div>
+        {% endfor %}
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">会诊结论 <span>/ Conclusion</span></h2>
+        <div class="conclusion">{{ report.conclusion }}</div>
+        <p class="signature">
+          本报告由参与会诊的专家共同确认，并已归档至患者档案。
+          <br />
+          Confirmed by the participating specialists and archived to the patient
+          record.
+        </p>
+      </section>
+
+      <footer class="sheet-foot">
+        <span>
+          生成人 / Generated by: {{ printed_by }} ·
+          {{ report.created_at.strftime("%Y-%m-%d %H:%M") }} UTC
+        </span>
+        <span>
+          打印时间 / Printed: {{ printed_at.strftime("%Y-%m-%d %H:%M") }} UTC ·
+          RC-{{ "%05d"|format(meeting.id) }}-v{{ report.version }}
+        </span>
+      </footer>
+    </article>
+  </body>
+</html>
