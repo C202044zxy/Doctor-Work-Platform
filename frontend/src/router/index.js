@@ -18,7 +18,6 @@ export const navigation = [
   { name: 'records', label: 'Medical Records', icon: 'Document' },
   { name: 'consultations', label: 'Consultations', icon: 'ChatDotRound' },
   { name: 'remote-consultation', label: 'Remote Consultation', icon: 'VideoCamera' },
-  { name: 'health', label: 'Health Management', icon: 'TrendCharts' },
   { name: 'review', label: 'Review Queue', icon: 'Checked', roles: MODULE_ROLES.review },
   { name: 'audit', label: 'Audit Log', icon: 'Tickets', roles: MODULE_ROLES.audit },
 ]
@@ -57,8 +56,8 @@ const routes = [
 
   // The remaining modules. Each screen is built and navigable; the content
   // behind it is fabricated (see api/demo-data.js) until the owning backend
-  // task lands. Patients, the patient-detail consultation tab and remote
-  // consultation read the real service today.
+  // task lands. Patients, the two patient-detail tabs (consultation records and
+  // health data) and remote consultation read the real service today.
   {
     path: '/records',
     name: 'records',
@@ -76,12 +75,6 @@ const routes = [
     name: 'remote-consultation',
     component: () => import('../views/RemoteConsultationView.vue'),
     meta: { title: 'Remote Consultation' },
-  },
-  {
-    path: '/health',
-    name: 'health',
-    component: () => import('../views/HealthManagementView.vue'),
-    meta: { title: 'Health Management' },
   },
   {
     path: '/review',

@@ -11,7 +11,6 @@ import {
   Odometer,
   SwitchButton,
   Tickets,
-  TrendCharts,
   User,
   VideoCamera,
 } from '@element-plus/icons-vue'
@@ -31,7 +30,6 @@ const ICONS = {
   Document,
   ChatDotRound,
   VideoCamera,
-  TrendCharts,
   Checked,
   Tickets,
 }
