@@ -5,6 +5,7 @@ import { signIn } from '../session'
 
 import { USE_MOCK_AUTH, authentication } from '../api/client'
 import CameraCapture from '../components/CameraCapture.vue'
+import { loginWithPhoto } from '../face-login.js'
 import MockBadge from '../components/MockBadge.vue'
 import SmsCodeInput from '../components/SmsCodeInput.vue'
 
@@ -60,7 +61,7 @@ let timer = null
 const heading = computed(() => {
   if (step.value === 'choose') {
     if (channel.value === 'sms') return 'Verify by SMS'
-    if (channel.value === 'face') return 'Verify with your face'
+    if (channel.value === 'face') return 'Face-login demo'
     return 'Verify by email'
   }
   if (step.value === 'code') return 'Check your email'
@@ -249,10 +250,7 @@ function handleCaptured(blob) {
   error.value = ''
 }
 
-// §4.3.1 ② — the photo is matched against the account named in step 1, so the
-// username comes from there rather than being asked for again. `faceVerify` runs
-// the dHash comparison (§2 冲突 1 方案 A) in the mock, which means "a different
-// face is refused" is a real check and not a constant.
+// The backend demo accepts a valid photo without comparing faces.
 async function submitFace() {
   error.value = ''
   if (!photo.value) {
@@ -261,12 +259,8 @@ async function submitFace() {
   }
   faceBusy.value = true
   try {
-    const data = await authentication.faceVerify(username.value.trim(), photo.value)
+    const data = await loginWithPhoto(authentication, username.value.trim(), photo.value)
     notice.value = ''
-    if (data?.simulated) {
-      notice.value = 'Simulated step reached the end of the flow. No session was issued: the face endpoint is still being built.'
-      return
-    }
     finish(data)
   } catch (err) { error.value = err.message }
   finally { faceBusy.value = false }
@@ -312,7 +306,7 @@ function useAnotherAccount() {
         <ul class="pitch-points">
           <li>
             <strong>Two-factor sign-in</strong>
-            Your password, then a code by email or SMS, or a face match.
+            Your password, then an email code, SMS demo, or face-login demo.
           </li>
           <li>
             <strong>Scoped access</strong>
@@ -347,7 +341,7 @@ function useAnotherAccount() {
             Enter the code sent to your registered mobile number.
           </template>
           <template v-else-if="channel === 'face'">
-            Look at the camera to confirm it's you.
+            Demo only: capture a photo to sign in. No face matching is performed.
           </template>
           <template v-else>
             We'll email a 6-digit code to your account’s registered address.
@@ -448,7 +442,7 @@ function useAnotherAccount() {
               :disabled="faceBusy"
               @click="submitFace"
             >
-              Verify and sign in
+              Send photo and sign in
             </el-button>
           </div>
 
@@ -559,10 +553,9 @@ function useAnotherAccount() {
         </p>
 
         <p v-if="!registering" class="demo-note">
-          SMS and face recognition are simulated: the pages, the countdown, the
-          lockout and the photo capture are real, but nothing leaves for a real
-          gateway or provider. Sign-in still needs the endpoints being built for
-          T41 and T42.
+          SMS is simulated. Face login sends your photo to the backend and creates
+          a session for your active account. Face matching is simulated: any valid
+          photo is accepted, with no enrollment required.
         </p>
       </form>
     </section>
