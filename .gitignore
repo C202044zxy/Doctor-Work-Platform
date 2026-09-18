@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 *.pyc
 *.db
+*.db.bak*
 node_modules/
 dist/
 backups/
@@ -12,3 +13,7 @@ backups/
 uploads/
 *.db-wal
 *.db-shm
+
+# A Redis unpacked by backend/start.* when none was installed. Binaries must
+# never be committed: the startup script re-downloads them on demand.
+backend/runtime/

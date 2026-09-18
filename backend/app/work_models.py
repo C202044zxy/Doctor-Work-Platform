@@ -1,4 +1,4 @@
-"""B-owned T20/T25/T26/T35/T36 persistence; no A/D feature tables."""
+"""Consultation persistence and retained order, plan and reminder models."""
 
 from datetime import UTC, date, datetime
 
@@ -15,8 +15,8 @@ def now():
 class MedicalOrder(Base):
     __tablename__ = "medical_order"
     id: Mapped[int] = mapped_column(primary_key=True)
-    # A owns medical_record and its migration. The integration loader verifies this
-    # reference in the same transaction; add its FK when A's table is delivered.
+    # M4 owns medical_record and its migration. The integration loader verifies
+    # this reference in the same transaction; add its FK when that table lands.
     record_id: Mapped[int] = mapped_column(index=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
@@ -40,7 +40,7 @@ class Consultation(Base):
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
 class ConsultMessage(Base):
@@ -66,6 +66,20 @@ class ImageUpload(Base):
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     consultation_id: Mapped[int | None] = mapped_column(ForeignKey("consultation.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CallLog(Base):
+    """Finished calls only; live signaling state belongs to the single API worker."""
+
+    __tablename__ = "call_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    consultation_id: Mapped[int] = mapped_column(ForeignKey("consultation.id"), index=True)
+    call_id: Mapped[str] = mapped_column(String(64), unique=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    duration_seconds: Mapped[int]
+    end_reason: Mapped[str] = mapped_column(String(30))
 
 
 class HealthPlan(Base):

@@ -464,8 +464,8 @@ paths:
       summary: List departments
       description: |
         Already implemented, and the one endpoint in this contract that **carries no task
-        ID**: it predates the task register in `project_plan.md` and no sign-off standard
-        asserts anything about it, so attributing it to one would be inventing an owner.
+        ID**: it predates the task register and no acceptance criterion asserts anything
+        about it, so attributing it to a task would be inventing an owner.
         `API-索引.md` marks the same row "已有" for the same reason. It is listed here
         because M03 §4 asks every interface to be traceable, and the honest trace is this
         note rather than a made-up T-number.
@@ -1598,7 +1598,7 @@ paths:
       operationId: listConsultations
       tags: [Consultations]
       summary: List consultations
-      description: Task T27. The workspace groups these as waiting, active, and ended.
+      description: Task M3-03. The workspace groups these as waiting, active, and ended.
       parameters:
         - name: status
           in: query
@@ -1619,7 +1619,7 @@ paths:
       operationId: createConsultation
       tags: [Consultations]
       summary: Open a consultation
-      description: Task T27.
+      description: Task M3-03.
       requestBody:
         required: true
         content:
@@ -1641,7 +1641,7 @@ paths:
       operationId: getConsultation
       tags: [Consultations]
       summary: Read a consultation
-      description: Task T27.
+      description: Task M3-03.
       responses:
         '200':
           description: The consultation.
@@ -1655,7 +1655,7 @@ paths:
       operationId: acceptConsultation
       tags: [Consultations]
       summary: Accept a waiting consultation
-      description: Task T27. Moves `waiting` to `active`.
+      description: Task M3-03. Moves `waiting` to `active`.
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
@@ -1681,7 +1681,7 @@ paths:
       operationId: endConsultation
       tags: [Consultations]
       summary: End a consultation
-      description: Task T27. Moves `active` to `ended`.
+      description: Task M3-03. Moves `active` to `ended`.
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
@@ -1705,8 +1705,8 @@ paths:
       tags: [Consultations]
       summary: Read the message history
       description: |
-        Task T26 / T27. Newest first, so the chat loads older messages as the reader
-        scrolls up. T27 scenario S2 opens a session with 50 messages and expects the
+        Task M3-02 / M3-03. Newest first, so the chat loads older messages as the reader
+        scrolls up. M3-03 scenario S2 opens a session with 50 messages and expects the
         first page to be 20, then 20 more on scroll, in order with no duplicates and no
         gaps — so the ordering must be stable across pages, not merely "roughly newest".
       parameters:
@@ -1732,13 +1732,13 @@ paths:
       tags: [Consultations]
       summary: Send a message over HTTP
       description: |
-        Task T26. The HTTP fallback for when the WebSocket is unavailable; the normal
+        Task M3-02. The HTTP fallback for when the WebSocket is unavailable; the normal
         path is the chat socket, `WS /ws/chat/{room_id}` with `room_id` set to the
         consultation id. Both write the same row, so a client that reconnects loses
         nothing.
 
         Sending to an `ended` consultation is refused — the room is read-only once
-        closed (T27 criterion 4).
+        closed (M3-03 criterion 4).
       requestBody:
         required: true
         content:
@@ -1764,15 +1764,21 @@ paths:
       tags: [Consultations]
       summary: Search past consultations
       description: |
-        Task T28. Patient, date range, and keyword combine with AND and all three may be
-        sent at once. Results fall under the T09 department scope: a keyword naming a
+        Task M3-04. Patient, date range, and keyword combine with AND and all three may be
+        sent at once. Date bounds use consultation creation dates in Asia/Shanghai, inclusive.
+        CSV exports all matching rows; compare row count to the list total.
+        Results fall under the M1-05 department scope: a keyword naming a
         patient from another department returns **zero rows**, not a permission error —
-        T28 scenario S2 calls this a security defect if it leaks.
+        M3-04 scenario S2 calls this a security defect if it leaks.
 
         Each result opens to the full session, text and images together, with timestamps
         (criterion 2). The search must answer in under 2 seconds with 100+ sessions, so
         index the message content and the consultation dates.
       parameters:
+        - name: patient
+          in: query
+          description: Patient name literal substring or exact patient number; AND with other filters.
+          schema: { type: string, maxLength: 100 }
         - name: patient_no
           in: query
           schema: { type: string }
@@ -1802,13 +1808,17 @@ paths:
       tags: [Consultations]
       summary: Export consultation records as CSV
       description: |
-        Task T28. Returns `text/csv`, not the JSON envelope, so the frontend uses a blob
+        Task M3-04. Returns `text/csv`, not the JSON envelope, so the frontend uses a blob
         download path rather than the shared JSON client.
 
         The rows must match the caller's current filters rather than dumping everything,
-        and the body must start with a **UTF-8 BOM** — T28 scenario S1 opens the file in
-        Excel and requires no mojibake and a row count equal to the page.
+        and the body must start with a **UTF-8 BOM** — M3-04 scenario S1 opens the file in
+        Excel and requires no mojibake and a row count equal to the filtered total, across all pages.
       parameters:
+        - name: patient
+          in: query
+          description: Patient name literal substring or exact patient number; AND with other filters.
+          schema: { type: string, maxLength: 100 }
         - name: patient_no
           in: query
           schema: { type: string }
@@ -1844,10 +1854,10 @@ paths:
       tags: [Consultations]
       summary: Upload an image
       description: |
-        Task T26. Stored on local disk under `uploads/` and served by StaticFiles.
+        Task M3-02. Stored on local disk under `uploads/` and served by StaticFiles.
         Object storage was cut from scope.
 
-        Three checks are mandatory, and T26 scenario S2 exercises each:
+        Three checks are mandatory, and M3-02 scenario S2 exercises each:
 
         - **Content type**, not the file extension, against the whitelist
           **jpg / png / webp**. A `.exe` renamed to `.jpg` is rejected; sniff the bytes, do
@@ -1858,10 +1868,11 @@ paths:
           inside `uploads/`. An upload called `../evil.png` must land as a random name
           and must not escape the directory.
 
-        This image-only whitelist is **T26's**. Meeting materials reuse the same uploader but
+        This image-only whitelist is **M3-02's**. Meeting materials reuse the same uploader but
         accept a wider set (PDF / images / documents) — see `POST /api/meetings/{id}/materials`.
 
-        URLs require bearer authentication and, once attached, room participation.
+        URLs require bearer authentication and, once attached, patient data scope.
+        Writes and WebSocket participation remain restricted to the two participants.
         The UI fetches the image as a blob and can open that blob in a new tab.
         Unauthenticated public StaticFiles access is not enabled.
 
@@ -1885,11 +1896,34 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/UploadResponse' }
-        '400':
-          description: Unsupported content type or the file is too large.
+        '413':
+          description: Image exceeds the 5 MiB upload limit.
+        '422':
+          description: Invalid JPEG, PNG or WebP contents.
+
+  /uploads/{filename}:
+    get:
+      operationId: readConsultationImage
+      tags: [Consultations]
+      summary: Read a protected chat image
+      description: Bearer required. Unattached images belong to their uploader; attached images follow patient record data scope. Responses are private and no-store.
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Validated JPEG, PNG or WebP bytes.
           content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+            image/png:
+              schema: { type: string, format: binary }
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /api/consultations/{id}/calls:
     parameters:
@@ -1899,7 +1933,7 @@ paths:
       tags: [Consultations]
       summary: Read the call history
       description: |
-        Task T29. This is the read side of the call metadata, and without it T29
+        Task M3-05. This is the read side of the call metadata, and without it M3-05
         criterion 3 cannot be met: the criterion is not that `call_log` is written,
         it is that the entry is **viewable in the consultation record**. Scenario S1
         hangs up after about a minute and then asserts the consultation shows a new
@@ -1923,7 +1957,7 @@ paths:
       tags: [Consultations]
       summary: Record call metadata
       description: |
-        Task T29. Stores timing and duration only. Recording and cloud storage were
+        Task M3-05. Stores timing and duration only. Recording and cloud storage were
         cut from scope, so no media is stored.
 
         Called **once the call has ended**, not when it starts. That is what keeps
@@ -1934,7 +1968,7 @@ paths:
 
         Criterion 5 restricts calling to the physicians on this session, so a caller
         who is not a participant is refused with 403 rather than silently allowed —
-        the same rule the signalling room in T25 applies.
+        the same rule the signalling room in M3-01 applies.
       requestBody:
         required: true
         content:
@@ -2878,7 +2912,7 @@ paths:
       tags: [Consultations]
       summary: Realtime chat room
       description: |
-        Task T25. WebSocket upgrade; not an HTTP endpoint, so it carries no JSON
+        Task M3-01. WebSocket upgrade; not an HTTP endpoint, so it carries no JSON
         envelope. The sign-off document names this route `/ws/chat/{room_id}`, and
         `room_id` is a consultation id or a meeting id — the room model is shared, so
         the consultation and meeting rooms use one socket implementation.
@@ -2886,7 +2920,7 @@ paths:
         **The JWT is validated during the handshake.** A missing or invalid token is
         refused before the connection is accepted, not after (criterion 1).
 
-        **Participation is checked too.** T29 §5 requires that only the physicians on the
+        **Participation is checked too.** M3-05 §5 requires that only the physicians on the
         session may open the signalling room — "非参与者无法接入信令房间". A valid token
         belonging to a physician who is on neither the consultation nor the meeting is
         refused with **403** during the handshake, before the upgrade completes; the room is
@@ -2917,11 +2951,24 @@ paths:
         (criterion 3). Presence lives in Redis and is cleared on an unclean disconnect,
         so no "ghost online" users accumulate. One room must hold at least 20
         concurrent connections under 500ms latency; record the measured figure.
+
+        Current M3 signaling extensions (all under the same envelope):
+        `call_offer` / `call_answer` carry `{call_id, sdp}`; `ice_candidate`
+        carries `{call_id, candidate}`. `call_connected`, `call_end` and
+        `call_reject` carry `{call_id}`. The server sends `call_end` with
+        `{call_id, reason}` after persisting the finished call. Calls bind two
+        specific WebSocket connections, ring out after 25 seconds, and finish
+        when either connection closes. No media or SDP is stored.
+        `ping` requires `pong`; after 20 seconds without inbound activity the
+        connection closes. `status` carries the updated consultation;
+        `error` carries message, client_id, call_id and event_type when available.
+        Readers with patient data scope can use HTTP history, but only room
+        participants may upgrade this socket. M5 room resolution is not yet installed.
       parameters:
         - name: room_id
           in: path
           required: true
-          description: A consultation id or a meeting id. Both are integer primary keys.
+          description: Currently a consultation integer id. Meeting room resolution requires M5 integration; never mix integer IDs from different tables.
           schema: { type: integer }
       responses:
         '101':
@@ -2929,7 +2976,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403':
           description: |
-            Authenticated, but not a physician on this session. T29 §5 requires a
+            Authenticated, but not a physician on this session. M3-05 §5 requires a
             non-participant to be unable to join the signalling room; the refusal happens
             during the handshake, so no message ever reaches the room.
         '404': { $ref: '#/components/responses/NotFound' }
@@ -3197,7 +3244,8 @@ components:
           description: |
             The caller's role. Named `title` because that is the field the JWT payload
             carries and the field T05 scenario S1 asserts on `/api/me`
-            (`department=信息科`, `title=admin`). Do not rename it to `role` on the wire.
+            (`department=Information Technology`, `title=admin`). Do not rename it to `role`
+            on the wire.
         department: { type: string, example: Information Technology }
 
     CurrentUserResponse:
@@ -4054,11 +4102,12 @@ components:
       type: object
       required: [id, patient_no, status]
       properties:
+        is_participant: { type: boolean, description: Whether the caller may write or join signaling; enforced separately by the server. }
         id: { type: integer }
         patient_no: { type: string }
         patient_name: { type: string }
-        doctor_id: { type: integer }
-        doctor_name: { type: string }
+        doctor_id: { type: [integer, 'null'] }
+        doctor_name: { type: [string, 'null'] }
         status: { $ref: '#/components/schemas/ConsultationStatus' }
         last_message:
           type: string
@@ -4075,8 +4124,8 @@ components:
           description: |
             When that message was sent — the "时间" in the same criterion, and the value the
             list is ordered by. `null` when the room is empty.
-        started_at: { type: string, format: date-time }
-        ended_at: { type: string, format: date-time }
+        started_at: { type: [string, 'null'], format: date-time }
+        ended_at: { type: [string, 'null'], format: date-time }
         created_at: { type: string, format: date-time }
 
     ConsultationListResponse:
@@ -4182,6 +4231,7 @@ components:
         supply; the rest describe how far the call got before it ended.
       required: [started_at]
       properties:
+        call_id: { type: string, maxLength: 64, description: Optional client retry key on POST; always present in stored responses. }
         started_at: { type: string, format: date-time }
         connected_at: { type: [string, 'null'], format: date-time }
         ended_at: { type: [string, 'null'], format: date-time }
@@ -4198,6 +4248,8 @@ components:
         reads back, so a call that ran to completion carries both.
       required: [id, consultation_id, started_at]
       properties:
+        call_id: { type: string, maxLength: 64, description: Optional client retry key on POST; always present in stored responses. }
+        end_reason: { type: string, enum: [hangup, rejected, disconnected, timeout, consultation_ended, server_restart, reported] }
         id: { type: integer }
         consultation_id: { type: integer }
         started_at: { type: string, format: date-time }
@@ -4946,4 +4998,3 @@ components:
           required: [data]
           properties:
             data: { $ref: '#/components/schemas/AuditLog' }
-

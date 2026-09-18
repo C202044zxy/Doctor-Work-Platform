@@ -17,7 +17,7 @@ DETAILS = {
     "name": "New Doctor",
     "email": "New@Example.test",
     "password": "strong-password",
-    "department": "General Medicine",
+    "department": "Information Technology",
 }
 
 

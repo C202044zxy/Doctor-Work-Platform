@@ -18,7 +18,7 @@ def request(path, method="GET", body=None):
 
 
 health = request("/api/health/ready")
-assert health["checks"]["database"] == "ok", health
+assert health["checks"]["db"] == "ok", health
 if os.environ.get("SMOKE_REQUIRE_REDIS", "1") == "1":
     assert health["checks"]["redis"] == "ok", health
 with urlopen(base, timeout=10) as response:

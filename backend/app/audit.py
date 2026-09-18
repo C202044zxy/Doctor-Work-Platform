@@ -66,6 +66,10 @@ async def audit_request(request, call_next):
                 {
                     **values,
                     "user_id": identity.id if identity else None,
+                    # T12 lists the actor by name. Snapshotted here rather than
+                    # joined at read time, so a later rename cannot rewrite what
+                    # the log says happened.
+                    "username": identity.username if identity else None,
                     "ip": request.client.host[:45] if request.client else None,
                     "method": request.method,
                     "path": route_path[:500],

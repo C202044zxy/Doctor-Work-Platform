@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
+  Avatar,
   Bell,
   ChatDotRound,
   Checked,
@@ -16,6 +17,7 @@ import {
 } from '@element-plus/icons-vue'
 
 import { navigation } from './router'
+import { canOpen } from './access'
 import { currentClinician, signOut } from './session'
 import { ElMessage } from 'element-plus'
 import { authentication, health } from './api/client'
@@ -46,6 +48,13 @@ const router = useRouter()
 const clinician = currentClinician
 const pageTitle = computed(() => route.meta.title ?? 'Doctor Work Platform')
 
+// T07 签收标准 3 — a `junior` sees no 病历审阅 and no 审计日志 entry. An entry
+// without `roles` is for everyone. This hides the door; the route guard is what
+// locks it, and both are required.
+const visibleNavigation = computed(() =>
+  navigation.filter((item) => canOpen(item.roles, clinician.value.role)),
+)
+
 const serviceState = ref('checking')
 const serviceLabel = computed(() => SERVICE_LABELS[serviceState.value])
 
@@ -69,7 +78,11 @@ onMounted(async () => {
 })
 
 const accountBusy = ref(false)
-async function handleAccount() {
+async function handleAccount(command) {
+  if (command === 'face-enroll') {
+    router.push({ name: 'face-enroll' })
+    return
+  }
   if (accountBusy.value) return
   accountBusy.value = true
   try {
@@ -105,7 +118,7 @@ async function handleAccount() {
 
       <nav class="nav" aria-label="Primary">
         <router-link
-          v-for="item in navigation"
+          v-for="item in visibleNavigation"
           :key="item.name"
           :to="{ name: item.name }"
           class="nav-item"
@@ -146,6 +159,9 @@ async function handleAccount() {
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item disabled>{{ clinician.department }}</el-dropdown-item>
+                <el-dropdown-item command="face-enroll" :icon="Avatar" divided>
+                  Face enrolment
+                </el-dropdown-item>
                 <el-dropdown-item :disabled="accountBusy" command="sign-out" :icon="SwitchButton" divided>
                   Sign out
                 </el-dropdown-item>

@@ -1,4 +1,4 @@
-"""Shared B route dependencies and response helpers."""
+"""Shared work-module route dependencies, data scope and response helpers."""
 
 from datetime import UTC, datetime
 from typing import Annotated

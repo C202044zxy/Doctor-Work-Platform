@@ -1,4 +1,4 @@
-"""B W2/W3 acceptance. A's dependencies are injected only inside tests."""
+"""M3 and retained work-module regressions; M4 adapters are injected only in tests."""
 
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
@@ -29,7 +29,11 @@ def patient(client):
     response = client.post(
         "/api/patients",
         headers=headers(client),
-        json={"name": "B acceptance patient", "gender": "male", "department": "General Medicine"},
+        json={
+            "name": "Consultation test patient",
+            "gender": "male",
+            "department": "Information Technology",
+        },
     )
     assert response.status_code == 200, response.text
     return response.json()["data"]["patient_no"]
@@ -97,7 +101,14 @@ def test_chat_lifecycle_history_and_scope(client):
     with client.app.state.sessions() as db:
         db.get(User, 4).department_id = 1
         db.commit()
-    assert client.get(path + "/messages", headers=headers(client, 4)).status_code == 403
+    # Record readers follow department scope; writing and signaling require participation.
+    assert client.get(path + "/messages", headers=headers(client, 4)).status_code == 200
+    assert (
+        client.post(
+            path + "/messages", headers=headers(client, 4), json={"content": "No"}
+        ).status_code
+        == 403
+    )
     ended = data(client.post(path + "/end", headers=headers(client, 2)))
     assert ended["status"] == "ended" and ended["ended_at"]
     assert client.post(path + "/messages", headers=h, json={"content": "No"}).status_code == 409

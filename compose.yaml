@@ -1,22 +1,10 @@
+# Container mode. The local (no-Docker) mode is backend/start.ps1 on Windows and
+# backend/start.sh on Linux/macOS; both use the same SQLite + Redis stack, so a
+# container run and a local run behave the same.
+#
+# The database is SQLite, so there is no database server to start and no
+# credentials to manage. Local development needs Redis only.
 services:
-  mysql:
-    image: mysql:8.4
-    # The local/CI migration account creates the append-only audit triggers.
-    # Production should run migrations with a dedicated admin account and use
-    # scripts/audit_permissions.sql for the restricted runtime account.
-    command: ["--log-bin-trust-function-creators=1"]
-    environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-doctor_platform}
-      MYSQL_USER: ${MYSQL_USER:-doctor}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-doctor_local_password}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_local_password}
-    volumes:
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD-SHELL", 'MYSQL_PWD="$$MYSQL_PASSWORD" mysql -h 127.0.0.1 -u "$$MYSQL_USER" "$$MYSQL_DATABASE" -e "SELECT 1"']
-      interval: 5s
-      timeout: 5s
-      retries: 30
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
@@ -30,8 +18,10 @@ services:
   backend:
     build: ./backend
     environment:
-      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-doctor}:${MYSQL_PASSWORD:-doctor_local_password}@mysql:3306/${MYSQL_DATABASE:-doctor_platform}?charset=utf8mb4
+      # Four slashes: an absolute path inside the container, on the volume below.
+      DATABASE_URL: sqlite:////data/doctor.db
       REDIS_URL: redis://redis:6379/0
+      UPLOAD_DIR: /data/uploads
       JWT_SECRET: ${JWT_SECRET:-}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -40,11 +30,11 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
       PATIENT_DATA_KEY: ${PATIENT_DATA_KEY:-dev-only-insecure-patient-data-key}
+    volumes:
+      - sqlite_data:/data
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
-      mysql:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -60,5 +50,5 @@ services:
       backend:
         condition: service_healthy
 volumes:
-  mysql_data:
+  sqlite_data:
   redis_data:

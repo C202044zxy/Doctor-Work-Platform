@@ -9,5 +9,7 @@ RUN uv sync --locked --no-dev --python /usr/local/bin/python
 COPY app ./app
 COPY alembic.ini ./
 COPY migrations ./migrations
+# SQLite lives on the compose volume mounted at /data, so it outlives this image.
+RUN mkdir -p /data
 EXPOSE 8000
-CMD ["sh", "-c", ".venv/bin/alembic upgrade head && .venv/bin/python -m app.seed && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", ".venv/bin/alembic upgrade head && .venv/bin/python -m app.seed && .venv/bin/python -m app.seed_demo && exec .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log --log-level warning --ws-max-size 20000"]

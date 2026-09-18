@@ -16,8 +16,12 @@ PERMISSIONS = {
     "admin": CLINICAL
     | {"audit.read", "audit.export", "user.manage", "template.manage", "data.all", "grant.write"},
 }
-# Latest main added signup and a face-login route. Face login is disabled by
-# default and its unfinished matcher denies access, even if explicitly enabled.
+# Signup and face login are reachable without a token.
+#
+# WARNING: /api/auth/face/login is a SIMULATION. app.face_login.match_face()
+# returns True unconditionally, so any valid JPEG plus the username of an
+# existing active account yields a real 2-hour token. It is listed here only so
+# the demo can show the flow; never expose this route outside a local demo.
 ANONYMOUS_PATHS = frozenset(
     {
         "/health",

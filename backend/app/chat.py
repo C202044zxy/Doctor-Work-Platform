@@ -1,4 +1,4 @@
-"""T25/T26/T27 chat: single worker, durable history and bounded live queues."""
+"""M3 chat: single worker, durable history and bounded live queues."""
 
 import asyncio
 import contextlib
@@ -8,6 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
+from time import monotonic
 from typing import Annotated, Literal
 
 import anyio
@@ -30,6 +31,7 @@ from sqlalchemy import select, update
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 
+from app import calls
 from app.audit import mark_audit, persist_audit
 from app.auth import current_user
 from app.dependencies import Pagination
@@ -58,6 +60,8 @@ Paging = Annotated[Pagination, Depends()]
 class ChatHub:
     def __init__(self):
         self.rooms = {}
+        self.clients = {}
+        self.calls = {}
         self.write_lock = RLock()
 
     def subscribe(self, room):
@@ -71,13 +75,14 @@ class ChatHub:
             self.rooms.pop(room, None)
 
     async def publish(self, room, event):
+        encoded = jsonable_encoder(event)
         for queue in tuple(self.rooms.get(room, ())):
             if queue.full():
                 while not queue.empty():
                     queue.get_nowait()
                 queue.put_nowait({"type": "overflow", "data": {}})
             else:
-                queue.put_nowait(jsonable_encoder(event))
+                queue.put_nowait(encoded)
 
 
 def room_for(db, room_id, *, participant=False):
@@ -108,6 +113,7 @@ def room_data(db, row):
         "patient_no": patient.patient_no,
         "patient_name": patient.name,
         "doctor_name": doctor.name if doctor else None,
+        "is_participant": db.info["user"].id in (row.created_by, row.doctor_id),
     }
 
 
@@ -196,6 +202,8 @@ def transition(app, user, room_id, target):
 async def change_room(db, id, target):
     request = db.info["request"]
     result = await run_in_threadpool(transition, request.app, db.info["user"], id, target)
+    if target == "ended":
+        await calls.finish(request.app, id, "consultation_ended")
     mark_audit(
         request,
         "consultation.accept" if target == "active" else "consultation.end",
@@ -224,7 +232,7 @@ def history(
     before_id: int | None = Query(None, gt=0),
     after_id: int | None = Query(None, ge=0),
 ):
-    row = room_for(db, id, participant=True)
+    row = room_for(db, id)
     if before_id is not None and after_id is not None:
         raise HTTPException(422, "Use before_id or after_id, not both")
     stmt = select(ConsultMessage).where(ConsultMessage.consultation_id == id)
@@ -364,7 +372,7 @@ async def read_image(filename: str, db: DB):
     if row is None:
         raise HTTPException(404, "Image not found")
     if row.consultation_id:
-        room_for(db, row.consultation_id, participant=True)
+        room_for(db, row.consultation_id)
     elif row.owner_id != db.info["user"].id:
         raise HTTPException(404, "Image not found")
     request = db.info["request"]
@@ -385,7 +393,13 @@ def socket_identity(ws, token, room_id):
         raise HTTPException(403, "Missing consult.write permission")
     with ws.app.state.sessions() as db:
         db.info["user"] = user
-        room_for(db, room_id, participant=True)
+        # One scoped join instead of loading the room, patient, and patient again
+        # for every outbound frame. Authorization still runs on every event.
+        room = db.scalar(scoped(Consultation, db).where(Consultation.id == room_id))
+        if room is None:
+            raise HTTPException(404, "Consultation not found")
+        if user.id not in (room.created_by, room.doctor_id):
+            raise HTTPException(403, "Only session participants may enter the room")
     return user
 
 
@@ -400,23 +414,37 @@ async def chat_socket(ws: WebSocket, room_id: int, token: str = ""):
     key = f"chat:presence:{room_id}:{user.id}:{uuid.uuid4().hex}"
     queue = hub.subscribe(room_id)
     await ws.accept()
+    hub.clients[key] = (room_id, user.id, queue)
+    last_received = monotonic()
 
     async def writer():
+        lease_refreshed = monotonic()
         while True:
             try:
-                event = await asyncio.wait_for(queue.get(), 20)
+                event = await asyncio.wait_for(queue.get(), 5)
             except TimeoutError:
                 event = {"type": "ping", "data": {}}
+            if monotonic() - last_received > 20:
+                await ws.close(code=1001)
+                return
             await run_in_threadpool(socket_identity, ws, token, room_id)
-            await run_in_threadpool(cache.set, key, "1", ex=60)
+            # Presence expires after 60s and is renewed every 20s, independent
+            # of traffic volume. Avoid a redundant Redis write per message.
+            if monotonic() - lease_refreshed >= 20:
+                await run_in_threadpool(cache.set, key, "1", ex=60)
+                lease_refreshed = monotonic()
             if event["type"] == "overflow":
                 await ws.close(code=1013)
                 return
             await ws.send_json(event)
+            if event["type"] != "ping" and monotonic() - last_received > 5:
+                await ws.send_json({"type": "ping", "data": {}})
 
     async def reader():
+        nonlocal last_received
         while True:
             raw = await ws.receive_text()
+            last_received = monotonic()
             if len(raw) > 20000:
                 await ws.close(code=1009)
                 return
@@ -434,6 +462,17 @@ async def chat_socket(ws: WebSocket, room_id: int, token: str = ""):
                     await hub.publish(room_id, {"type": "message", "data": data})
                 elif event.get("type") == "typing":
                     await hub.publish(room_id, {"type": "typing", "data": {"user_id": identity.id}})
+                elif event.get("type") in {
+                    "call_offer",
+                    "call_answer",
+                    "ice_candidate",
+                    "call_connected",
+                    "call_reject",
+                    "call_end",
+                }:
+                    await calls.handle(
+                        ws.app, room_id, identity, key, event["type"], event.get("data")
+                    )
                 else:
                     raise ValueError()
             except (ValidationError, ValueError, TypeError, HTTPException) as exc:
@@ -444,6 +483,10 @@ async def chat_socket(ws: WebSocket, room_id: int, token: str = ""):
                             "message": exc.detail
                             if isinstance(exc, HTTPException)
                             else "Invalid chat event",
+                            "event_type": event.get("type") if isinstance(event, dict) else None,
+                            "call_id": event.get("data", {}).get("call_id")
+                            if isinstance(event, dict) and isinstance(event.get("data"), dict)
+                            else None,
                             "client_id": event.get("data", {}).get("client_id")
                             if isinstance(event, dict) and isinstance(event.get("data"), dict)
                             else None,
@@ -470,6 +513,8 @@ async def chat_socket(ws: WebSocket, room_id: int, token: str = ""):
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             hub.unsubscribe(room_id, queue)
+            hub.clients.pop(key, None)
+            await calls.disconnected(ws.app, key)
             with contextlib.suppress(RedisError):
                 await run_in_threadpool(cache.delete, key)
             await hub.publish(room_id, {"type": "left", "data": {"user_id": user.id}})

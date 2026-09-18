@@ -59,7 +59,17 @@ def test_unavailable_account(client, username):
 
 @pytest.mark.parametrize(
     "image",
-    ["", "invalid", "data:image/jpeg;base64,%%%", "data:image/jpeg;base64,aGVsbG8=", "x" * 2796228],
+    [
+        # Explicit short ids: pytest copies the parameter id into the
+        # PYTEST_CURRENT_TEST environment variable, and the oversized case below
+        # would blow past the 32767-character limit Windows imposes on an
+        # environment variable, turning the test into a setup error.
+        pytest.param("", id="empty"),
+        pytest.param("invalid", id="not-a-data-url"),
+        pytest.param("data:image/jpeg;base64,%%%", id="invalid-base64"),
+        pytest.param("data:image/jpeg;base64,aGVsbG8=", id="not-a-jpeg"),
+        pytest.param("x" * 2796228, id="oversized"),
+    ],
 )
 def test_invalid_photo(client, image):
     response = client.post("/api/auth/face/login", json={"username": "admin", "photo": image})

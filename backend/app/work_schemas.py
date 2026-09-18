@@ -98,7 +98,7 @@ class OrderCreate(Input):
     override_reason: str = Field(default="", max_length=1000)
 
 
-# Response types are explicit so Swagger exposes the same B-owned vocabulary as
+# Response types are explicit so Swagger exposes the same work-module vocabulary as
 # docs/api/openapi.yaml; other members' paths remain in the hand-written contract.
 class Envelope[T](BaseModel):
     code: int = 0
@@ -114,6 +114,7 @@ class PageData[T](BaseModel):
 
 
 class RoomRead(BaseModel):
+    is_participant: bool = False
     id: int
     patient_no: str
     patient_name: str

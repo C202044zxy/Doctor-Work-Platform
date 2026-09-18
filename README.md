@@ -1,495 +1,81 @@
-## 新成员从零启动（Windows / Docker）
-
-不需要本机安装 Python、Node 或 Redis。先安装并启动 Docker Desktop，然后按 [Docker 新成员指南](docs/Docker-reproduction.md) 初始化配置、启动服务、创建第一个管理员账号。使用 `scripts/docker.ps1`（SQLite）；旧 `scripts/dev.ps1 docker` 为 MySQL 栈。
-
 # Doctor Work Platform
 
-A runnable foundation for the school project's doctor workspace: FastAPI, Vue 3,
-SQLAlchemy/Alembic, and a Docker Compose stack with MySQL 8.4 and Redis 7.
-Scope and future clinical workflows are tracked in [project_plan.md](docs/project_plan.md).
-Setting the project up for the first time? Follow [docs/onboarding.md](docs/onboarding.md).
+Vue 3 / Vite / Element Plus 前端，FastAPI / SQLAlchemy / Alembic 后端，SQLite 数据库，Redis 认证与在线状态。
 
-## Prerequisites
+## 开发启动（保存源码自动更新）
 
-Install these once per machine. Do not install Python, MySQL, or Redis: uv downloads and
-manages the Python 3.12 interpreter, and local mode stores data in SQLite with Redis
-disabled.
-
-The startup scripts therefore check for uv, Node.js, and Docker, but deliberately not for
-Python: uv resolves the interpreter itself, so a host Python installation is neither
-required nor used.
-
-Windows (PowerShell):
-
-```powershell
-winget install --id astral-sh.uv -e
-winget install --id OpenJS.NodeJS.LTS -e
-```
-
-macOS:
-
-```bash
-brew install uv node
-```
-
-Linux:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Then install Node.js 22.12 or newer with your package manager or nvm.
-```
-
-Close and reopen the terminal after installing, then confirm both commands exist:
-
-```powershell
-uv --version
-node --version
-```
-
-`node --version` must report v22.12 or newer.
-
-Clone the repository with git instead of downloading a zip: a zip adds a mark of the web
-that can make Windows refuse to run `dev.ps1`, and it leaves you without the branch
-history the team works from.
-
-Docker Desktop is optional. It is only needed for the MySQL/Redis stack described under
-Quick start.
-
-### Tool versions
-
-| Tool | Version | Notes |
-| ---- | ------- | ----- |
-| uv | 0.9 or newer (0.12.12 verified) | Also downloads and manages the Python interpreter |
-| Python | 3.12 or newer | Managed by uv; required by `backend/pyproject.toml`. Do not install it separately |
-| Node.js | 22.12 or newer | Required by Vite 7. Version 20.19 works, but 22.12 is the target |
-| Docker Engine | 24 or newer, with Compose v2 | Optional; only for the MySQL/Redis stack |
-| MySQL | 8.4 | Runs in `compose.yaml`; never installed on the host |
-| Redis | 7 | Runs in `compose.yaml`; never installed on the host |
-| Git | any recent version | Clone the repository with git, never from a zip |
-
-## Quick start
-
-These commands run from the repository root; the prompt should show the
-`Doctor-Work-Platform` directory. The first run downloads a Python interpreter, backend
-packages, and frontend packages, so expect several minutes and a few hundred megabytes.
-
-Windows (PowerShell):
+安装 uv、Node.js 22.12+，启动 Docker Desktop，然后在仓库根执行：
 
 ```powershell
 .\scripts\dev.ps1
 ```
 
-macOS, Linux, or WSL:
+依赖已安装后：`.\scripts\dev.ps1 -SkipInstall`；仅初始化：`.\scripts\dev.ps1 -NoServe`。执行策略阻止脚本时使用 `powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1`。
 
-```bash
-./scripts/dev.sh
-```
+Linux/macOS（Bash 4.3+）：`bash scripts/dev.sh`；再次启动可用 `bash scripts/dev.sh local --skip-install`。
 
-Either script installs locked dependencies, applies migrations, seeds departments and
-roles, and starts both servers. It waits for the API to answer before printing the URLs.
-Open http://127.0.0.1:5173; API documentation is at http://127.0.0.1:8000/docs. Run the
-command again to restart; records persist in `backend/doctor.db`. Local mode uses SQLite
-and disables Redis unless `REDIS_URL` is configured in `backend/.env`. Authentication
-requires Redis; use Compose or configure a reachable Redis for authenticated APIs.
+开发模式只把 Redis 放在 Docker，前端由本机 Vite 提供 HMR，后端由本机 Uvicorn `--reload` 自动重载。不是构建前后端镜像。
 
-Windows notes:
+- 前端：http://127.0.0.1:5173
+- API：http://127.0.0.1:8000/docs
+- Redis：127.0.0.1:16379（仅本机）
+- 本地数据：`backend/doctor.db`、`backend/uploads/`；Windows 日志：`backend/runtime/`。
 
-- `scripts\dev.cmd` wraps `dev.ps1` and bypasses the PowerShell execution policy, for
-  machines that block scripts extracted from a downloaded zip.
-- `dev.ps1` opens one window per server so you can read its log; closing a window stops
-  that server. If Ctrl+C leaves a window behind, close it manually.
-- `dev.ps1 -NoServe` installs dependencies, applies migrations, and seeds data without
-  starting the servers. Use it to check that your environment is ready.
-- In Git Bash, prefer `dev.ps1`: `dev.sh` runs there too, but Ctrl+C may leave an
-  orphaned `uvicorn` process.
+**完整步骤、账号、双浏览器图文/视频验收、停止方式与排错：[开发模式启动与手测](docs/开发模式启动与手测.md)。**
 
-For the MySQL/Redis stack, install Docker with Compose v2 and run:
+首次启动仅在缺失时生成 `backend/.env` 随机密钥。已有配置不覆盖，已有数据库必须保留原加密密钥。Redis 是认证硬依赖。`/health` 与 `/api/health` 依赖异常仍返回 200；`/api/health/ready` 则会返回 503。
 
-```powershell
-.\scripts\dev.ps1 docker
-```
+## 当前交付
 
-```bash
-./scripts/dev.sh docker
-```
+M3：三态问诊、WebSocket 图文、历史补齐、受保护图片、记录检索/CSV、WebRTC 视频信令及通话记录。详见 [M3 架构与工作记录](docs/M3-架构与工作记录.md)。状态为**部分完成**：真实音视频硬件、局域网 HTTPS 和 M5 房间接入仍需验收/联调。
 
-Compose applies the same migrations and seeds automatically. MySQL and Redis use
-persistent named volumes and are accessible only inside the Compose network.
-The frontend and API use the same local URLs. Stop with Ctrl+C or `docker compose down`;
-normal shutdown preserves the database volumes.
+主线认证、患者和审计代码已整合。原分支健康方案、提醒、医嘱对接仍保留；医嘱需要 M4 真实病历/校验器，未接入时返回 503。其他未完成页面不能按截图宣称完成。
 
-Extra arguments are forwarded to `docker compose up`, which is how CI starts the stack
-without tying up a terminal:
+种子账号 `admin_zhang` / `dr_li` / `dr_wang` / `dr_chen`，初始密码 `Demo@2026`。正常邮箱登录需要 SMTP 和可收信邮箱；种子邮箱是 example.test。短信/人脸页面是模拟 provider，不能替代真实登录。仅测本地业务可使用 `uv run python -m app.dev_session --username dr_wang`，操作见启动指南；不新增 HTTP 免密登录。
+
+## 验证
+
+后端目录执行：
 
 ```powershell
-.\scripts\dev.ps1 docker --detach --wait
-```
-
-```bash
-./scripts/dev.sh docker --detach --wait
-```
-
-Use long-form flags on Windows: Windows PowerShell binds `-d` to its own `-Debug` switch
-and never passes it to Docker.
-
-### Modes
-
-| Mode | Command | Running services | Data stores | Use it for |
-| ---- | ------- | ---------------- | ----------- | ---------- |
-| local (default) | `.\scripts\dev.ps1` / `./scripts/dev.sh` | FastAPI and the Vite dev server | SQLite, Redis disabled | Day-to-day work, especially frontend, because Vite serves with hot reload |
-| docker | `.\scripts\dev.ps1 docker` / `./scripts/dev.sh docker` | MySQL 8.4, Redis 7, FastAPI, and the built frontend behind Nginx | MySQL and Redis, in named volumes | The full stack: integration, verification, and demonstrations |
-
-Local mode is the default so that nobody needs Docker to write code. The full stack named
-in the task acceptance criteria (MySQL + Redis + backend + frontend) is the `docker` mode,
-which serves the frontend as a static production build through Nginx and therefore has no
-hot reload.
-
-### Stopping
-
-- Windows: press Ctrl+C in the terminal that started the script; the two server windows
-  close with it. If a window stays open, close it manually.
-- macOS and Linux: press Ctrl+C; the script kills both servers.
-- Docker mode: press Ctrl+C, or run `docker compose down`. Shutting down normally keeps
-  the MySQL and Redis volumes.
-
-## Startup troubleshooting
-
-If npm reports `Exit handler never called!`, inspect the npm log for preceding
-fetch errors. An unreachable registry or proxy can cause installation to fail.
-The startup script defaults to the official npm registry and uses `HTTPS_PROXY`
-(or `HTTP_PROXY`) when set, overriding stale npm-specific proxy settings for that
-invocation. Set `npm_config_registry` explicitly if you need another registry.
-It does not change your global npm configuration.
-
-### Windows
-
-- `Missing required command: uv` -- uv is not on `PATH`. Install it with
-  `winget install --id astral-sh.uv -e`, then open a new terminal.
-- `uv` is installed but still not found -- the terminal was started before the
-  installer updated `PATH`. Log off and back on to refresh it, or reload it in the
-  current session with
-  `$env:PATH = [Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [Environment]::GetEnvironmentVariable("PATH","User")`.
-  `dev.ps1` also locates the winget package directory itself, so it usually works
-  without this.
-- `dev.ps1 cannot be loaded because running scripts is disabled` -- run
-  `scripts\dev.cmd` instead, or run
-  `powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1`.
-- Ports 5173 or 8000 already in use -- stop the previous run, or close the leftover
-  server windows.
-
-## Basic functionality
-
-- Create, read, update, and delete synthetic patients, each with a server-generated
-  `patient_no` such as `P20260001`.
-- Search by fuzzy name, exact patient number, exact symptom tag, and admission-date
-  range; the four filters combine with AND and results page by `created_at` descending.
-- Store patients and transactional create/update/delete audit entries in the database.
-- Store phone numbers and national ID numbers as AES-256-GCM ciphertext, and return
-  masked values only, such as `138****1234`.
-- Soft-delete patients while retaining their allergy rows; the deletion policy is written
-  out under [Patient API](#patient-api-task-t13).
-- Seed two departments and the contract roles `admin`, `senior`, and `junior` idempotently.
-- Check liveness at `/api/health/live` and database/Redis readiness at `/api/health/ready`.
-  Readiness returns HTTP 503 if a configured dependency is unavailable.
-- Inspect and exercise the documented API through FastAPI Swagger.
-
-Owner A's Sprint 1 backend (T01, T02, T05, T10) now includes bcrypt, the two-step
-login ticket/JWT exchange, logout revocation, department patient scope, and temporary
-grants with a minute expiry scan. Patient and allergy APIs require a bearer token.
-The existing frontend session is still a mock: C's T07 must attach the token and restore
-`/api/me`. B's T06 SMTP code sender and the remaining T08/T11 administration/audit APIs
-are separate work. See [Sprint 1 hand-off](docs/sprint1_owner_a.md).
-
-### Provision an account
-
-Run from `backend/`, after migrations and seed. The password is prompted without echo;
-there are no seeded passwords or automatically created privileged accounts.
-
-```bash
-uv run python -m app.create_user --username admin_zhang --name "Zhang Wei" --email admin@example.test --title admin --department "General Medicine"
-```
-
-For this workspace, the requested remote MySQL connection is configured in the ignored
-`backend/.env`, using the `doctor` database. The schema is installed through Alembic.
-Configure `REDIS_URL` for the runtime and retain the same `JWT_SECRET` and
-`PATIENT_DATA_KEY` across backend processes. Credentials must not be committed.
-
-### Patient API (task T13)
-
-`GET /api/patients` accepts `name`, `patient_no`, repeated `symptom_tags`,
-`admitted_from`, `admitted_to`, `page`, and `size`. Filters combine with AND, with any
-matching supplied tag accepted. The envelope is `{code, message, data}`, where
-`data` contains `{items, total, page, size}`. Results include only the caller's department
-and currently granted patients; administrators see all live patients.
-
-`patient_no` is generated by the server as `P<year><0001-style sequence>` and cannot be
-edited. Phone numbers and national ID numbers are encrypted with AES-256-GCM before they
-reach the database, and every response masks them (`138****1234`,
-`110101********1234`).
-
-**Deletion policy.** `DELETE /api/patients/{patient_no}` soft-deletes the patient.
-Allergies and audit records remain; the patient disappears from API reads.
-
-## Layout
-
-```text
-backend/app/          Configuration, database models, API, schemas, seed command
-backend/migrations/   Versioned Alembic schema migrations
-backend/tests/        API, persistence, validation, and dependency health tests
-frontend/src/         Vue patient workspace and styles
-scripts/dev.sh        Local and Docker startup for macOS, Linux, and WSL
-scripts/dev.ps1       Local and Docker startup for Windows PowerShell
-scripts/dev.cmd       Windows wrapper that bypasses the PowerShell execution policy
-scripts/backup.sh     mysqldump or SQLite backup, written into backups/
-scripts/smoke.py      Checks a running stack through the frontend API proxy
-compose.yaml          MySQL, Redis, API, and frontend services
-docs/onboarding.md    Step-by-step fresh-machine walkthrough for a new teammate
-```
-
-## Configuration
-
-Copy `backend/.env.example` to `backend/.env` for local overrides. Compose uses the
-root `.env.example` as a reference: copy it to `.env` to override demo credentials.
-Neither file is committed. Percent-encode special characters in credentials when
-constructing a `DATABASE_URL`. Restart services after configuration changes.
-SMTP delivery and the frontend session integration are still required for an end-to-end login demo.
-
-### Environment variables
-
-| Variable | Read by | Default | Purpose |
-| -------- | ------- | ------- | ------- |
-| `DATABASE_URL` | backend | `sqlite:///./doctor.db` | SQLAlchemy connection URL. Compose overrides it with a `mysql+pymysql://` URL. Percent-encode special characters in credentials. |
-| `REDIS_URL` | backend | unset | Redis connection URL. While unset, Redis stays disabled and `/api/health/ready` reports `redis: disabled`. |
-| `JWT_SECRET` | backend/Compose | development-only placeholder | HS256 signing secret; replace outside isolated development. |
-| `SCHEDULER_ENABLED` | backend | `true` | Start the T10 minute expiry job; atomic updates prevent duplicate worker audits. |
-| `PATIENT_DATA_KEY` | backend | `dev-only-insecure-patient-data-key` | Passphrase hashed into the AES-256 key for the patient phone and ID columns (T13). Every process that reads the table must use the same value; change it outside a local demo. |
-| `MYSQL_DATABASE` | Compose | `doctor_platform` | Database created by the MySQL service. |
-| `MYSQL_USER` | Compose | `doctor` | Application database user. |
-| `MYSQL_PASSWORD` | Compose | `doctor_local_password` | Application database password. |
-| `MYSQL_ROOT_PASSWORD` | Compose | `root_local_password` | MySQL root password. |
-| `npm_config_registry` | dev scripts | `https://registry.npmjs.org` | Registry used by `npm ci`. |
-| `HTTPS_PROXY` and `HTTP_PROXY` | dev scripts | unset | Forwarded to `npm ci` as `--proxy` and `--https-proxy`. |
-| `SMOKE_BASE_URL` | `scripts/smoke.py` | `http://127.0.0.1:5173` | Base URL the smoke test calls. |
-| `SMOKE_ACCESS_TOKEN` | smoke script | unset | Required for authenticated patient smoke checks; CI provisions a disposable identity inside Compose. |
-| `SMOKE_REQUIRE_REDIS` | `scripts/smoke.py` | `1` | Set it to `0` when Redis is disabled, which is the case in local mode. |
-| `BACKUP_DIR` | `scripts/backup.sh` | `backups` | Directory that receives database dumps. |
-| `BACKUP_KEEP` | `scripts/backup.sh` | `7` | How many of the newest archives to keep. |
-
-## Deployment
-
-Minimum single-host deployment. Configure Redis and private JWT/encryption secrets;
-complete T06/T07 before treating the browser login flow as integrated.
-
-### Backend under uvicorn
-
-Prepare the environment and the database once:
-
-```bash
-uv sync --frozen --no-dev
-uv run alembic upgrade head
-uv run python -m app.seed
-```
-
-Then run uvicorn on the loopback interface so that only the reverse proxy is publicly
-reachable:
-
-```bash
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
-```
-
-Set `DATABASE_URL` and `REDIS_URL` in `backend/.env` first; see the environment variable
-table above.
-
-### Nginx
-
-Build the frontend once with `npm ci && npm run build` in `frontend/`, then serve the
-built files and proxy `/api` to uvicorn:
-
-```nginx
-server {
-    listen 80;
-    server_name _;
-
-    root /srv/doctor-work-platform/frontend/dist;
-    index index.html;
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-```
-
-Forwarding `X-Real-IP` matters because the audit trail records client IP addresses;
-without it every entry shows the proxy address instead.
-
-### Backups
-
-`scripts/backup.sh` dumps the MySQL database, or copies the SQLite file, into `backups/`,
-then deletes everything beyond the newest `BACKUP_KEEP` archives (7 by default).
-
-```bash
-./scripts/backup.sh          # docker mode: mysqldump inside the MySQL container
-./scripts/backup.sh sqlite   # local mode: copy backend/doctor.db
-```
-
-Run it from Git Bash or WSL on Windows. Without either, the same dump from PowerShell:
-
-```powershell
-docker compose exec -T mysql sh -c 'exec mysqldump --single-transaction --databases "$MYSQL_DATABASE" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD"' > backups\mysql.sql
-```
-
-Restore a dump with:
-
-```bash
-docker compose exec -T mysql sh -c 'exec mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD"' < backups/mysql-YYYYMMDD-HHMMSS.sql
-```
-
-The Compose stack also keeps MySQL and Redis data in named volumes, so stopping the stack
-is not a backup: run this script before wiping volumes or reinstalling.
-
-## Development and verification
-
-Backend commands run from `backend/`:
-
-```bash
 uv sync --frozen
 uv run pytest -q
 uv run ruff check app tests migrations
 uv run ruff format --check app tests migrations
 uv run alembic upgrade head
 uv run alembic check
-uv run python -m app.seed
 ```
 
-For schema changes, update models, run `uv run alembic revision --autogenerate -m
-"describe change"`, review the migration, then apply it. Tests migrate isolated
-SQLite databases; Redis readiness uses a test double. They do not validate MySQL
-server behavior. The CI jobs described under [What CI verifies](#what-ci-verifies)
-separately exercise real MySQL and Redis.
+前端目录执行：
 
-Frontend commands run from `frontend/`:
-
-```bash
+```powershell
 npm ci
-npm run dev
+npm test
 npm run build
 ```
 
-Use four-space Python indentation and Ruff formatting. Use two-space indentation
-in Vue/JavaScript. Keep API routes under `/api` — with one required exception,
-`GET /health`, which must exist as an alias of `GET /api/health`. Every JSON
-response uses the `{code, message, data}` envelope with `code: 0` for success;
-lists are paginated as `data: {items, total, page, size}`. **`docs/api/openapi.yaml`
-is the source of truth for the shape of every request and response** — see
-[`docs/api/API-索引.md`](docs/api/API-索引.md) for the index and the reasoning behind
-each convention. The Vite development proxy and Nginx container proxy
-route browser API requests to FastAPI without cross-origin configuration.
+独立空库验证（仓库根）：
 
-`dev.sh` and `dev.ps1` must keep the same set of commands; when you change one, change
-the other. Keep `dev.ps1` ASCII-only: Windows PowerShell 5.1 decodes a script without a
-byte-order mark as ANSI, which corrupts non-ASCII text.
-
-Framework references: [FastAPI lifecycle](https://fastapi.tiangolo.com/advanced/events/)
-and [Vite setup](https://vite.dev/guide/).
-
-### What CI verifies
-
-`.github/workflows/ci.yml` runs on every push and pull request, and can be started by hand
-from the Actions tab. It covers the acceptance scenarios for the startup scripts, so a
-red run is the first sign that the one-command startup broke.
-
-| Job | Runner | What it proves |
-| --- | ------ | -------------- |
-| `checks` | ubuntu-latest | Backend tests and Ruff, frontend production build, then `scripts/dev.sh docker` starts MySQL, Redis, backend, and frontend; `scripts/smoke.py` exercises the API through the frontend proxy; `scripts/backup.sh docker` writes a MySQL dump |
-| `windows-one-command` | windows-latest | One command, `scripts\dev.ps1`, on a clean checkout with only uv and Node installed: it installs dependencies, migrates, seeds, and serves both servers; startup/readiness and refusal of anonymous patient access are checked through the Vite proxy |
-
-The Windows job runs local mode, so it sets `SMOKE_REQUIRE_REDIS=0`; local mode disables
-Redis by design. Read the per-step durations in the Actions log when you need evidence for
-the ten-minute first-run budget.
-
-To reproduce the missing-dependency scenario locally, run a startup script on a machine
-without Docker and check that it prints the install hint and exits non-zero:
-
-```bash
-bash scripts/dev.sh docker; echo "exit=$?"
+```powershell
+uv run --project backend python scripts/build_db.py --db backend/runtime/verification.db
 ```
 
-### Face login (M1 / T05, T07)
+日常启动只迁移与幂等补种子，不重建数据库。建库工具会备份目标已有数据后重建，不要对运行中的业务库执行。数据库、.env、uploads、runtime 和依赖都不进 Git。
 
-Enter an existing account username, select **Sign in with face**, allow camera
-access, then select **Capture photo and sign in**. The browser captures a JPEG
-and sends it to `POST /api/auth/face/login` as `{username, photo}` (a base64 JPEG
-data URL). The server validates the photo and account, calls `match_face` in
-`backend/app/face_login.py`, and issues the existing two-hour session.
+## 发布与存储
 
-**Demo behavior:** `match_face` intentionally returns `True` for every attempt.
-There is no face detection, comparison, enrollment, or liveness check yet;
-any valid JPEG can sign in as any existing active username. Photos are processed
-in memory and are not stored. Implement the TODO before using this as identity
-verification. Password/email sign-in remains available.
+`scripts/dev.ps1 docker` / `scripts/dev.sh docker` 仍表示完整镜像构建模式，使用 `compose.yaml`；根 `.env` 按 `.env.example` 配置。已有独立服务器配置 `compose.sqlite.yaml` 和 `.env.server` 可继续使用。开发模式不需要每次运行这两个完整栈。
 
-Camera access requires HTTPS or localhost. No passkey or device biometric setup
-is needed. Existing passkey database records are retained for migration
-compatibility but are no longer used, and passkey endpoints have been removed.
+发布时使用一个 API worker。图文广播/视频信令为进程内状态；多 worker 部署前需增加 Redis Pub/Sub 与分布式呼叫状态。完整 Compose 的 SQLite 与图片都保存在 `/data` 卷，备份应包含数据库与 uploads。图片不自动清理，未发送的上传也会保留；删除和保留策略需业务确认。
 
-Validation: `cd backend && uv run pytest -q`; `cd frontend && npm test && npm run build`.
-Manual check: enter username → open camera → capture → confirm account in the
-workspace → sign out. Also check permission denial, cancel, and retry.
+WebRTC 默认无 STUN/TURN，只面向同机/可直连局域网验证；其他设备摄像头访问需可信 HTTPS，公网通常需 TURN。只保存通话元数据，不保存音视频或模拟回放。
 
-For password/email login, configure SMTP in `backend/.env` (local) or `.env`
-(Compose):
+## 文档权威
 
-```dotenv
-SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_FROM=noreply@example.com
-SMTP_USERNAME=your-smtp-user
-SMTP_PASSWORD=your-smtp-password
-SMTP_STARTTLS=true
-```
+- [文档索引](docs/README.md)
+- [任务与负责人](docs/01-任务安排.md)
+- [测试场景及演示基线](docs/02-测试场景.md)
+- [实现现状](docs/03-实现现状.md)
+- [API 索引](docs/api/API-索引.md) / [字段契约](docs/api/openapi.yaml)
 
-Provision an account with `cd backend && uv run python -m app.create_user` if
-needed. Redis is required for session revocation and email verification. SMTP
-uses a 10-second timeout; delivery is limited to one attempt per minute and 20
-per UTC day per account. SMTP failures consume an attempt.
-
-### Email signup (M1, T05/T06/T08 extension)
-
-Choose **Create an account with email** on the login page. Enter a username, full
-name, email, password (at least eight characters, at most 72 UTF-8 bytes), and an
-existing department name. Redis and the existing `SMTP_*` settings are required.
-The emailed six-digit code expires in five minutes; requesting a new signup code
-requires waiting 60 seconds. Signup requests are limited per email and source IP.
-
-Email verification creates a **pending junior** account. An administrator must
-check staff identity and confirm the department before activating it locally:
-
-```sh
-cd backend
-uv run python -m app.activate_user --username new_doctor --department "General Medicine"
-```
-
-After activation, use the existing username/password and email-code sign-in flow.
-No database migration is needed: enrollment uses the existing user status field.
-
-SMTP port `465` uses implicit TLS (`SMTP_SSL`); other ports use STARTTLS when
-`SMTP_STARTTLS=true`. For a 163 Mail sender, use `smtp.163.com`, port `465`,
-`SMTP_STARTTLS=false`, and the mailbox SMTP authorization code as `SMTP_PASSWORD`.
-
-## B W2/W3 implementation and single-server configuration
-
-B's consultation workspace, health plans and reminders now use real APIs. See
-[the B W2/W3 walkthrough](docs/B-W2-W3-walkthrough.md) for ownership boundaries,
-acceptance results and the remaining A/D integration points. For the requested
-**Redis + backend + SQLite on one cloud server**, use the separate
-[SQLite deployment guide](docs/B-single-server-deployment.md) and
-`compose.sqlite.yaml`. The existing MySQL development instructions above still
-apply to `compose.yaml`.
+任务按 M0–M9 / S1–S6 / D01–D07 编号。新启动、架构文档是这些权威文档的操作补充，不另设任务清单。

@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from typing import Annotated
@@ -5,7 +7,7 @@ from typing import Annotated
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from redis import Redis
 from redis.exceptions import RedisError
 from sqlalchemy import case, func, or_, select, text
@@ -13,13 +15,27 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import auth, auth_schemas, chat, crypto, face_login, grants, health_work, orders, signup
+from app import (
+    auth,
+    auth_schemas,
+    calls,
+    chat,
+    consultation_records,
+    crypto,
+    face_login,
+    grants,
+    health_work,
+    orders,
+    signup,
+)
 from app.allergies import allergen_name, dictionary, get_patient_allergens
 from app.audit import audit_request, mark_audit
+from app.audit_export import audit_csv, content_disposition, filename_range
 from app.config import Settings
 from app.database import make_engine, session_factory
 from app.dependencies import Pagination
-from app.models import Allergy, Department, Patient
+from app.logging_utils import protect_socket_logs
+from app.models import Allergy, AuditLog, Department, Patient
 from app.patients import patient_scope, visible_patient
 from app.schemas import (
     AllergenDictionaryResponse,
@@ -29,6 +45,9 @@ from app.schemas import (
     AllergyRead,
     AllergyResponse,
     AllergyUpdate,
+    AuditLogListData,
+    AuditLogListResponse,
+    AuditLogRead,
     DepartmentListResponse,
     DepartmentRead,
     ErrorResponse,
@@ -44,7 +63,7 @@ from app.schemas import (
     join_tags,
     split_tags,
 )
-from app.security import ProtectedFastAPI, allows
+from app.security import ProtectedFastAPI, allows, require_permission
 
 PATIENT_NO_RETRIES = 5
 
@@ -165,7 +184,57 @@ def _audit(db: Session, action: str, patient_id: int, detail: dict | None = None
     mark_audit(request, action, kind, oid, patient_id=patient_id, detail=detail)
 
 
+class AuditFilters:
+    """T12's four query conditions, declared once for both endpoints.
+
+    `GET /api/audit-logs` and `GET /api/audit-logs/export` take exactly the same
+    filters. Declaring them here rather than typing the parameter list out twice is
+    the same move as `Pagination`, and it is what makes criterion 2's "the export
+    agrees with the list" a property of the code instead of a promise about two
+    copies that agree today.
+    """
+
+    def __init__(
+        self,
+        user_id: Annotated[int | None, Query(description="操作者主键 / Acting user id")] = None,
+        action: Annotated[
+            str, Query(max_length=50, description="动作精确匹配 / Exact action key")
+        ] = "",
+        object_type: Annotated[
+            str, Query(max_length=50, description="对象类型精确匹配 / Exact object type")
+        ] = "",
+        # `from` is a Python keyword, so the parameter carries the alias instead.
+        from_: Annotated[
+            datetime | None,
+            Query(alias="from", description="写入时间起（含）/ Written at or after"),
+        ] = None,
+        to: Annotated[
+            datetime | None, Query(description="写入时间止（含）/ Written at or before")
+        ] = None,
+    ):
+        self.user_id = user_id or None
+        self.action = action
+        self.object_type = object_type
+        self.from_ = from_
+        self.to = to
+
+    def conditions(self):
+        conditions = []
+        if self.user_id is not None:
+            conditions.append(AuditLog.user_id == self.user_id)
+        if self.action:
+            conditions.append(AuditLog.action == self.action)
+        if self.object_type:
+            conditions.append(AuditLog.object_type == self.object_type)
+        if self.from_ is not None:
+            conditions.append(AuditLog.created_at >= self.from_)
+        if self.to is not None:
+            conditions.append(AuditLog.created_at <= self.to)
+        return conditions
+
+
 def create_app(settings: Settings | None = None):
+    protect_socket_logs()
     settings = settings or Settings()
     crypto.configure(settings.patient_data_key)
     engine = make_engine(settings.database_url)
@@ -200,9 +269,15 @@ def create_app(settings: Settings | None = None):
             )
             scheduler.start()
         app.state.scheduler = scheduler
+        call_sweeper = asyncio.create_task(calls.sweep(app))
         try:
             yield
         finally:
+            call_sweeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await call_sweeper
+            for room in list(app.state.chat.calls):
+                await calls.finish(app, room, "server_restart")
             if scheduler.running:
                 scheduler.shutdown(wait=True)
             if cache:
@@ -216,6 +291,8 @@ def create_app(settings: Settings | None = None):
     app.include_router(signup.router)
     app.include_router(face_login.router)
     app.include_router(grants.router)
+    # Static records/export paths must precede the integer /{id} route.
+    app.include_router(consultation_records.router)
     app.include_router(chat.router)
     app.include_router(chat.socket_router)
     app.include_router(health_work.router)
@@ -251,6 +328,9 @@ def create_app(settings: Settings | None = None):
     @app.get("/health", response_model=auth_schemas.HealthResponse)
     @app.get("/api/health", response_model=auth_schemas.HealthResponse)
     def health():
+        # The key is "db", not "database": HealthResponse in docs/api/openapi.yaml
+        # is the source of truth, and backend/app/auth_schemas.py is generated
+        # from it by scripts/generate_auth_schemas.py.
         checks = {"db": "ok", "redis": "disabled"}
         try:
             with engine.connect() as connection:
@@ -284,27 +364,28 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/health/ready")
     def ready():
-        checks = {"database": "ok", "redis": "disabled"}
+        # Same key and vocabulary as /health, so one consumer can read both.
+        checks = {"db": "ok", "redis": "disabled"}
         try:
             with engine.connect() as connection:
                 connection.execute(text("SELECT 1"))
                 connection.execute(select(Department.id).limit(1))
         except SQLAlchemyError:
-            checks["database"] = "unavailable"
+            checks["db"] = "down"
         if app.state.cache is not None:
             try:
                 app.state.cache.ping()
                 checks["redis"] = "ok"
             except RedisError:
-                checks["redis"] = "unavailable"
-        available = "unavailable" not in checks.values()
+                checks["redis"] = "down"
+        available = "down" not in checks.values()
         return JSONResponse(
             status_code=200 if available else 503,
             content={
                 "code": 0 if available else 503,
                 "message": "ok" if available else "Dependencies unavailable",
                 "data": checks,
-                "status": "ok" if available else "unavailable",
+                "status": "ok" if available else "down",
                 "checks": checks,
             },
         )
@@ -331,10 +412,17 @@ def create_app(settings: Settings | None = None):
             "姓名模糊、患者编号精确、症状标签、入院日期区间四个条件可以任意 AND 组合；"
             "症状标签可重复传参，命中任意一个即可；四个条件都留空时返回全量，"
             "默认按 created_at 倒序分页。\n\n"
+            "`department` 是第五个条件，按科室名精确匹配，与上面四个条件叠加而不是替换它们；"
+            "它只能收窄 T09 的科室范围，不能放宽。传入未登记的科室名得到空列表，"
+            "而不是 404：筛选条件不匹配不是错误。\n\n"
             "Fuzzy name, exact patient number, symptom tag and admission-date range "
             "combine with AND; repeat `symptom_tags` to match any of several tags. With "
             "no filter the whole table is returned, ordered by `created_at` descending. "
-            "The payload is `{items, total, page, size}`."
+            "The payload is `{items, total, page, size}`.\n\n"
+            "`department` is a fifth condition that matches the department name exactly "
+            "and stacks with the other four rather than replacing them. It can only narrow "
+            "the T09 scope, never widen it. An unknown department name yields an empty "
+            "list rather than a 404: a filter that matches nothing is not an error."
         ),
         responses={422: {"model": ErrorResponse}},
     )
@@ -354,6 +442,9 @@ def create_app(settings: Settings | None = None):
                 )
             ),
         ] = None,
+        department: str = Query(
+            "", max_length=100, description="科室名称精确匹配 / Exact department name"
+        ),
         admitted_from: Annotated[
             date | None,
             Query(description="入院日期起（含）/ Admission date from, inclusive"),
@@ -380,6 +471,12 @@ def create_app(settings: Settings | None = None):
                     ]
                 )
             )
+        if department:
+            # Stacks on top of `grants.patient_scope` rather than replacing it, so a
+            # non-admin naming someone else's department narrows their own scope to
+            # nothing instead of widening it. `patient_scope` is already in
+            # `conditions`, and AND-ing cannot loosen it.
+            conditions.append(Patient.department.has(Department.name == department))
         if admitted_from:
             conditions.append(Patient.admitted_at >= admitted_from)
         if admitted_to:
@@ -662,6 +759,117 @@ def create_app(settings: Settings | None = None):
         db.delete(allergy)
         db.commit()
         return _ok(OkData())
+
+    @app.get(
+        "/api/audit-logs",
+        response_model=AuditLogListResponse,
+        summary="查询审计日志 / Search the audit log",
+        description=(
+            "T12。**仅管理员**：senior 也会被拒绝，返回 403 且响应体里没有任何日志数据。\n\n"
+            "用户 / 时间范围 / 操作类型（另有 `object_type`）四个条件可以任意 AND 组合，"
+            "默认按 `created_at` 倒序分页。**列表每行都带 `detail`**，展开行即可看到原文，"
+            "不需要逐行再拉一次。\n\n"
+            "Administrator only -- a senior physician is refused too, with 403 and no log "
+            "data in the body. `user_id`, `action`, `object_type` and the `from`/`to` range "
+            "combine with AND, newest first. Every row carries `detail` inline, because the "
+            "sign-off criteria require a list row to expand in place."
+        ),
+        responses={403: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
+        dependencies=[Depends(require_permission("audit.read"))],
+    )
+    def audit_logs(
+        db: DB,
+        pagination: Annotated[Pagination, Depends()],
+        filters: Annotated[AuditFilters, Depends()],
+    ):
+        page, size = pagination.page, pagination.size
+        conditions = filters.conditions()
+        total = db.scalar(select(func.count()).select_from(AuditLog).where(*conditions)) or 0
+        rows = list(
+            db.scalars(
+                select(AuditLog)
+                .where(*conditions)
+                # `id` breaks the tie on purpose: entries written in the same second
+                # are ordinary during a demo, and without it the sort is free to put
+                # the same row on both page 1 and page 2.
+                .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+                .offset(pagination.offset)
+                .limit(size)
+            )
+        )
+        return _ok(
+            AuditLogListData(
+                items=[AuditLogRead.model_validate(row) for row in rows],
+                total=total,
+                page=page,
+                size=size,
+            )
+        )
+
+    @app.get(
+        "/api/audit-logs/export",
+        summary="导出审计日志 CSV / Export the audit log as CSV",
+        description=(
+            "T12。**仅管理员**。返回 `text/csv` 本身，**不是 JSON 信封**。\n\n"
+            "接受的筛选条件与查询接口完全一致，只是不分页；导出必须沿用调用方的当前筛选"
+            "而不是导出全表，文件名含时间范围，正文以 UTF-8 BOM 开头，Excel 打开才不乱码。\n\n"
+            "Administrator only. Returns `text/csv`, not the JSON envelope. Same filters as "
+            "the search endpoint, without pagination. The export honours the caller's current "
+            "filters rather than dumping the whole table, the filename carries the time range, "
+            "and the body starts with a UTF-8 BOM so Excel opens it without mojibake.\n\n"
+            "Registered before any `/{id}` route would be: `export` does not parse as an "
+            "integer, so a path parameter declared ahead of this one turns every download "
+            "into an unexplained 422."
+        ),
+        responses={403: {"model": ErrorResponse}},
+        dependencies=[Depends(require_permission("audit.export"))],
+    )
+    def export_audit_logs(
+        request: Request,
+        db: DB,
+        filters: Annotated[AuditFilters, Depends()],
+    ):
+        conditions = filters.conditions()
+        rows = list(
+            db.scalars(
+                select(AuditLog)
+                .where(*conditions)
+                .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+            )
+        )
+        # T11 criterion 2 names the audit-log export as a sensitive read that has to be
+        # marked by hand: the middleware only records POST/PUT/PATCH/DELETE, so a GET
+        # that is not marked leaves no trace at all -- and this is the one endpoint that
+        # hands the whole trail to a file.
+        mark_audit(
+            request,
+            "audit.export",
+            "audit_log",
+            detail={
+                "filters": {
+                    "user_id": filters.user_id,
+                    "action": filters.action or None,
+                    "object_type": filters.object_type or None,
+                    # isoformat, not the datetime: `detail` is a JSON column and a
+                    # datetime in there raises at insert time, which `persist_audit`
+                    # swallows -- so the entry would go missing rather than fail loudly.
+                    "from": filters.from_.isoformat() if filters.from_ else None,
+                    "to": filters.to.isoformat() if filters.to else None,
+                },
+                "rows": len(rows),
+            },
+        )
+        return Response(
+            content=audit_csv(rows),
+            # Starlette appends `; charset=utf-8` to a `text/*` media type, and encodes
+            # the body with it, which is what keeps the BOM and the Chinese names intact.
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": content_disposition(
+                    filename_range(rows, filters.from_, filters.to)
+                )
+            },
+        )
 
     return app
 

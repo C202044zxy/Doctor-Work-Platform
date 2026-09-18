@@ -3,20 +3,41 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { accessToken } from '../session'
 import { work, mergeMessages } from '../api/work'
 import ChatImage from '../components/ChatImage.vue'
+import ConsultationVideo from '../components/ConsultationVideo.vue'
+import { useRoute } from 'vue-router'
 
 const rooms = ref([]), status = ref('waiting'), patientNo = ref(''), error = ref('')
 const room = ref(null), messages = ref([]), text = ref(''), pending = ref([])
 const connected = ref(false), more = ref(false), busy = ref(false), scroller = ref(null)
 const page = ref(1), total = ref(0)
+const route = useRoute()
+const video = ref(null), calls = ref([]), callPage = ref(1), callTotal = ref(0)
+const loading = ref(false), historyLoading = ref(false)
+let listVersion = 0
 let socket, retryTimer, generation = 0, disposed = false
-const writable = computed(() => room.value?.status === 'active')
+const writable = computed(() => room.value?.status === 'active' && room.value?.is_participant)
 const time = value => value ? new Date(value).toLocaleString() : '—'
 
 async function refresh() {
+  const version = ++listVersion
+  loading.value = true
+  error.value = ''
   try {
     const data = await work(`/consultations?${new URLSearchParams({ status: status.value, page: page.value, size: 20, ...(patientNo.value ? { patient_no: patientNo.value.trim() } : {}) })}`)
-    rooms.value = data.items; total.value = data.total
+    if (version === listVersion) { rooms.value = data.items; total.value = data.total }
   } catch (err) { error.value = err.message }
+  finally { if (version === listVersion) loading.value = false }
+}
+function sendSignal(type, data) {
+  if (!connected.value || socket?.readyState !== WebSocket.OPEN) throw new Error('Signaling is offline')
+  socket.send(JSON.stringify({ type, data }))
+}
+async function loadCalls() {
+  const version = generation
+  try {
+    const result = await work(`/consultations/${room.value.id}/calls?page=${callPage.value}&size=10`)
+    if (version === generation) { calls.value = result.items; callTotal.value = result.total }
+  } catch (err) { if (version === generation) error.value = err.message }
 }
 async function create() {
   busy.value = true; error.value = ''
@@ -55,16 +76,25 @@ function connect(id, version) {
   ws.onopen = async () => {
     if (version !== generation) return ws.close()
     connected.value = true
-    try { await backfill(id, version) } catch (err) { error.value = err.message }
+    try {
+      const current = await work(`/consultations/${id}`)
+      if (version !== generation) return
+      room.value = current
+      await backfill(id, version)
+      await loadCalls()
+    } catch (err) { if (version === generation) error.value = err.message }
   }
   ws.onmessage = async event => {
     if (version !== generation) return
     const data = JSON.parse(event.data)
+    if (data.type.startsWith('call_') || data.type === 'ice_candidate') await video.value?.receive(data.type, data.data)
+    if (data.type === 'call_end') await loadCalls()
     if (data.type === 'ping') ws.send(JSON.stringify({ type: 'pong', data: {} }))
     if (data.type === 'message') { await add([data.data]); await bottom(); refresh() }
     if (data.type === 'status') { room.value = data.data; refresh() }
     if (data.type === 'error') {
       error.value = data.data.message
+      if (data.data.event_type?.startsWith('call_') || data.data.event_type === 'ice_candidate') video.value?.failed(data.data)
       const row = pending.value.find(row => row.client_id === data.data.client_id)
       if (row) row.failed = true
     }
@@ -72,20 +102,26 @@ function connect(id, version) {
   ws.onclose = event => {
     if (version !== generation || disposed) return
     connected.value = false
+    video.value?.disconnected()
     pending.value.forEach(row => { row.failed = true })
     if (event.code === 1008) { error.value = 'Session expired or room access denied. Sign in again or choose another room.'; return }
     retryTimer = setTimeout(() => connect(id, version), 2000)
   }
 }
 async function open(row) {
+  video.value?.finish()
   stopSocket(); const version = ++generation
+  historyLoading.value = true
+  calls.value = []; callPage.value = 1; callTotal.value = 0
   room.value = row; messages.value = []; pending.value = []; error.value = ''; more.value = false
   try {
     const data = await work(`/consultations/${row.id}/messages?size=20`)
     if (version !== generation) return
     await add(data.items); more.value = data.total > data.items.length
-    connect(row.id, version); await bottom()
+    if (row.is_participant) connect(row.id, version)
+    await loadCalls(); await bottom()
   } catch (err) { if (version === generation) error.value = err.message }
+  finally { if (version === generation) historyLoading.value = false }
 }
 async function older() {
   if (!more.value || busy.value || !messages.value.length) return
@@ -140,13 +176,20 @@ async function upload(event) {
   } catch (err) { error.value = err.message }
   finally { busy.value = false }
 }
-onMounted(refresh)
-onUnmounted(() => { disposed = true; generation++; stopSocket() })
+onMounted(async () => {
+  await refresh()
+  if (route.query.room) {
+    try { await open(await work(`/consultations/${route.query.room}`)) }
+    catch (err) { error.value = err.message }
+  }
+})
+onUnmounted(() => { video.value?.finish(); disposed = true; generation++; stopSocket() })
 </script>
 <template>
   <section class="consult-work">
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <div class="toolbar">
+      <router-link :to="{ name: 'consultation-records' }">Search consultation records</router-link>
       <el-input v-model="patientNo" placeholder="Patient number" clearable style="width:210px" />
       <el-button @click="page = 1; refresh()">Search</el-button>
       <el-button type="primary" :disabled="!patientNo.trim() || busy" @click="create">New consultation</el-button>
@@ -154,7 +197,8 @@ onUnmounted(() => { disposed = true; generation++; stopSocket() })
     <div class="columns">
       <aside class="panel">
         <el-radio-group v-model="status" @change="page = 1; refresh()"><el-radio-button value="waiting">Waiting</el-radio-button><el-radio-button value="active">Active</el-radio-button><el-radio-button value="ended">Ended</el-radio-button></el-radio-group>
-        <p v-if="!rooms.length" class="muted">No consultations in this view.</p>
+        <p v-if="loading" role="status">Loading consultations…</p>
+        <p v-else-if="!rooms.length" class="muted">No consultations in this view.</p>
         <article v-for="item in rooms" :key="item.id" :class="['room', { selected: room?.id === item.id }]">
           <button class="room-open" @click="open(item)"><strong>{{ item.patient_name }}</strong> · {{ item.patient_no }}<p>{{ item.last_message || 'No messages yet' }}</p><small>{{ time(item.last_message_at || item.created_at) }}</small></button>
           <el-button v-if="item.status === 'waiting'" size="small" :disabled="busy" @click="move(item, 'accept')">Accept</el-button>
@@ -164,15 +208,22 @@ onUnmounted(() => { disposed = true; generation++; stopSocket() })
       </aside>
       <section class="panel chat">
         <template v-if="room">
-          <header><div><strong>{{ room.patient_name }}</strong><p class="muted">{{ room.status }} · {{ connected ? 'Connected' : 'Offline — reconnecting / HTTP fallback' }}</p></div><el-button v-if="writable" :disabled="busy" @click="move(room, 'end')">End consultation</el-button></header>
+          <header><div><strong>{{ room.patient_name }}</strong><p class="muted">{{ room.status }} · {{ !room.is_participant ? 'Record access — read only' : connected ? 'Connected' : 'Offline — reconnecting / HTTP fallback' }}</p></div><el-button v-if="writable" :disabled="busy" @click="move(room, 'end')">End consultation</el-button></header>
           <div ref="scroller" class="messages" role="log" aria-live="polite" @scroll="scroller.scrollTop < 30 && older()">
             <el-button v-if="more" :loading="busy" @click="older">Load earlier messages</el-button>
-            <p v-if="!messages.length" class="muted">No messages yet.</p>
+            <p v-if="historyLoading" role="status">Loading messages…</p>
+            <p v-else-if="!messages.length" class="muted">No messages yet.</p>
             <article v-for="message in messages" :key="message.id" class="bubble"><strong>{{ message.sender_name }}</strong><small> {{ time(message.sent_at) }} · Delivered</small><p>{{ message.content }}</p><ChatImage v-if="message.image_url" :url="message.image_url" /></article>
             <article v-for="message in pending" :key="message.client_id" class="bubble pending"><p>{{ message.content || 'Image attachment' }}</p><span>{{ message.failed ? 'Not confirmed' : 'Sending…' }}</span><el-button v-if="message.failed && writable" size="small" @click="deliver(message)">Retry</el-button></article>
           </div>
           <form class="composer" @submit.prevent="send()"><el-input v-model="text" :disabled="!writable" placeholder="Write a message" maxlength="10000" /><el-button native-type="submit" type="primary" :disabled="!writable || !text.trim()">Send</el-button><label class="upload">Image<input aria-label="Upload chat image" type="file" accept="image/jpeg,image/png,image/webp" :disabled="!writable || busy" @change="upload" /></label></form>
           <p v-if="!writable" class="muted">This conversation is read-only.</p>
+          <ConsultationVideo ref="video" :enabled="writable && connected" :send-signal="sendSignal" @finished="loadCalls" />
+          <details><summary>Call history ({{ callTotal }})</summary>
+            <p v-if="!calls.length">No finished calls.</p>
+            <p v-for="call in calls" :key="call.id">{{ time(call.started_at) }} → {{ time(call.ended_at) }} · {{ call.duration_seconds }}s connected · {{ call.end_reason }}</p>
+            <el-pagination v-model:current-page="callPage" :total="callTotal" :page-size="10" layout="prev, next" @current-change="loadCalls" />
+          </details>
         </template>
         <p v-else class="muted">Choose a consultation to view its conversation.</p>
       </section>

@@ -6,7 +6,7 @@
 
 1. 安装并启动 [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/)，使用 WSL 2 / Linux containers。Docker 官方的 [WSL 2 配置说明](https://docs.docker.com/desktop/features/wsl/) 可用于排查虚拟化和 WSL 问题。
 2. 在新的 PowerShell 窗口验证 `docker version` 和 `docker compose version`。前者必须显示 Server 部分，否则 Docker 引擎还没启动。
-3. 拿到包含 `scripts/docker.ps1` 和 `compose.sqlite.yaml` 的完整源码，并进入仓库根目录。目前 W2/W3 仍未推送；新成员只拉 main 不会得到这份代码。暂时可由负责人共享源码包，不要复制 `.venv`、`node_modules`、`.env.server` 或真实患者数据库。
+3. 拿到包含 `scripts/docker.ps1` 和 `compose.sqlite.yaml` 的完整源码，并进入仓库根目录。请拉取 `codex/b-w2-w3` 分支最新提交；PR 合并前只拉 main 不包含本次 M3 增量。不要复制 `.venv`、`node_modules`、`.env.server` 或真实患者数据库。
 
 ## 初始化配置、启动、创建管理员
 
