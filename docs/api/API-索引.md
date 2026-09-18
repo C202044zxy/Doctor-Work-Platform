@@ -818,13 +818,12 @@
 | `/login` | `LoginView.vue` | `POST /api/auth/login` → `POST /api/auth/send-code` → `POST /api/auth/verify-code`；注册分支 `POST /api/auth/signup` → `POST /api/auth/signup/verify`；人脸分支 `POST /api/auth/face/login` | ✅ **真实接口** |
 | `/dashboard` | `DashboardView.vue` | 无（工作台计数、排班、待办全部来自 `demo-data.js`） | ⚠️ **假数据** |
 | `/patients` | `PatientListView.vue` | `GET /api/patients`、`POST /api/patients`、`DELETE /api/patients/{patient_no}`、`GET /api/departments` | ✅ **真实接口** |
-| `/patients/:patientNo` | `PatientDetailView.vue` | `GET /api/patients/{patient_no}`、`GET /api/meetings?patient_no=…`、`GET /api/meetings/{id}/report`（`?version=` 读历史版本）、`GET /api/meetings/{id}/report/print`（仅参与人） | ✅ **真实接口**（只建了**「会诊记录」Tab**，其余 Tab 属 M2-04） |
+| `/patients/:patientNo` | `PatientDetailView.vue` | `GET /api/patients/{patient_no}`、`GET /api/meetings?patient_no=…`、`GET /api/meetings/{id}/report`（`?version=` 读历史版本）、`GET /api/meetings/{id}/report/print`（仅参与人）；「Health data」Tab（`components/PatientHealth.vue`，M6）消费 `/api/patients/{no}/vitals`、`/vitals/trend`、`/api/health-plans`、`/api/reminder-rules`、`/api/reminders`、`/unread-count`、`/api/patients/{no}/assessments`、`/api/assessments/{id}` | ✅ **真实接口**（**「会诊记录」Tab** 属 M5、**「Health data」Tab** 属 M6，其余 Tab 属 M2-04） |
 | `/records` | `MedicalRecordView.vue` | 计划消费 `/api/emr/templates`、`/api/emr/records`、`PATCH /api/emr/records/{id}`、`/api/drugs`、`POST /api/emr/orders/validate` | ⚠️ **假数据** |
 | `/consultations` | `ConsultationsView.vue` | 计划消费 `/api/consultations`、`GET /api/consultations/{id}/messages`、`WS /ws/chat/{room_id}`、`POST /api/uploads/images` | ⚠️ **假数据** |
 | `/remote-consultation` | `RemoteConsultationView.vue` | `GET/POST /api/meetings`、`/accept`、`/decline`、`/start`、`/complete`、`/api/meetings/doctors`、`/api/meetings/{id}/materials`、`/api/materials/{id}/download`、`/api/meetings/{id}/report`、`/report/print` | ✅ **真实接口** |
-| `/health` | `HealthManagementView.vue` | 计划消费 `/api/health-plans`、`GET /api/patients/{no}/vitals/trend`、`/api/reminders/unread-count` | ⚠️ **假数据** |
 | `/review` | `ReviewQueueView.vue` | 计划消费 `/api/emr/reviews`、`POST /api/emr/records/{id}/review`、`GET /api/emr/my-submissions` | ⚠️ **假数据** |
-| `/audit` | `AuditLogView.vue` | 计划消费 `GET /api/audit-logs`、`GET /api/audit-logs/export` | ⚠️ **假数据** |
+| `/audit` | `AuditLogView.vue` | `GET /api/audit-logs`（筛选 / 分页）、`GET /api/audit-logs/export`（服务端 CSV） | ✅ **真实接口**（T12） |
 
 **应用外壳（`frontend/src/App.vue` / `frontend/src/session.js`）**
 
@@ -846,7 +845,7 @@
 | 医嘱面板 | M4-06 | 现由 `MedicalRecordView` 以假数据承担 |
 | 系统监控页 / 设备管理页 / 回放页 / 权限矩阵页 | S5 / S4 / S3 / S6 | 模拟模块，均零代码 |
 
-> **⚠️ 演示红线**：`demo-data.js` 目前被 **5 个 View + `App.vue`** 直接 import（`DashboardView` / `ConsultationsView` / `MedicalRecordView` / `HealthManagementView` / `ReviewQueueView`）。**在 M9-05 收口前，这些页面上的任何数字都不是真实数据**，不得进入演示路径。`/login`、`/patients`、`/patients/:patientNo`、`/remote-consultation` 四页以及外壳的会话/登出/探针走真实接口——`RemoteConsultationView` 已随 M5 退出这份名单。
+> **⚠️ 演示红线**：`demo-data.js` 目前被 **4 个 View + `App.vue`** 直接 import（`DashboardView` / `ConsultationsView` / `MedicalRecordView` / `ReviewQueueView` 与外壳的 `counts`）。**在 M9-05 收口前，这些页面上的任何数字都不是真实数据**，不得进入演示路径。`/login`、`/patients`、`/patients/:patientNo`（含 M6 的「Health data」Tab）、`/remote-consultation`、`/audit` 以及外壳的会话/登出/探针走真实接口——`RemoteConsultationView`（M5）、`AuditLogView`（T12）与健康管理面板（M6，原 `/health` 页已于 2026-09-18 并入患者详情）已退出这份名单。
 
 ---
 
