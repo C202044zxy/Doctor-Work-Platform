@@ -6,6 +6,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     LargeBinary,
     String,
@@ -254,3 +255,177 @@ class MeetingReport(Base):
     )
 
     author: Mapped[User] = relationship(foreign_keys=[created_by], lazy="joined")
+
+
+class VitalThreshold(Base):
+    """The one table a clinician edits to move a reference range.
+
+    M6-01 requires the threshold to live in a single configuration table rather
+    than in constants spread through the service, so that "a clinician's
+    adjustment lands in one place". Nothing in the contract writes this table --
+    there is no threshold endpoint -- so it is changed in the database, and
+    `is_abnormal` is decided at write time by looking a row up here.
+
+    `min_secondary` / `max_secondary` exist only for `bp`: a reading is
+    systolic/diastolic pair, and the pair needs a pair of bounds on both sides
+    (the trend tooltip has to be able to say "140/90", not "140").
+    """
+
+    __tablename__ = "vital_thresholds"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # `bp` / `gl` / `hr`. Unique, because two rows for one sign would make
+    # `is_abnormal` depend on which one the query happened to return.
+    sign_type: Mapped[str] = mapped_column(String(10), unique=True)
+    unit: Mapped[str] = mapped_column(String(20))
+    min_value: Mapped[float] = mapped_column(Float)
+    max_value: Mapped[float] = mapped_column(Float)
+    min_secondary: Mapped[float | None] = mapped_column(Float)
+    max_secondary: Mapped[float | None] = mapped_column(Float)
+
+
+class VitalSign(Base):
+    """One recorded reading. T33.
+
+    `is_abnormal` is stored rather than computed on read: the contract says the
+    server sets it at write time, and storing it means a later threshold change
+    cannot silently rewrite the verdict a clinician already acted on.
+    """
+
+    __tablename__ = "vital_signs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    sign_type: Mapped[str] = mapped_column(String(10), index=True)
+    value: Mapped[float] = mapped_column(Float)
+    # The diastolic half of a blood pressure. NULL for `gl` and `hr`.
+    value_secondary: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str] = mapped_column(String(20))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    # `manual` for staff entry, `mock` for the simulation script; kept apart so a
+    # demonstration reading is never mistaken for a real record.
+    source: Mapped[str] = mapped_column(String(10), default="manual", server_default="manual")
+    is_abnormal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    recorded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+    patient: Mapped[Patient] = relationship(lazy="joined")
+
+
+class HealthPlan(Base):
+    """T35's care plan: a date range, a goal, and the items to carry out.
+
+    The items are a JSON list rather than a child table. They have no identity of
+    their own -- nothing addresses one item, and no endpoint reads a single one --
+    so a table would add a join and a primary key to buy nothing. `entries`
+    follows the same shape as `MeetingReport.expert_opinions`.
+    """
+
+    __tablename__ = "health_plans"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    goals: Mapped[str] = mapped_column(Text, default="", server_default="")
+    instructions: Mapped[str] = mapped_column(Text, default="", server_default="")
+    entries: Mapped[list] = mapped_column(JSON, default=list)
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active", index=True
+    )
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    patient: Mapped[Patient] = relationship(lazy="joined")
+
+
+class ReminderRule(Base):
+    """T36's schedule. A firing of it is a `ReminderLog`, a separate object.
+
+    `active` only stops *new* entries being generated; the ones already logged
+    stay put, which is what T36 §4 asks for.
+    """
+
+    __tablename__ = "reminder_rules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # `medication` / `followup` / `checkin`. Named `rtype` in the contract.
+    rtype: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(200))
+    cron_expr: Mapped[str] = mapped_column(String(100))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", index=True)
+    # Set when the rule was created alongside a plan, so the T36 list can show the
+    # back-link. ON DELETE SET NULL would need a batch rebuild on SQLite, so the
+    # rule simply outlives a deleted plan.
+    health_plan_id: Mapped[int | None] = mapped_column(ForeignKey("health_plans.id"), index=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+    patient: Mapped[Patient] = relationship(lazy="joined")
+
+
+class ReminderLog(Base):
+    """One firing of a rule.
+
+    `(rule_id, due_at)` is a unique key, not a convention: the scheduler
+    re-evaluates a window every minute, and after a restart it will see the same
+    `due_at` again. The constraint is what makes that re-send impossible rather
+    than merely unlikely.
+    """
+
+    __tablename__ = "reminder_logs"
+    __table_args__ = (UniqueConstraint("rule_id", "due_at", name="uq_reminder_log_due"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rule_id: Mapped[int] = mapped_column(ForeignKey("reminder_rules.id"), index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # Copied from the rule at firing time: editing a rule later must not rewrite
+    # what the reminder said when it fired.
+    title: Mapped[str] = mapped_column(String(200))
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    fired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    done: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", index=True)
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", index=True)
+
+    patient: Mapped[Patient] = relationship(lazy="joined")
+
+
+class HealthAssessment(Base):
+    """T37's periodic assessment.
+
+    A revision is a **new row**, not an edit: `version` counts up and
+    `(patient_id, period, version)` is unique, so an earlier conclusion stays
+    readable exactly as it was written. Same shape as `MeetingReport`, and the
+    reason T37 calls for `version` and `updated_at` rather than an UPDATE.
+    """
+
+    __tablename__ = "health_assessments"
+    __table_args__ = (
+        UniqueConstraint("patient_id", "period", "version", name="uq_assessment_version"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    # The calendar month being assessed, `YYYY-MM`.
+    period: Mapped[str] = mapped_column(String(7), index=True)
+    conclusion: Mapped[str] = mapped_column(Text)
+    plan_adjustment: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # The assessing physician. Only this user may revise the assessment they
+    # wrote; T37 scenario S2 requires another doctor's PATCH to be a 403.
+    assessed_by: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    assessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
+    # Stamped on the revision; NULL on the original, which was never updated.
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+    patient: Mapped[Patient] = relationship(lazy="joined")
+    author: Mapped[User] = relationship(foreign_keys=[assessed_by], lazy="joined")

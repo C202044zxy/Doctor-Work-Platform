@@ -386,6 +386,111 @@ export const audit = {
   },
 }
 
+// M6. Vitals, health plans, reminder rules and their log, assessments.
+//
+// Every call here is real: the module has a full backend, so there is no mock
+// path and no switch to fall back to. An unused filter is left out rather than
+// sent blank, for the reason `patients.list` spells out -- `from=` is not a
+// date, and the server rejects the whole request with 422 rather than ignoring it.
+export const vitals = {
+  // `sign_type` and the two instants are optional here; the trend endpoint below
+  // requires all three, which is why they are separate builders.
+  async list(patientNo, { signType = '', from = '', to = '', page = 1, size = 20 } = {}) {
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    if (signType) params.set('sign_type', signType)
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    return request(`/patients/${encodeURIComponent(patientNo)}/vitals?${params}`)
+  },
+
+  // `from` and `to` are dates, not instants: the server treats `to` as the whole
+  // day, so a caller does not have to work out 23:59 itself.
+  async trend(patientNo, { signType, from, to }) {
+    const params = new URLSearchParams({ sign_type: signType, from, to })
+    return request(`/patients/${encodeURIComponent(patientNo)}/vitals/trend?${params}`)
+  },
+
+  async create(patientNo, payload) {
+    return request(`/patients/${encodeURIComponent(patientNo)}/vitals`, json(payload))
+  },
+}
+
+export const healthPlans = {
+  async list({ patientNo = '', page = 1, size = 20 } = {}) {
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    if (patientNo) params.set('patient_no', patientNo)
+    return request(`/health-plans?${params}`)
+  },
+
+  async get(id) {
+    return request(`/health-plans/${id}`)
+  },
+
+  async create(payload) {
+    return request('/health-plans', json(payload))
+  },
+
+  // The body is the full write shape, `patient_no` included: the contract gives
+  // this route no partial-update schema, so a status change resends the plan.
+  async update(id, payload) {
+    return request(`/health-plans/${id}`, send('PATCH', payload))
+  },
+}
+
+export const reminderRules = {
+  async list(patientNo = '') {
+    return request(`/reminder-rules${patientNo ? `?patient_no=${encodeURIComponent(patientNo)}` : ''}`)
+  },
+
+  async create(payload) {
+    return request('/reminder-rules', json(payload))
+  },
+
+  // Partial: `{ active: false }` alone is a complete request.
+  async update(id, payload) {
+    return request(`/reminder-rules/${id}`, send('PATCH', payload))
+  },
+}
+
+export const reminders = {
+  // Reading this list clears the red dot for the entries it returns.
+  async list({ patientNo = '', done, unreadOnly, page = 1, size = 20 } = {}) {
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    if (patientNo) params.set('patient_no', patientNo)
+    if (done !== undefined && done !== null) params.set('done', String(done))
+    if (unreadOnly) params.set('unread_only', 'true')
+    return request(`/reminders?${params}`)
+  },
+
+  async unreadCount() {
+    return request('/reminders/unread-count')
+  },
+
+  async markDone(id) {
+    return request(`/reminders/${id}/done`, json({}))
+  },
+}
+
+export const assessments = {
+  async list(patientNo) {
+    return request(`/patients/${encodeURIComponent(patientNo)}/assessments`)
+  },
+
+  async get(id) {
+    return request(`/assessments/${id}`)
+  },
+
+  async create(patientNo, payload) {
+    return request(`/patients/${encodeURIComponent(patientNo)}/assessments`, json(payload))
+  },
+
+  // A revision writes a new row: the reply is version + 1, and the assessment it
+  // replaces stays readable.
+  async revise(id, payload) {
+    return request(`/assessments/${id}`, send('PATCH', payload))
+  },
+}
+
 export const authentication = {
   signup(details) { return request('/auth/signup', json(details)) },
   verifySignup(ticket, code) { return request('/auth/signup/verify', json({ ticket, code })) },
