@@ -816,7 +816,7 @@
 | 路由 | 视图 | 消费的接口 | 现状 |
 |---|---|---|---|
 | `/login` | `LoginView.vue` | `POST /api/auth/login` → `POST /api/auth/send-code` → `POST /api/auth/verify-code`；注册分支 `POST /api/auth/signup` → `POST /api/auth/signup/verify`；人脸分支 `POST /api/auth/face/login` | ✅ **真实接口** |
-| `/dashboard` | `DashboardView.vue` | 无（工作台计数、排班、待办全部来自 `demo-data.js`） | ⚠️ **假数据** |
+| `/dashboard` | `DashboardView.vue` | `GET /api/me`（会话里已有，无独立请求）/ `/api/meetings`（邀请与本周会诊）/ `/api/patients`（本人范围内患者与姓名）/ `/api/reminders?unread_only=true`（未读项，非消费式）/ `/api/reminders/unread-count` | ✅ **真实接口**（2026-09-19） |
 | `/patients` | `PatientListView.vue` | `GET /api/patients`、`POST /api/patients`、`DELETE /api/patients/{patient_no}`、`GET /api/departments` | ✅ **真实接口** |
 | `/patients/:patientNo` | `PatientDetailView.vue` | `GET /api/patients/{patient_no}`、`GET /api/meetings?patient_no=…`、`GET /api/meetings/{id}/report`（`?version=` 读历史版本）、`GET /api/meetings/{id}/report/print`（仅参与人）；「Health data」Tab（`components/PatientHealth.vue`，M6）消费 `/api/patients/{no}/vitals`、`/vitals/trend`、`/api/health-plans`、`/api/reminder-rules`、`/api/reminders`、`/unread-count`、`/api/patients/{no}/assessments`、`/api/assessments/{id}` | ✅ **真实接口**（**「会诊记录」Tab** 属 M5、**「Health data」Tab** 属 M6，其余 Tab 属 M2-04） |
 | `/records` | `MedicalRecordView.vue` | 计划消费 `/api/emr/templates`、`/api/emr/records`、`PATCH /api/emr/records/{id}`、`/api/drugs`、`POST /api/emr/orders/validate` | ⚠️ **假数据** |
@@ -846,7 +846,7 @@
 | 医嘱面板 | M4-06 | 现由 `MedicalRecordView` 以假数据承担 |
 | 系统监控页 / 设备管理页 / 回放页 / 权限矩阵页 | S5 / S4 / S3 / S6 | 模拟模块，均零代码 |
 
-> **⚠️ 演示红线**：`demo-data.js` 目前被 **3 个 View + `App.vue`** 直接 import（`DashboardView` / `MedicalRecordView` / `ReviewQueueView` 与外壳的 `counts`）。**在 M9-05 收口前，这些页面上的任何数字都不是真实数据**，不得进入演示路径。`/login`、`/patients`、`/patients/:patientNo`（含 M6 的「Health data」Tab）、`/consultations` 的「Remote consultation」Tab、`/audit` 以及外壳的会话/登出/探针走真实接口——`RemoteConsultationView`（M5）、`AuditLogView`（T12）、健康管理面板（M6，原 `/health` 页已于 2026-09-18 并入患者详情）与问诊页的「Patient consultation」Tab（M3，假数据已删，现为空态）已退出这份名单。
+> **⚠️ 演示红线**：`demo-data.js` 目前被 **2 个 View** 直接 import（`MedicalRecordView` / `ReviewQueueView`）。**在 M9-05 收口前，这两个页面上的任何数字都不是真实数据**，不得进入演示路径。`/login`、`/dashboard`、`/patients`、`/patients/:patientNo`（含 M6 的「Health data」Tab）、`/consultations` 的「Remote consultation」Tab、`/audit` 以及外壳的会话/登出/探针/铃铛红点走真实接口——`RemoteConsultationView`（M5）、`AuditLogView`（T12）、健康管理面板（M6，原 `/health` 页已于 2026-09-18 并入患者详情）、问诊页的「Patient consultation」Tab（M3，假数据已删，现为空态）与工作台连同外壳（2026-09-19，`0915意见` 第 2 条）已退出这份名单。
 
 ---
 

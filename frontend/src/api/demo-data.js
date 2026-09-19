@@ -2,84 +2,37 @@
 // Keeping every invented value in one file makes the mock boundary obvious and
 // the deletions trivial as each module lands:
 //
-//   worklist, schedule, counts   -> M2 history, M4 queue, M8 panel
 //   allergens                    -> M2 allergy table
 //   record, versions, formulary  -> M4 records, M4 medical orders
 //   review*                      -> M4 chief-physician review
-//   auditRows                    -> M8 audit search and export
 //
 // Clinical values use the units Chinese hospitals report in: mmHg for blood
 // pressure, mmol/L for glucose, bpm for heart rate, g and MU for drug doses.
 //
-// Two blocks have left for the same reason -- their module landed -- and the
+// Three blocks have left for the same reason -- their module landed -- and the
 // deletions are in the history: M6's health management values (readings, plans,
-// reminders, assessments now come from the API) and M5's `meeting`.
+// reminders, assessments now come from the API), M5's `meeting`, and the
+// dashboard's `worklist` / `schedule` / `counts` (2026-09-19).
+//
+// That last one was the worst of them. `counts` alone fed both the dashboard and
+// the shell's notification bell, so the fabricated figures were the one thing
+// visible on every screen in the demo, and no page carried a marker saying so.
+// The dashboard now reads the service; the bell polls the real unread-reminder
+// count. Nothing here is imported by the shell any more.
 //
 // M3's `consult*` block is gone for the opposite reason: the module still has no
 // code, and its mock workbench announced "Connected over WebSocket" on a build
 // with no WebSocket route in it. Rather than carry that into the demo path, the
 // Consultations screen states the gap and M3 fills it in.
 //
+// `auditRows` / `auditActions` below are now imported by nothing: the audit screen
+// reads the API since T12. They are left in place rather than deleted here because
+// M8 owns them, and their removal is M8's to make.
+//
 // Real data today: the patient directory (views/PatientListView), the audit log
-// (views/AuditLogView), every M6 panel (components/PatientHealth) and the
-// remote-consultation tab of views/ConsultationsView.
-
-export const worklist = [
-  {
-    id: 'wl-1',
-    severity: 'alert',
-    patient: 'Zhang Wei',
-    patientId: 1,
-    detail: 'Allergy on file: penicillin, cephalosporins',
-    action: 'Order entry blocked until reviewed',
-  },
-  {
-    id: 'wl-2',
-    severity: 'alert',
-    patient: 'Liu Yang',
-    patientId: 2,
-    detail: 'Blood pressure 168/104 mmHg, above range for three readings',
-    action: 'Review the care plan',
-  },
-  {
-    id: 'wl-3',
-    severity: 'warn',
-    patient: 'Chen Jing',
-    patientId: 3,
-    detail: 'Admission record v2 submitted for review',
-    action: 'Approve or return with a comment',
-  },
-  {
-    id: 'wl-4',
-    severity: 'warn',
-    patient: 'Wu Min',
-    patientId: 4,
-    detail: 'Follow-up consultation request received 40 minutes ago',
-    action: 'Accept and open a session',
-  },
-  {
-    id: 'wl-5',
-    severity: 'info',
-    patient: 'Zhao Lei',
-    patientId: 5,
-    detail: 'Preventive care reminder due today',
-    action: 'Confirm the reminder',
-  },
-]
-
-export const schedule = [
-  { time: '09:30', patient: 'Zhang Wei', kind: 'Follow-up consultation' },
-  { time: '11:00', patient: 'Liu Yang', kind: 'Vital-sign review' },
-  { time: '14:00', patient: 'Chen Jing', kind: 'Record review' },
-  { time: '16:30', patient: 'Sun Qi', kind: 'Remote consultation' },
-]
-
-export const counts = {
-  consultations: 3,
-  pendingReviews: 2,
-  alerts: 2,
-  myPatients: 28,
-}
+// (views/AuditLogView), every M6 panel (components/PatientHealth), the
+// remote-consultation tab of views/ConsultationsView, and the dashboard
+// (views/DashboardView) with the shell around it.
 
 // Drug classes this patient reacts to. The order check compares a prescribed
 // drug's class against this list, which is how cross-reactivity is caught:
