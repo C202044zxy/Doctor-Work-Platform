@@ -9,7 +9,7 @@
 // `title` is the API's field name for the role and the contract forbids renaming
 // it. The only values it takes are admin, senior and junior.
 export const MODULE_ROLES = {
-  review: ['admin', 'senior'],
+  review: ['senior'],
   audit: ['admin'],
 }
 

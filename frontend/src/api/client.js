@@ -446,3 +446,10 @@ export async function faceImageUrl(ref, actingUsername) {
   }
   return URL.createObjectURL(await response.blob())
 }
+
+// M4 uses the shared authenticated fetch client and the canonical API contract.
+export const emr = {
+  get: (path) => request(path),
+  post: (path, body = {}) => request(path, json(body)),
+  patch: (path, body) => request(path, send('PATCH', body)),
+}

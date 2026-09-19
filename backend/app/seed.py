@@ -17,6 +17,9 @@ def seed():
         for name in ("admin", "senior", "junior"):
             if session.scalar(select(Role).where(Role.name == name)) is None:
                 session.add(Role(name=name))
+        from app.emr_seed import seed_emr
+
+        seed_emr(session)
         session.commit()
     engine.dispose()
 

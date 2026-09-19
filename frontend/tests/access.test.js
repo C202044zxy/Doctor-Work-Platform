@@ -19,8 +19,8 @@ test('a senior reviews but does not read the audit log', () => {
   assert.equal(canOpen(MODULE_ROLES.audit, 'senior'), false)
 })
 
-test('an admin may open both', () => {
-  assert.equal(canOpen(MODULE_ROLES.review, 'admin'), true)
+test('an admin may read audit but cannot review clinical records', () => {
+  assert.equal(canOpen(MODULE_ROLES.review, 'admin'), false)
   assert.equal(canOpen(MODULE_ROLES.audit, 'admin'), true)
 })
 

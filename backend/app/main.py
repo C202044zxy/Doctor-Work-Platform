@@ -264,6 +264,9 @@ def create_app(settings: Settings | None = None):
     # T31 scenario S2 requires a non-participant's downloaded URL to answer 403,
     # and a static mount would hand the bytes over without asking.
     app.include_router(meetings.router)
+    from app import emr
+
+    app.include_router(emr.router)
     app.state.sessions = session_factory(engine)
     app.state.engine = engine
     app.state.cache = cache

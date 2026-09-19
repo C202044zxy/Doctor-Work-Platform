@@ -19,6 +19,7 @@ export const navigation = [
   { name: 'consultations', label: 'Consultations', icon: 'ChatDotRound' },
   { name: 'remote-consultation', label: 'Remote Consultation', icon: 'VideoCamera' },
   { name: 'health', label: 'Health Management', icon: 'TrendCharts' },
+  { name: 'my-submissions', label: 'My submissions', icon: 'Document' },
   { name: 'review', label: 'Review Queue', icon: 'Checked', roles: MODULE_ROLES.review },
   { name: 'audit', label: 'Audit Log', icon: 'Tickets', roles: MODULE_ROLES.audit },
 ]
@@ -82,6 +83,12 @@ const routes = [
     name: 'health',
     component: () => import('../views/HealthManagementView.vue'),
     meta: { title: 'Health Management' },
+  },
+  {
+    path: '/my-submissions',
+    name: 'my-submissions',
+    component: () => import('../views/ReviewQueueView.vue'),
+    meta: { title: 'My submissions' },
   },
   {
     path: '/review',
