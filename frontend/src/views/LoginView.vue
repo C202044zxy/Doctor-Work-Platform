@@ -546,15 +546,32 @@ function useAnotherAccount() {
           </button>
         </p>
 
+        <!-- Signup reaches this step as well, and its way back is the way *out*
+             of signup: `useAnotherAccount` only resets the step and would leave
+             `registering` set, which lands on the signup form again. -->
         <p v-if="step === 'code'" class="back">
-          <button type="button" class="resend" :disabled="busy" @click="useAnotherAccount">
-            Use a different account
+          <button
+            type="button"
+            class="resend"
+            :disabled="busy"
+            @click="registering ? toggleSignup() : useAnotherAccount()"
+          >
+            {{ registering ? 'Back to sign in' : 'Use a different account' }}
           </button>
         </p>
 
         <p v-if="step === 'credentials' && !registering" class="back">
           <button type="button" class="resend" :disabled="busy" @click="toggleSignup">
             Create an account with email
+          </button>
+        </p>
+
+        <!-- 0915意见 item 1. The link above takes you into signup and nothing took
+             you back out: `toggleSignup` was only reachable while already signed
+             out of signup mode, so the signup form was one-way. -->
+        <p v-if="step === 'credentials' && registering" class="back">
+          <button type="button" class="resend" :disabled="busy" @click="toggleSignup">
+            Back to sign in
           </button>
         </p>
 
