@@ -13,6 +13,9 @@ from app.audit import persist_audit
 from app.work_models import CallLog
 from app.work_schemas import Input
 
+RING_TIMEOUT_SECONDS = 60
+CONNECT_TIMEOUT_SECONDS = 45
+
 
 class Signal(Input):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
@@ -109,7 +112,8 @@ async def handle(app, room, user, connection, kind, payload):
             "caller_user": user.id,
             "started_at": datetime.now(UTC),
             "connected_at": None,
-            "deadline": monotonic() + 25,
+            "deadline": monotonic() + RING_TIMEOUT_SECONDS,
+            "accepted": False,
             "answered": False,
         }
         hub.calls[room] = state
@@ -122,10 +126,18 @@ async def handle(app, room, user, connection, kind, payload):
     ):
         raise HTTPException(409, "Call is no longer available on this connection")
     peer = state["callee"] if connection == state["caller"] else state["caller"]
-    if kind == "call_answer":
+    if kind == "call_accept":
+        if connection != state["callee"] or state["accepted"] or state["answered"]:
+            raise HTTPException(409, "Only the invited connection may accept once")
+        state["accepted"] = True
+        state["deadline"] = monotonic() + CONNECT_TIMEOUT_SECONDS
+        send(hub, peer, kind, {"call_id": body.call_id})
+    elif kind == "call_answer":
         if connection != state["callee"] or state["answered"] or not body.sdp:
             raise HTTPException(409, "Only the invited connection may answer once")
+        state["accepted"] = True
         state["answered"] = True
+        state["deadline"] = monotonic() + CONNECT_TIMEOUT_SECONDS
         send(hub, peer, kind, {"call_id": body.call_id, "sdp": body.sdp})
     elif kind == "ice_candidate":
         send(hub, peer, kind, {"call_id": body.call_id, "candidate": body.candidate})

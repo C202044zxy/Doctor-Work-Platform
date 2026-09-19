@@ -254,3 +254,41 @@ def test_upgrade_from_each_branch_preserves_data_and_can_downgrade(previous, tmp
         assert inspect(engine).get_table_names() == ["alembic_version"]
     finally:
         engine.dispose()
+
+
+def test_accept_and_answer_have_separate_deadlines_and_cannot_be_replayed(client, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr("app.calls.monotonic", lambda: clock[0])
+    room = active_room(client)
+    with client.websocket_connect(f"/ws/chat/{room}?token={token(client)}") as a:
+        receive(a, "joined")
+        with client.websocket_connect(f"/ws/chat/{room}?token={token(client, 2)}") as b:
+            receive(b, "joined")
+            payload = {"call_id": "slow-permission", "sdp": "v=0\r\n"}
+            a.send_json({"type": "call_offer", "data": payload})
+            receive(b, "call_offer")
+            state = client.app.state.chat.calls[room]
+            assert state["deadline"] == 1060
+            a.send_json({"type": "call_accept", "data": {"call_id": "slow-permission"}})
+            receive(a, "error")
+            assert state["deadline"] == 1060
+            clock[0] = 1059
+            b.send_json({"type": "call_accept", "data": {"call_id": "slow-permission"}})
+            receive(a, "call_accept")
+            assert state["deadline"] == 1104
+            b.send_json({"type": "call_accept", "data": {"call_id": "slow-permission"}})
+            receive(b, "error")
+            assert state["deadline"] == 1104
+            clock[0] = 1103
+            b.send_json({"type": "call_answer", "data": payload})
+            receive(a, "call_answer")
+            assert state["deadline"] == 1148
+            b.send_json({"type": "call_answer", "data": payload})
+            receive(b, "error")
+            assert state["deadline"] == 1148
+            a.send_json({"type": "call_connected", "data": {"call_id": "slow-permission"}})
+            a.send_json({"type": "message", "data": {"content": "timing check"}})
+            receive(a, "message")
+            assert state["deadline"] is None
+            a.send_json({"type": "call_end", "data": {"call_id": "slow-permission"}})
+            receive(b, "call_end")

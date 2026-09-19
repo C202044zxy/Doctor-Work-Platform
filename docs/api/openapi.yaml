@@ -3059,7 +3059,7 @@ paths:
         signalling handlers remain integration dependencies, not implemented features.
 
         `type` is one of `message`, `typing`, `joined`, `left`, `call_offer`,
-        `call_answer`, `ice_candidate`. The last three carry the WebRTC signalling,
+        `call_accept`, `call_answer`, `ice_candidate`. The call events carry the WebRTC signalling,
         which reuses this socket rather than running a separate signalling service.
 
         Every message is persisted to `consult_message` before it is broadcast, so a
@@ -3069,6 +3069,13 @@ paths:
         concurrent connections under 500ms latency; record the measured figure.
 
         Current M3 signaling extensions (all under the same envelope):
+        Ringing expires after 60 seconds. The invited connection sends `call_accept`
+        with `{call_id}` when Answer is pressed, before requesting media permission;
+        this starts a separate 45-second setup window. Only the callee may accept once.
+        `call_answer` starts a fresh 45-second ICE connection window; repeated answers
+        cannot extend it. `call_connected` clears the deadline. Existing clients may
+        send `call_answer` directly. Media capture may be camera+microphone, audio-only,
+        or receive-only; receive-only never opens local devices or fabricates media.
         `call_offer` / `call_answer` carry `{call_id, sdp}`; `ice_candidate`
         carries `{call_id, candidate}`. `call_connected`, `call_end` and
         `call_reject` carry `{call_id}`. The server sends `call_end` with

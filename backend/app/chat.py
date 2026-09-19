@@ -464,6 +464,7 @@ async def chat_socket(ws: WebSocket, room_id: int, token: str = ""):
                     await hub.publish(room_id, {"type": "typing", "data": {"user_id": identity.id}})
                 elif event.get("type") in {
                     "call_offer",
+                    "call_accept",
                     "call_answer",
                     "ice_candidate",
                     "call_connected",
