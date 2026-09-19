@@ -2,6 +2,7 @@ name: doctor-work-dev
 services:
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - '127.0.0.1:16379:6379'
     command: ['redis-server', '--appendonly', 'yes']

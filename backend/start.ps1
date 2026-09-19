@@ -142,7 +142,10 @@ function Install-RedisFromArchive {
 function Ensure-Redis {
     if ($DockerRedis) {
         Assert-Command "docker" "Start Docker Desktop before running development mode."
-        & docker compose -f (Join-Path $rootDir "compose.dev.yaml") up --detach --wait
+        & docker info --format '{{.ServerVersion}}' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Docker is unavailable. Start Docker Desktop (Linux containers), then retry." }
+        Write-Host "Starting development Redis on 127.0.0.1:16379..." -ForegroundColor Cyan
+        & docker compose -f (Join-Path $rootDir "compose.dev.yaml") up --detach --wait --wait-timeout 60
         Assert-LastExit "Development Redis"
         if (-not (Wait-Redis)) { throw "Development Redis did not become ready." }
         return
@@ -214,6 +217,11 @@ try {
             $redisUrl = (& $pythonExe -c "from app.config import Settings; print(Settings().redis_url or 'redis://127.0.0.1:6379/0')").Trim()
         }
         $env:REDIS_URL = $redisUrl
+        if ($DockerRedis) { $env:APP_ENV = "dev" }
+        if (-not $NoServe) {
+            & $pythonExe -m app.dev_runtime ports
+            Assert-LastExit "Development ports"
+        }
     } finally {
         Pop-Location
     }
@@ -275,25 +283,17 @@ try {
     $apiArgs = @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000", "--no-access-log", "--log-level", "warning")
     if ($Reload) { $apiArgs += @("--reload", "--reload-dir", "app") }
     $api = Start-Process -FilePath $pythonExe -ArgumentList $apiArgs -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "api.log") -RedirectStandardError (Join-Path $logDir "api-error.log") -PassThru
-    $web = Start-Process -FilePath "node" -ArgumentList @("node_modules/vite/bin/vite.js", "--host", "127.0.0.1") -WorkingDirectory $frontendDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "web.log") -RedirectStandardError (Join-Path $logDir "web-error.log") -PassThru
-
+    $web = $null
     try {
-        $ready = $false
-        for ($attempt = 0; $attempt -lt 60; $attempt++) {
-            if ($api.HasExited) { break }
-            try {
-                Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/health/live" -UseBasicParsing -TimeoutSec 2 | Out-Null
-                $ready = $true
-                break
-            } catch {
-                Start-Sleep -Milliseconds 500
-            }
-        }
-        if ($ready) {
-            Write-Host "Frontend: http://127.0.0.1:5173 | API docs: http://127.0.0.1:8000/docs" -ForegroundColor Green
-        } else {
-            throw "The API did not become ready. Check backend/runtime/api-error.log."
-        }
+        $web = Start-Process -FilePath "node" -ArgumentList @("node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5173", "--strictPort") -WorkingDirectory $frontendDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "web.log") -RedirectStandardError (Join-Path $logDir "web-error.log") -PassThru
+
+        Push-Location $backendDir
+        try {
+            & $pythonExe -m app.dev_runtime ready
+            Assert-LastExit "API dependency readiness"
+        } finally { Pop-Location }
+        if ($api.HasExited) { throw "API exited. Check backend/runtime/api-error.log." }
+        Write-Host "Redis: ready | Frontend: http://127.0.0.1:5173 | API docs: http://127.0.0.1:8000/docs" -ForegroundColor Green
         if ($web.HasExited) { throw "Vite exited. Check backend/runtime/web-error.log and port 5173." }
         while (-not $api.HasExited -and -not $web.HasExited) {
             Start-Sleep -Milliseconds 500

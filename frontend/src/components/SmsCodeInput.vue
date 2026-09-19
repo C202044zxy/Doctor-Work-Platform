@@ -1,18 +1,11 @@
 <script setup>
-// T41 §3.4. Owns the whole "ask for a code, then check it" exchange so the same
-// component can serve the sign-in tab and the second-factor step, where only
-// `scene` differs.
-//
-// It calls the API itself rather than emitting a code upward: the error copy the
-// user must see ("2 attempts remaining", "locked for 10 minutes") is decided by
-// the response, and splitting that across two files is how those messages get
-// lost.
+// S1: password ticket scopes the simulated message and the one-time code.
 import { computed, onUnmounted, ref, useTemplateRef } from 'vue'
 
-import { USE_MOCK_AUTH, authentication } from '../api/client'
+import { authentication } from '../api/client'
 
 const props = defineProps({
-  scene: { type: String, default: 'login' },
+  ticket: { type: String, required: true },
   // Set for the second-factor step, where the number is already known from the
   // password step and must not be edited.
   phone: { type: String, default: '' },
@@ -28,6 +21,7 @@ const number = ref(props.phone)
 const code = ref('')
 const error = ref('')
 const notice = ref('')
+const preview = ref(null)
 const busy = ref(false)
 const secondsLeft = ref(0)
 const codeInput = useTemplateRef('codeInput')
@@ -62,19 +56,15 @@ async function send() {
   notice.value = ''
   busy.value = true
   try {
-    const result = await authentication.smsSend(number.value.trim(), props.scene)
+    const result = await authentication.smsSend(props.ticket, number.value.trim())
     startCountdown(result.cooldown ?? 60)
-    // §1.2: the response must not carry the code. It is written to the audit
-    // trail instead, which is where §3.5 判据② goes looking for it — so the hint
-    // points there rather than printing it here.
-    notice.value = USE_MOCK_AUTH
-      ? `Simulated delivery to ${result.masked_phone ?? 'your number'}: no gateway was called. The code is recorded in the audit log.`
-      : result.masked_phone ? `A code was sent to ${result.masked_phone}.` : 'A code was sent.'
+    preview.value = null
+    notice.value = `Simulated delivery to ${result.masked_phone}. No real message was sent.`
   } catch (err) {
     // 429 means the server is still holding a cooldown this page did not know
     // about — the user reloaded, or another tab sent a code. Adopt the remaining
     // seconds it reports instead of leaving the button looking clickable.
-    if (err.status === 429 && err.data?.retry_after) startCountdown(err.data.retry_after)
+    if (err.status === 429 && err.retryAfter) startCountdown(err.retryAfter)
     error.value = err.message
   } finally {
     busy.value = false
@@ -85,7 +75,7 @@ async function verify() {
   error.value = ''
   busy.value = true
   try {
-    const data = await authentication.smsVerify(number.value.trim(), code.value.trim(), props.scene)
+    const data = await authentication.smsVerify(props.ticket, code.value.trim())
     emit('success', data)
   } catch (err) {
     // An expired or spent code cannot be retried as-is: clear the field and hand
@@ -99,6 +89,13 @@ async function verify() {
   } finally {
     busy.value = false
   }
+}
+async function showPreview() {
+  error.value = ''
+  busy.value = true
+  try { preview.value = await authentication.smsPreview(props.ticket) }
+  catch (err) { preview.value = null; error.value = err.message }
+  finally { busy.value = false }
 }
 </script>
 
@@ -143,6 +140,11 @@ async function verify() {
     </div>
 
     <p v-if="notice" class="sms-notice" role="status">{{ notice }}</p>
+    <el-button :disabled="busy || disabled" @click="showPreview">View simulated SMS</el-button>
+    <p v-if="preview" class="sms-notice" role="status">
+      Simulated message — nothing was sent. Code: <strong>{{ preview.code }}</strong>
+      (valid for up to {{ preview.expires_in }} seconds).
+    </p>
     <p v-if="error" class="sms-error" role="alert">{{ error }}</p>
 
     <el-button

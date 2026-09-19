@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    app_env: str = "production"
     database_url: str = "sqlite:///./doctor.db"
     jwt_secret: str = Field(default="", repr=False)
     smtp_host: str | None = None

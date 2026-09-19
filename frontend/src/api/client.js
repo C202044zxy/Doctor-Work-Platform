@@ -1,19 +1,10 @@
 import { accessToken, signOut } from '../session.js'
 import { filenameFromDisposition } from './csv.js'
-import { sms as mockSms, face as mockFace } from './mock-auth.js'
+import { face as mockFace } from './mock-auth.js'
 
 const BASE = '/api'
 
-// One switch left, and it covers exactly one thing: `/api/auth/sms/*` and
-// `/api/auth/face/*` are specified in `T41短信登录与T42人脸识别-任务详设.md` and
-// nobody has written them, so there is nothing to call. Turning this off would
-// break those screens rather than fix them.
-//
-// The patients mock is gone. `GET /api/patients` is real and matches the
-// contract, so a second code path through the list was a second thing to keep
-// correct for no demonstrated benefit — and the one it was hiding was a real
-// bug: the mock treated a blank date as "no filter" while the service rejects
-// one with 422. Judging by the demo rather than by the doc, real wins.
+// Face simulation uses the browser provider. SMS uses the backend Redis flow.
 export const USE_MOCK_AUTH = true
 
 // T07 签收标准 2 and 场景 S2 both hinge on telling these apart. The server's four
@@ -59,6 +50,7 @@ async function request(path, options = {}) {
     // and §4.3.1's attempt counter rides along the same way. Keeping `data` on
     // the error is what makes both possible without parsing the message text.
     error.data = body?.data ?? null
+    error.retryAfter = Number(response.headers.get('Retry-After')) || 0
 
     // A 401 on a request that carried a token means the session ended. A 401 on
     // one that did not is the sign-in endpoints rejecting a credential, and those
@@ -282,17 +274,10 @@ export const authentication = {
   // backend/app/face_login.py should be deleted together once that lands.
   faceLogin: (username, photo) => request('/auth/face/login', json({ username, photo })),
 
-  // --- T41 (§3.3.1) -------------------------------------------------------
-  // The send response carries `cooldown` / `mock` / `masked_phone` and nothing
-  // else — §1.2 calls handing the code back to the caller the signature of a fake
-  // implementation. Reading it is the audit page's job (§3.5 判据②).
-  smsSend: (phone, scene = 'login') => (USE_MOCK_AUTH
-    ? mockSms.send({ phone, scene })
-    : request('/auth/sms/send', json({ phone, scene }))),
-
-  smsVerify: (phone, code, scene = 'login') => (USE_MOCK_AUTH
-    ? mockSms.verify({ phone, code, scene })
-    : request('/auth/sms/verify', json({ phone, code, scene }))),
+  // S1: delivery is simulated by the backend; tickets and JWTs are real.
+  smsSend: (ticket, phone) => request('/auth/sms/send', { ...json({ ticket, phone }), signal: AbortSignal.timeout(10000) }),
+  smsPreview: (ticket) => request('/auth/sms/preview', { ...json({ ticket }), signal: AbortSignal.timeout(10000) }),
+  smsVerify: (ticket, code) => request('/auth/sms/verify', { ...json({ ticket, code }), signal: AbortSignal.timeout(10000) }),
 
   // --- T42 (§4.3.1) -------------------------------------------------------
   // `actingUsername` is read by the mock only; the real request carries the image

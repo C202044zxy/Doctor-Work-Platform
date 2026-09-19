@@ -29,7 +29,7 @@ const channel = ref('email') // 'email' | 'sms' | 'face'
 
 const channels = [
   { value: 'email', label: 'Email code' },
-  { value: 'sms', label: 'SMS code' },
+  { value: 'sms', label: 'SMS (simulated)' },
   { value: 'face', label: 'Face' },
 ]
 
@@ -229,19 +229,9 @@ async function submitCode() {
   finally { busy.value = false }
 }
 
-// The SMS panel reports its own errors, so the only thing left here is what to do
-// with a success. See the same note on the face channel below.
 function handleSmsSuccess(data) {
   notice.value = ''
-  if (data?.access_token) {
-    finish(data)
-    return
-  }
-  // No session came back. In the mock that is by design — it cannot mint a JWT,
-  // and pretending otherwise would leave the user inside a shell where every
-  // request 401s (§1.1 rule 3). Once `/api/auth/sms/*` lands, a response that is
-  // not a token means the shape changed, and saying so beats a silent loop.
-  notice.value = 'Simulated step reached the end of the flow. No session was issued: the SMS endpoints are still being built.'
+  finish(data)
 }
 
 function handleCaptured(blob) {
@@ -434,7 +424,7 @@ function useAnotherAccount() {
 
           <SmsCodeInput
             v-else-if="channel === 'sms'"
-            scene="login"
+            :ticket="ticket"
             @success="handleSmsSuccess"
           />
 
@@ -559,10 +549,9 @@ function useAnotherAccount() {
         </p>
 
         <p v-if="!registering" class="demo-note">
-          SMS and face recognition are simulated: the pages, the countdown, the
-          lockout and the photo capture are real, but nothing leaves for a real
-          gateway or provider. Sign-in still needs the endpoints being built for
-          T41 and T42.
+          SMS delivery is simulated. In development mode, use “View simulated SMS”
+          to read your code and complete sign-in. No message is sent to a phone.
+          Face recognition is also a simulation.
         </p>
       </form>
     </section>

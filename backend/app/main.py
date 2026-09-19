@@ -287,6 +287,9 @@ def create_app(settings: Settings | None = None):
     app = ProtectedFastAPI(title="Doctor Work Platform", version="0.1.0", lifespan=lifespan)
     app.middleware("http")(audit_request)
     app.state.settings = settings
+    from app import sms
+
+    app.include_router(sms.router)
     app.include_router(auth.router)
     app.include_router(signup.router)
     app.include_router(face_login.router)
@@ -306,6 +309,7 @@ def create_app(settings: Settings | None = None):
     async def http_error(request, exc):
         return JSONResponse(
             status_code=exc.status_code,
+            headers=exc.headers,
             content={"code": exc.status_code, "message": str(exc.detail), "data": None},
         )
 
@@ -378,7 +382,7 @@ def create_app(settings: Settings | None = None):
                 checks["redis"] = "ok"
             except RedisError:
                 checks["redis"] = "down"
-        available = "down" not in checks.values()
+        available = all(value == "ok" for value in checks.values())
         return JSONResponse(
             status_code=200 if available else 503,
             content={

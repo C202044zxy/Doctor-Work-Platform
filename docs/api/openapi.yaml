@@ -84,6 +84,122 @@ security:
   - bearerAuth: []
 
 paths:
+  /api/auth/sms/send:
+    post:
+      tags: [Auth]
+      summary: Simulate SMS delivery after password login. Development only; no real message is sent. Shares email cooldown and code verification.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SmsSendRequest'
+      responses:
+        '200':
+          description: Success envelope. See SmsSendData.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, message, data]
+                properties:
+                  code: {type: integer, const: 0}
+                  message: {type: string}
+                  data:
+                    $ref: '#/components/schemas/SmsSendData'
+        '401':
+          description: Ticket or code expired, invalid, consumed, or user disabled.
+        '404':
+          description: Simulation disabled or no active SMS for this ticket.
+        '422':
+          description: Invalid request.
+        '429':
+          description: Shared email/SMS cooldown or daily cap. Retry-After header gives cooldown seconds.
+        '503':
+          description: Redis or simulated delivery unavailable.
+  /api/auth/sms/preview:
+    post:
+      tags: [Auth]
+      summary: Read only the current password-verified ticket SMS in APP_ENV=dev. This is the documented plaintext-code exception. No-store; no ticket in URL.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SmsTicketRequest'
+      responses:
+        '200':
+          description: Success envelope. See SmsPreviewData.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, message, data]
+                properties:
+                  code: {type: integer, const: 0}
+                  message: {type: string}
+                  data:
+                    $ref: '#/components/schemas/SmsPreviewData'
+        '401':
+          description: Ticket or code expired, invalid, consumed, or user disabled.
+        '404':
+          description: Simulation disabled or no active SMS for this ticket.
+        '422':
+          description: Invalid request.
+        '429':
+          description: Shared email/SMS cooldown or daily cap. Retry-After header gives cooldown seconds.
+        '503':
+          description: Redis or simulated delivery unavailable.
+  /api/auth/sms/verify:
+    post:
+      tags: [Auth]
+      summary: Consume the login ticket and code atomically and issue a real JWT with mock true. Development only.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SmsVerifyRequest'
+      responses:
+        '200':
+          description: Success envelope. See SmsVerifyData.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, message, data]
+                properties:
+                  code: {type: integer, const: 0}
+                  message: {type: string}
+                  data:
+                    $ref: '#/components/schemas/SmsVerifyData'
+        '401':
+          description: Ticket or code expired, invalid, consumed, or user disabled.
+        '404':
+          description: Simulation disabled or no active SMS for this ticket.
+        '422':
+          description: Invalid request.
+        '429':
+          description: Shared email/SMS cooldown or daily cap. Retry-After header gives cooldown seconds.
+        '503':
+          description: Redis or simulated delivery unavailable.
+  /api/notify-outbox:
+    get:
+      tags: [Auth]
+      summary: Admin-only paginated simulated outbox, latest first. Codes redacted outside dev and after 300 seconds.
+      parameters:
+        - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+        - {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      responses:
+        '200':
+          description: Envelope data contains items (id, channel, target masked, template, status, mock, created_at, code nullable), total, page, size.
+        '401':
+          description: Access token required.
+        '403':
+          description: Admin only.
   /api/auth/face/login:
     post:
       operationId: faceLogin
@@ -3059,6 +3175,49 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
 
   schemas:
+    SmsTicketRequest:
+      type: object
+      required: [ticket]
+      properties:
+        ticket: {type: string, minLength: 1, maxLength: 200}
+    SmsSendRequest:
+      type: object
+      required: [ticket, phone]
+      properties:
+        ticket: {type: string, minLength: 1, maxLength: 200}
+        phone: {type: string, pattern: '^1[3-9][0-9]{9}$'}
+    SmsVerifyRequest:
+      type: object
+      required: [ticket, code]
+      properties:
+        ticket: {type: string, minLength: 1, maxLength: 200}
+        code: {type: string, pattern: '^[0-9]{6}$'}
+    SmsSendData:
+      type: object
+      required: [mock, status, cooldown, expires_in, masked_phone]
+      properties:
+        mock: {type: boolean, const: true}
+        status: {type: string, const: 'sent(mock)'}
+        cooldown: {type: integer, const: 60}
+        expires_in: {type: integer, const: 300}
+        masked_phone: {type: string}
+    SmsPreviewData:
+      type: object
+      required: [id, code, masked_phone, mock, status, expires_in]
+      properties:
+        id: {type: integer}
+        code: {type: string, pattern: '^[0-9]{6}$'}
+        masked_phone: {type: string}
+        mock: {type: boolean, const: true}
+        status: {type: string, const: 'sent(mock)'}
+        expires_in: {type: integer}
+    SmsVerifyData:
+      allOf:
+        - $ref: '#/components/schemas/TokenData'
+        - type: object
+          required: [mock]
+          properties:
+            mock: {type: boolean, const: true}
     SignupRequest:
       type: object
       additionalProperties: false

@@ -100,7 +100,11 @@ build_redis_from_source() {
 ensure_redis() {
   if (( docker_redis )); then
     assert_command docker "Start Docker before running development mode."
-    docker compose -f "$root_dir/compose.dev.yaml" up --detach --wait
+    docker info --format '{{.ServerVersion}}' >/dev/null || {
+      echo "Docker is unavailable. Start Docker (Linux containers), then retry." >&2
+      exit 1
+    }
+    docker compose -f "$root_dir/compose.dev.yaml" up --detach --wait --wait-timeout 60
     redis_bootstrap wait --url "$redis_url" --timeout 30
     return
   fi
@@ -144,11 +148,13 @@ if (( ! skip_install )); then (cd "$backend_dir" && uv sync --frozen); fi
 (cd "$backend_dir" && uv run --no-sync python -m app.dev_config)
 if (( docker_redis )); then
   redis_url="redis://127.0.0.1:16379/0"
+  export APP_ENV=dev
 else
   redis_url="$(cd "$backend_dir" && uv run --no-sync python -c "from app.config import Settings; print(Settings().redis_url or 'redis://127.0.0.1:6379/0')")"
 fi
 export REDIS_URL="$redis_url"
 
+if (( ! no_serve )); then (cd "$backend_dir" && uv run --no-sync python -m app.dev_runtime ports); fi
 ensure_redis
 
 log "Applying database migrations and seeding ..."
@@ -186,7 +192,8 @@ api_args=(--host 127.0.0.1 --port 8000 --no-access-log --log-level warning)
 if (( reload )); then api_args+=(--reload --reload-dir app); fi
 (cd "$backend_dir" && exec uv run uvicorn app.main:app "${api_args[@]}") &
 pids+=("$!")
-(cd "$frontend_dir" && exec node node_modules/vite/bin/vite.js --host 127.0.0.1) &
+(cd "$frontend_dir" && exec node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort) &
 pids+=("$!")
-echo "Frontend: http://127.0.0.1:5173 | API docs: http://127.0.0.1:8000/docs"
+(cd "$backend_dir" && uv run --no-sync python -m app.dev_runtime ready)
+echo "Redis: ready | Frontend: http://127.0.0.1:5173 | API docs: http://127.0.0.1:8000/docs"
 wait -n "${pids[@]}"

@@ -68,6 +68,7 @@ EXPECTED_TABLES = frozenset(
         "consult_message",
         "image_upload",
         "call_log",
+        "notify_outbox",
         "medical_order",
         "health_plan",
         "reminder_rule",

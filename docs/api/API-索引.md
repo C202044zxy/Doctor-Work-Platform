@@ -916,3 +916,13 @@
 ---
 
 *本文档由模块视图重排，2026-09-14。任务编号、负责人与状态口径见 `docs/01-任务安排.md`；测试场景与答辩口径见 `docs/02-测试场景.md`；字段级细节以 `docs/api/openapi.yaml` 为准，两者冲突时以 `openapi.yaml` 为准并在同一 PR 内同步本文。*
+
+
+### S1 模拟短信（开发环境）
+
+- `POST /api/auth/sms/send`：密码 ticket + 测试号码，模拟发送，复用邮箱限流。
+- `POST /api/auth/sms/preview`：密码 ticket 查看自己的短期模拟消息（dev 明文例外）。
+- `POST /api/auth/sms/verify`：ticket + code，原子消费后签发 JWT，mock=true。
+- `GET /api/notify-outbox`：仅 admin，分页读取模拟记录。
+
+字段与错误状态以 openapi.yaml 为准。查看接口使用 POST 请求体避免 ticket 出现在 URL；这次不实现短信注册或微信提醒。

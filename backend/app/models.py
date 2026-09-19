@@ -18,6 +18,20 @@ class Base(DeclarativeBase):
     pass
 
 
+class NotifyOutbox(Base):
+    __tablename__ = "notify_outbox"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel: Mapped[str] = mapped_column(String(20))
+    target: Mapped[str] = mapped_column(String(100))
+    template: Mapped[str] = mapped_column(String(100))
+    payload_json: Mapped[dict] = mapped_column(JSON)
+    code: Mapped[str | None] = mapped_column(String(6))
+    status: Mapped[str] = mapped_column(String(30))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
 class Department(Base):
     __tablename__ = "departments"
     id: Mapped[int] = mapped_column(primary_key=True)

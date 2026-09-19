@@ -15,10 +15,14 @@ def reserve_send(cache, uid, daily_limit=20):
                 pipe.watch(cooldown, daily)
                 if pipe.exists(cooldown):
                     raise HTTPException(
-                        429, f"Please retry in {max(1, pipe.ttl(cooldown))} seconds"
+                        429,
+                        f"Please retry in {max(1, pipe.ttl(cooldown))} seconds",
+                        headers={"Retry-After": str(max(1, pipe.ttl(cooldown)))},
                     )
                 if int(pipe.get(daily) or 0) >= daily_limit:
-                    raise HTTPException(429, "Daily email limit reached; retry tomorrow")
+                    raise HTTPException(
+                        429, "Daily verification message limit reached; retry tomorrow"
+                    )
                 pipe.multi()
                 pipe.set(cooldown, "1", ex=60)
                 pipe.incr(daily)

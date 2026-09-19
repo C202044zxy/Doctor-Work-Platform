@@ -14,7 +14,7 @@ import yaml
 from datamodel_code_generator import DataModelType, InputFileType, generate
 
 root = Path(__file__).resolve().parents[1]
-schemas = yaml.safe_load((root / "docs/api/openapi.yaml").read_text())["components"]["schemas"]
+schemas = yaml.safe_load((root / "docs/api/openapi.yaml").read_text(encoding="utf-8"))["components"]["schemas"]
 selected = {}
 
 
@@ -37,6 +37,9 @@ def include(name):
 
 
 for name in (
+    "SmsSendRequest",
+    "SmsTicketRequest",
+    "SmsVerifyRequest",
     "SignupRequest",
     "FaceLoginRequest",
     "SendCodeRequest",

@@ -31,7 +31,7 @@ M3：三态问诊、WebSocket 图文、历史补齐、受保护图片、记录�
 
 主线认证、患者和审计代码已整合。原分支健康方案、提醒、医嘱对接仍保留；医嘱需要 M4 真实病历/校验器，未接入时返回 503。其他未完成页面不能按截图宣称完成。
 
-种子账号 `admin_zhang` / `dr_li` / `dr_wang` / `dr_chen`，初始密码 `Demo@2026`。正常邮箱登录需要 SMTP 和可收信邮箱；种子邮箱是 example.test。短信/人脸页面是模拟 provider，不能替代真实登录。仅测本地业务可使用 `uv run python -m app.dev_session --username dr_wang`，操作见启动指南；不新增 HTTP 免密登录。
+种子账号 `admin_zhang` / `dr_li` / `dr_wang` / `dr_chen`，初始密码 `Demo@2026`。正常邮箱登录需要 SMTP 和可收信邮箱；种子邮箱是 example.test。开发模式可用密码 + SMS (simulated) 登录：Send code → View simulated SMS → 填码 → Verify and sign in，签发真实会话但不发送真实短信。人脸页面仍为原有模拟实现。仅测本地业务可使用 `uv run python -m app.dev_session --username dr_wang`，操作见启动指南；不新增 HTTP 免密登录。
 
 ## 验证
 
