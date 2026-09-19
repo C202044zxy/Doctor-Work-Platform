@@ -19,9 +19,8 @@ for one, and treat any citation to a missing document as a stale reference to fi
 task IDs are traceable through the mapping table in `docs/01` §7.1; history lives in
 `git log`.
 
-One exception remains on disk: **`新任务安排.md`** at the repo root, a pre-overhaul
-document whose deletion was blocked by a permissions failure. Do not treat its contents as
-fact; run `git rm 新任务安排.md` when you have the permissions.
+The last pre-overhaul document, `新任务安排.md`, was removed on 2026-09-19.
+Use `git log` for history; do not restore it as a specification.
 
 `README.md` covers install, run, and verify. Setting up for the first time? Follow
 `docs/onboarding.md`.

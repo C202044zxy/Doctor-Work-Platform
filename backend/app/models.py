@@ -429,3 +429,7 @@ class HealthAssessment(Base):
 
     patient: Mapped[Patient] = relationship(lazy="joined")
     author: Mapped[User] = relationship(foreign_keys=[assessed_by], lazy="joined")
+
+
+# Register M4 metadata for Alembic and application startup.
+from app import emr_models  # noqa: F401

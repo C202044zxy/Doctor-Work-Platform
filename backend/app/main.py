@@ -274,6 +274,9 @@ def create_app(settings: Settings | None = None):
     # T31 scenario S2 requires a non-participant's downloaded URL to answer 403,
     # and a static mount would hand the bytes over without asking.
     app.include_router(meetings.router)
+    from app import emr
+
+    app.include_router(emr.router)
     # M6. Vitals, health plans, reminder rules and their log, periodic
     # assessments. Patient-scoped reads go through `app.patients.visible_patient`,
     # so an out-of-department patient is a 404 like everywhere else.

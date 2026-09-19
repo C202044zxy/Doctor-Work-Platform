@@ -56,6 +56,11 @@ sys.path.insert(0, str(BACKEND))
 EXPECTED_TABLES = frozenset(
     {
         "alembic_version",
+        "emr_template",
+        "emr_record",
+        "emr_version",
+        "medical_order",
+        "drug",
         "allergies",
         "audit_logs",
         "departments",
