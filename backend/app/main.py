@@ -20,6 +20,12 @@ from app.audit_export import audit_csv, content_disposition, filename_range
 from app.config import Settings
 from app.database import make_engine, session_factory
 from app.dependencies import Pagination
+
+# Imported by name, not as `app.health`: `create_app` binds `health` to the
+# health-check route function below, and an unaliased import would be shadowed by
+# it the moment that `def` runs.
+from app.health import register_jobs as register_health_jobs
+from app.health import router as health_router
 from app.models import Allergy, AuditLog, Department, Patient
 from app.patients import patient_scope, visible_patient
 from app.schemas import (
@@ -241,6 +247,10 @@ def create_app(settings: Settings | None = None):
                 max_instances=1,
                 coalesce=True,
             )
+            # M6-04. Registered here rather than in the module, because the
+            # application owns exactly one scheduler and two registrations would
+            # double every reminder.
+            register_health_jobs(scheduler, app.state.sessions)
             scheduler.start()
         app.state.scheduler = scheduler
         try:
@@ -267,6 +277,10 @@ def create_app(settings: Settings | None = None):
     from app import emr
 
     app.include_router(emr.router)
+    # M6. Vitals, health plans, reminder rules and their log, periodic
+    # assessments. Patient-scoped reads go through `app.patients.visible_patient`,
+    # so an out-of-department patient is a 404 like everywhere else.
+    app.include_router(health_router)
     app.state.sessions = session_factory(engine)
     app.state.engine = engine
     app.state.cache = cache

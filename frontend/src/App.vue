@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
@@ -11,17 +11,14 @@ import {
   Odometer,
   SwitchButton,
   Tickets,
-  TrendCharts,
   User,
-  VideoCamera,
 } from '@element-plus/icons-vue'
 
 import { navigation } from './router'
 import { canOpen } from './access'
-import { currentClinician, signOut } from './session'
+import { currentClinician, isSignedIn, signOut } from './session'
 import { ElMessage } from 'element-plus'
-import { authentication, health } from './api/client'
-import { counts } from './api/demo-data'
+import { authentication, health, reminders } from './api/client'
 
 // Navigation entries carry an icon name; resolve them to components here so the
 // route table itself stays free of presentation concerns.
@@ -30,8 +27,6 @@ const ICONS = {
   User,
   Document,
   ChatDotRound,
-  VideoCamera,
-  TrendCharts,
   Checked,
   Tickets,
 }
@@ -58,9 +53,33 @@ const visibleNavigation = computed(() =>
 const serviceState = ref('checking')
 const serviceLabel = computed(() => SERVICE_LABELS[serviceState.value])
 
-// Derived from the same fabricated figures the dashboard shows, so the badge
-// and the worklist never disagree in front of an audience.
-const attentionCount = computed(() => counts.alerts + counts.pendingReviews)
+// M6-T6. This badge was `counts.alerts + counts.pendingReviews` -- two fabricated
+// figures from api/demo-data.js, shown on every screen in the shell, so the one
+// piece of the demo path that was visible everywhere was invented. It is now the
+// real unread-reminder count, which is exactly what `GET /api/reminders/unread-count`
+// exists for: "so the workspace shell can poll one cheap endpoint instead of
+// fetching the list to decide whether to show it".
+const unread = ref(0)
+let unreadTimer = null
+
+async function refreshUnread() {
+  // Nothing to count while signed out, and the endpoint would answer 401.
+  if (!isSignedIn.value) {
+    unread.value = 0
+    return
+  }
+  try {
+    unread.value = (await reminders.unreadCount()).unread
+  } catch {
+    // A poll that fails leaves the last number on screen. There is nothing the
+    // reader could do about it, and a toast per minute would be worse than a
+    // stale badge.
+  }
+}
+
+// A screen change is the natural moment to re-check: the reader may have just
+// marked a reminder done, or opened the list that consumes them.
+watch(() => route.fullPath, refreshUnread)
 
 onMounted(async () => {
   try {
@@ -69,7 +88,14 @@ onMounted(async () => {
   } catch {
     serviceState.value = 'unreachable'
   }
+  await refreshUnread()
+  // The reminder job fires on a cron the shell does not control, so the bell has
+  // to ask. One minute is well inside the demo's "wait two minutes" step and
+  // costs one indexed count.
+  unreadTimer = setInterval(refreshUnread, 60_000)
 })
+
+onUnmounted(() => clearInterval(unreadTimer))
 
 const accountBusy = ref(false)
 async function handleAccount(command) {
@@ -137,8 +163,18 @@ async function handleAccount(command) {
             {{ serviceLabel }}
           </span>
 
-          <el-badge :value="attentionCount" :max="9" class="bell">
-            <el-button text circle :icon="Bell" aria-label="Notifications" />
+          <!-- No `:max`, so the badge shows the count it actually has. The
+               dashboard is where the notifications are listed, so that is where
+               the bell goes; there is no separate notifications screen. -->
+          <el-badge :value="unread" class="bell">
+            <el-button
+              text
+              circle
+              :icon="Bell"
+              aria-label="Notifications — open the dashboard"
+              title="Notifications"
+              @click="router.push({ name: 'dashboard' })"
+            />
           </el-badge>
 
           <el-dropdown trigger="click" @command="handleAccount">

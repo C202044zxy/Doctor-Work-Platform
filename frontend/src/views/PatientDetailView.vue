@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { Printer, Refresh } from '@element-plus/icons-vue'
 import { meetings as meetingsApi, openReportSheet, patients as patientsApi } from '../api/client'
 import { currentUserId } from '../session'
+import PatientHealth from '../components/PatientHealth.vue'
 
 // M2-04 owns the patient detail page. M5 needs exactly one thing on it: T32
 // archives the consultation report into the patient record, and M5-T7 reads it
@@ -15,6 +16,10 @@ import { currentUserId } from '../session'
 // The tab's data path is `GET /api/meetings?patient_no=…`: without the patient
 // filter the list would only return meetings the caller attended, which is
 // precisely the audience the tab is not for.
+//
+// M6 adds a second tab, the same `PatientHealth` panels that the Health
+// Management screen shows. It is `lazy`, so a visit that only wants the
+// consultation records does not pay for five health requests.
 
 const props = defineProps({ patientNo: { type: String, required: true } })
 
@@ -287,6 +292,10 @@ onMounted(() => {
           Histories, groups and the allergy editor belong to the patient detail task
           (M2-04) and are not built here.
         </p>
+      </el-tab-pane>
+
+      <el-tab-pane label="Health data" lazy>
+        <PatientHealth :patient-no="patientNo" :patient-name="patient?.name || ''" />
       </el-tab-pane>
     </el-tabs>
   </div>
