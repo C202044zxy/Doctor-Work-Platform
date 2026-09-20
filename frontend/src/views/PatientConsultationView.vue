@@ -4,19 +4,27 @@ import { accessToken } from '../session'
 import { work, mergeMessages } from '../api/work'
 import ChatImage from '../components/ChatImage.vue'
 import ConsultationVideo from '../components/ConsultationVideo.vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 const rooms = ref([]), status = ref('waiting'), patientNo = ref(''), error = ref('')
 const room = ref(null), messages = ref([]), text = ref(''), pending = ref([])
 const connected = ref(false), more = ref(false), busy = ref(false), scroller = ref(null)
 const page = ref(1), total = ref(0)
 const route = useRoute()
+const router = useRouter()
 const video = ref(null), calls = ref([]), callPage = ref(1), callTotal = ref(0)
 const loading = ref(false), historyLoading = ref(false)
 let listVersion = 0
 let socket, retryTimer, generation = 0, disposed = false
 const writable = computed(() => room.value?.status === 'active' && room.value?.is_participant)
 const time = value => value ? new Date(value).toLocaleString() : '—'
+
+function applyRoom(row) {
+  // A delayed HTTP read must not overwrite the terminal WebSocket state.
+  if (room.value?.id === row.id && room.value.status === 'ended' && row.status !== 'ended') return
+  room.value = row
+  if (status.value !== row.status) { status.value = row.status; page.value = 1 }
+}
 
 async function refresh() {
   const version = ++listVersion
@@ -79,7 +87,8 @@ function connect(id, version) {
     try {
       const current = await work(`/consultations/${id}`)
       if (version !== generation) return
-      room.value = current
+      applyRoom(current)
+      await refresh()
       await backfill(id, version)
       await loadCalls()
     } catch (err) { if (version === generation) error.value = err.message }
@@ -91,7 +100,7 @@ function connect(id, version) {
     if (data.type === 'call_end') await loadCalls()
     if (data.type === 'ping') ws.send(JSON.stringify({ type: 'pong', data: {} }))
     if (data.type === 'message') { await add([data.data]); await bottom(); refresh() }
-    if (data.type === 'status') { room.value = data.data; refresh() }
+    if (data.type === 'status') { applyRoom(data.data); refresh() }
     if (data.type === 'error') {
       error.value = data.data.message
       if (data.data.event_type?.startsWith('call_') || data.data.event_type === 'ice_candidate') video.value?.failed(data.data)
@@ -113,7 +122,10 @@ async function open(row) {
   stopSocket(); const version = ++generation
   historyLoading.value = true
   calls.value = []; callPage.value = 1; callTotal.value = 0
-  room.value = row; messages.value = []; pending.value = []; error.value = ''; more.value = false
+  applyRoom(row)
+  messages.value = []; pending.value = []; error.value = ''; more.value = false
+  router.replace({ query: { ...route.query, room: row.id } })
+  refresh()
   try {
     const data = await work(`/consultations/${row.id}/messages?size=20`)
     if (version !== generation) return
@@ -189,7 +201,7 @@ onUnmounted(() => { video.value?.finish(); disposed = true; generation++; stopSo
   <section class="consult-work">
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <div class="toolbar">
-      <router-link :to="{ name: 'consultation-records' }">Search consultation records</router-link>
+      <router-link :to="{ name: 'consultations', query: { ...route.query, view: 'records' } }">Search consultation records</router-link>
       <el-input v-model="patientNo" placeholder="Patient number" clearable style="width:210px" />
       <el-button @click="page = 1; refresh()">Search</el-button>
       <el-button type="primary" :disabled="!patientNo.trim() || busy" @click="create">New consultation</el-button>
@@ -200,7 +212,7 @@ onUnmounted(() => { video.value?.finish(); disposed = true; generation++; stopSo
         <p v-if="loading" role="status">Loading consultations…</p>
         <p v-else-if="!rooms.length" class="muted">No consultations in this view.</p>
         <article v-for="item in rooms" :key="item.id" :class="['room', { selected: room?.id === item.id }]">
-          <button class="room-open" @click="open(item)"><strong>{{ item.patient_name }}</strong> · {{ item.patient_no }}<p>{{ item.last_message || 'No messages yet' }}</p><small>{{ time(item.last_message_at || item.created_at) }}</small></button>
+          <button class="room-open" @click="open(item)"><strong>{{ item.patient_name }}</strong> · {{ item.patient_no }}<p>{{ item.last_message || 'No messages yet' }}</p><small>Session #{{ item.id }} · Created {{ time(item.created_at) }}</small><small v-if="item.started_at"> · Started {{ time(item.started_at) }}</small></button>
           <el-button v-if="item.status === 'waiting'" size="small" :disabled="busy" @click="move(item, 'accept')">Accept</el-button>
           <small v-if="item.ended_at">Ended {{ time(item.ended_at) }}</small>
         </article>
@@ -208,7 +220,7 @@ onUnmounted(() => { video.value?.finish(); disposed = true; generation++; stopSo
       </aside>
       <section class="panel chat">
         <template v-if="room">
-          <header><div><strong>{{ room.patient_name }}</strong><p class="muted">{{ room.status }} · {{ !room.is_participant ? 'Record access — read only' : connected ? 'Connected' : 'Offline — reconnecting / HTTP fallback' }}</p></div><el-button v-if="writable" :disabled="busy" @click="move(room, 'end')">End consultation</el-button></header>
+          <header><div><strong>{{ room.patient_name }} · Session #{{ room.id }}</strong><p class="muted">{{ room.status }} · {{ !room.is_participant ? 'Record access — read only' : connected ? 'Connected' : 'Offline — reconnecting / HTTP fallback' }}</p><p class="muted">Created {{ time(room.created_at) }} · Started {{ time(room.started_at) }}<span v-if="room.ended_at"> · Ended {{ time(room.ended_at) }}</span></p></div><el-button v-if="writable" :disabled="busy" @click="move(room, 'end')">End consultation</el-button></header>
           <div ref="scroller" class="messages" role="log" aria-live="polite" @scroll="scroller.scrollTop < 30 && older()">
             <el-button v-if="more" :loading="busy" @click="older">Load earlier messages</el-button>
             <p v-if="historyLoading" role="status">Loading messages…</p>

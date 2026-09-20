@@ -1,6 +1,7 @@
 <script setup>
 import PatientConsultationView from './PatientConsultationView.vue'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import ConsultationRecords from '../components/ConsultationRecords.vue'
 import { useRoute, useRouter } from 'vue-router'
 import RemoteConsultationView from './RemoteConsultationView.vue'
 
@@ -24,6 +25,13 @@ import RemoteConsultationView from './RemoteConsultationView.vue'
 const TABS = ['patient', 'remote']
 const route = useRoute()
 const router = useRouter()
+const showingRecords = computed(() => route.query.view === 'records')
+
+function showWorkbench() {
+  const query = { ...route.query }
+  delete query.view
+  router.push({ query })
+}
 
 const active = ref(fromQuery(route.query.tab))
 
@@ -62,7 +70,15 @@ function select(name) {
 
     <el-tabs class="tabs" v-model="active" @tab-change="select">
       <el-tab-pane label="Patient consultation" name="patient">
-        <PatientConsultationView v-if="active === 'patient'" />
+        <template v-if="active === 'patient'">
+          <template v-if="showingRecords">
+            <div class="records-toolbar">
+              <el-button @click="showWorkbench">Back to conversations</el-button>
+            </div>
+            <ConsultationRecords />
+          </template>
+          <PatientConsultationView v-else />
+        </template>
       </el-tab-pane>
 
       <!-- M5's screen, mounted as delivered. `lazy` because it asks the API for its
@@ -77,6 +93,10 @@ function select(name) {
 
 <!-- Page furniture (.page, .panel, .chip, .empty, .muted) lives in src/style.css. -->
 <style scoped>
+.records-toolbar {
+  margin-bottom: 16px;
+}
+
 /* Element Plus' strip reads as a library default: a hairline across the full
    width under a thick active bar. Tightened so the strip belongs to the page
    rather than to the component library. */

@@ -292,3 +292,34 @@ def test_accept_and_answer_have_separate_deadlines_and_cannot_be_replayed(client
             assert state["deadline"] is None
             a.send_json({"type": "call_end", "data": {"call_id": "slow-permission"}})
             receive(b, "call_end")
+
+
+def test_ended_consultation_survives_startup_and_cannot_be_reaccepted(client):
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+    from app.seed import seed
+    from app.seed_demo import seed_demo
+
+    # Match startup order so this test patient does not reuse a demo patient number.
+    seed_demo()
+    room = active_room(client)
+    path = f"/api/consultations/{room}"
+    data(client.post(path + "/messages", headers=headers(client), json={"content": "Keep history"}))
+    ended = data(client.post(path + "/end", headers=headers(client)))
+    assert ended["status"] == "ended" and ended["ended_at"]
+    # Repeat the same seeders used by the dev launcher, then create a fresh app.
+    seed()
+    seed_demo()
+    restarted = create_app(client.app.state.settings)
+    restarted.state.cache = client.app.state.cache
+    with TestClient(restarted) as again:
+        restored = data(again.get(path, headers=headers(client)))
+        assert restored["status"] == "ended"
+        assert restored["ended_at"] == ended["ended_at"]
+        listed = data(again.get("/api/consultations?status=ended", headers=headers(client)))
+        assert room in {row["id"] for row in listed["items"]}
+        messages = data(again.get(path + "/messages", headers=headers(client)))
+        assert messages["items"][0]["content"] == "Keep history"
+        assert again.post(path + "/accept", headers=headers(client, 2)).status_code == 400
+        assert data(again.get(path, headers=headers(client)))["status"] == "ended"
