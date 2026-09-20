@@ -101,13 +101,13 @@ def test_chat_lifecycle_history_and_scope(client):
     with client.app.state.sessions() as db:
         db.get(User, 4).department_id = 1
         db.commit()
-    # Record readers follow department scope; writing and signaling require participation.
-    assert client.get(path + "/messages", headers=headers(client, 4)).status_code == 200
+    # Accepted conversations are private even within the same department.
+    assert client.get(path + "/messages", headers=headers(client, 4)).status_code == 404
     assert (
         client.post(
             path + "/messages", headers=headers(client, 4), json={"content": "No"}
         ).status_code
-        == 403
+        == 404
     )
     ended = data(client.post(path + "/end", headers=headers(client, 2)))
     assert ended["status"] == "ended" and ended["ended_at"]

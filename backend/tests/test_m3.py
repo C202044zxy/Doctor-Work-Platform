@@ -38,10 +38,10 @@ def test_records_combined_filters_export_scope_and_readonly(client):
     )
     filters = {"patient": "Zhao", "q": "胸痛", "from": "2026-09-18", "to": "2026-09-18"}
     result = data(
-        client.get("/api/consultations/records", params=filters, headers=headers(client, 4))
+        client.get("/api/consultations/records", params=filters, headers=headers(client, 2))
     )
-    assert result["total"] == 1 and not result["items"][0]["is_participant"]
-    exported = client.get("/api/consultations/export", params=filters, headers=headers(client, 4))
+    assert result["total"] == 1 and result["items"][0]["is_participant"]
+    exported = client.get("/api/consultations/export", params=filters, headers=headers(client, 2))
     assert exported.content.startswith(b"\xef\xbb\xbf")
     rows = list(csv.DictReader(io.StringIO(exported.content.decode("utf-8-sig"))))
     assert len(rows) == result["total"] and rows[0]["id"] == str(room)
@@ -70,7 +70,7 @@ def test_records_combined_filters_export_scope_and_readonly(client):
     )
     assert (
         client.get(f"/api/consultations/{room}/messages", headers=headers(client, 4)).status_code
-        == 200
+        == 404
     )
     assert (
         client.post(
@@ -78,7 +78,7 @@ def test_records_combined_filters_export_scope_and_readonly(client):
             headers=headers(client, 4),
             json={"content": "blocked"},
         ).status_code
-        == 403
+        == 404
     )
 
 
@@ -130,7 +130,7 @@ def test_finished_call_contract_idempotency_and_validation(client):
     with client.app.state.sessions() as db:
         db.get(User, 4).department_id = 1
         db.commit()
-    assert client.post(path, headers=headers(client, 4), json=body).status_code == 403
+    assert client.post(path, headers=headers(client, 4), json=body).status_code == 404
     assert client.get(path, headers=headers(client, 3)).status_code == 404
 
 

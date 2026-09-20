@@ -5,6 +5,8 @@ import { work, mergeMessages } from '../api/work'
 import ChatImage from '../components/ChatImage.vue'
 import ConsultationVideo from '../components/ConsultationVideo.vue'
 import { useRoute, useRouter } from 'vue-router'
+import { Picture } from '@element-plus/icons-vue'
+import { usePatientSearch } from '../patient-search'
 
 const rooms = ref([]), status = ref('waiting'), patientNo = ref(''), error = ref('')
 const room = ref(null), messages = ref([]), text = ref(''), pending = ref([])
@@ -14,6 +16,8 @@ const route = useRoute()
 const router = useRouter()
 const video = ref(null), calls = ref([]), callPage = ref(1), callTotal = ref(0)
 const loading = ref(false), historyLoading = ref(false)
+const imageInput = ref(null)
+const { patients, searching, searchError, searchPatients, stopSearch } = usePatientSearch(work)
 let listVersion = 0
 let socket, retryTimer, generation = 0, disposed = false
 const writable = computed(() => room.value?.status === 'active' && room.value?.is_participant)
@@ -48,6 +52,7 @@ async function loadCalls() {
   } catch (err) { if (version === generation) error.value = err.message }
 }
 async function create() {
+  if (!patientNo.value) return
   busy.value = true; error.value = ''
   try {
     await work('/consultations', 'POST', { patient_no: patientNo.value.trim() })
@@ -178,6 +183,8 @@ async function send(image_url = null) {
 async function upload(event) {
   const file = event.target.files[0]; event.target.value = ''
   if (!file) return
+  if (!writable.value || busy.value) return
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { error.value = 'Choose a JPEG, PNG, or WebP image'; return }
   if (file.size > 5 * 1024 * 1024) { error.value = 'Image exceeds the 5MB limit'; return }
   const version = generation
   busy.value = true
@@ -195,17 +202,22 @@ onMounted(async () => {
     catch (err) { error.value = err.message }
   }
 })
-onUnmounted(() => { video.value?.finish(); disposed = true; generation++; stopSocket() })
+onUnmounted(() => { stopSearch(); video.value?.finish(); disposed = true; generation++; stopSocket() })
 </script>
 <template>
   <section class="consult-work">
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <div class="toolbar">
       <router-link :to="{ name: 'consultations', query: { ...route.query, view: 'records' } }">Search consultation records</router-link>
-      <el-input v-model="patientNo" placeholder="Patient number" clearable style="width:210px" />
+      <el-select v-model="patientNo" filterable remote clearable :remote-method="searchPatients" :loading="searching" placeholder="Search patient name" aria-label="Search patient name" no-data-text="No matching patients" no-match-text="No matching patients" loading-text="Searching patients…" class="patient-picker" @change="page = 1; refresh()">
+        <el-option v-for="patient in patients" :key="patient.patient_no" :value="patient.patient_no" :label="`${patient.name} · ${patient.patient_no}`">
+          <span>{{ patient.name }}</span><span class="patient-number">{{ patient.patient_no }}</span>
+        </el-option>
+      </el-select>
       <el-button @click="page = 1; refresh()">Search</el-button>
-      <el-button type="primary" :disabled="!patientNo.trim() || busy" @click="create">New consultation</el-button>
+      <el-button type="primary" :disabled="!patientNo || busy" @click="create">New consultation</el-button>
     </div>
+    <p v-if="searchError" role="alert" class="error">{{ searchError }}</p>
     <div class="columns">
       <aside class="panel">
         <el-radio-group v-model="status" @change="page = 1; refresh()"><el-radio-button value="waiting">Waiting</el-radio-button><el-radio-button value="active">Active</el-radio-button><el-radio-button value="ended">Ended</el-radio-button></el-radio-group>
@@ -228,7 +240,12 @@ onUnmounted(() => { video.value?.finish(); disposed = true; generation++; stopSo
             <article v-for="message in messages" :key="message.id" class="bubble"><strong>{{ message.sender_name }}</strong><small> {{ time(message.sent_at) }} · Delivered</small><p>{{ message.content }}</p><ChatImage v-if="message.image_url" :url="message.image_url" /></article>
             <article v-for="message in pending" :key="message.client_id" class="bubble pending"><p>{{ message.content || 'Image attachment' }}</p><span>{{ message.failed ? 'Not confirmed' : 'Sending…' }}</span><el-button v-if="message.failed && writable" size="small" @click="deliver(message)">Retry</el-button></article>
           </div>
-          <form class="composer" @submit.prevent="send()"><el-input v-model="text" :disabled="!writable" placeholder="Write a message" maxlength="10000" /><el-button native-type="submit" type="primary" :disabled="!writable || !text.trim()">Send</el-button><label class="upload">Image<input aria-label="Upload chat image" type="file" accept="image/jpeg,image/png,image/webp" :disabled="!writable || busy" @change="upload" /></label></form>
+          <form class="composer" @submit.prevent="send()">
+            <el-input v-model="text" :disabled="!writable" placeholder="Write a message" maxlength="10000" />
+            <el-button native-type="submit" type="primary" :disabled="!writable || !text.trim()">Send</el-button>
+            <el-button native-type="button" :icon="Picture" :disabled="!writable || busy" @click="imageInput?.click()">Upload image</el-button>
+            <input ref="imageInput" hidden aria-label="Upload chat image" type="file" accept="image/jpeg,image/png,image/webp" :disabled="!writable || busy" @change="upload" />
+          </form>
           <p v-if="!writable" class="muted">This conversation is read-only.</p>
           <ConsultationVideo ref="video" :enabled="writable && connected" :send-signal="sendSignal" @finished="loadCalls" />
           <details><summary>Call history ({{ callTotal }})</summary>
@@ -243,5 +260,6 @@ onUnmounted(() => { video.value?.finish(); disposed = true; generation++; stopSo
   </section>
 </template>
 <style scoped>
-.toolbar,.composer,header{display:flex;gap:12px;align-items:center;margin-bottom:18px}header{justify-content:space-between}.columns{display:grid;grid-template-columns:minmax(320px,1fr) 2fr;gap:20px}.panel{background:var(--surface,#fff);border:1px solid var(--line,#ddd);border-radius:12px;padding:20px;min-width:0}.room{padding:14px 0;border-bottom:1px solid #e5eceb}.room.selected{background:#edf6f3}.room-open{border:0;background:none;cursor:pointer;text-align:left;width:100%;font:inherit}.room p,.bubble p{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}.messages{height:48vh;min-height:260px;overflow:auto}.bubble{padding:12px;margin:12px 0;background:#eef6f4;border-radius:10px}.bubble small,.muted{color:#657871}.pending{opacity:.7}.error{color:#a42222}.upload{font-size:12px;max-width:160px}.upload input{max-width:150px} @media(max-width:950px){.columns{grid-template-columns:1fr}}
+.toolbar{flex-wrap:wrap}.patient-picker{width:320px;max-width:100%}.patient-number{float:right;margin-left:20px;color:var(--ink-2,#657871);font-size:12px}.composer .el-input{flex:1;min-width:120px}.composer{flex-wrap:wrap}
+.toolbar,.composer,header{display:flex;gap:12px;align-items:center;margin-bottom:18px}header{justify-content:space-between}.columns{display:grid;grid-template-columns:minmax(320px,1fr) 2fr;gap:20px}.panel{background:var(--surface,#fff);border:1px solid var(--line,#ddd);border-radius:12px;padding:20px;min-width:0}.room{padding:14px 0;border-bottom:1px solid #e5eceb}.room.selected{background:#edf6f3}.room-open{border:0;background:none;cursor:pointer;text-align:left;width:100%;font:inherit}.room p,.bubble p{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}.messages{height:48vh;min-height:260px;overflow:auto}.bubble{padding:12px;margin:12px 0;background:#eef6f4;border-radius:10px}.bubble small,.muted{color:#657871}.pending{opacity:.7}.error{color:#a42222} @media(max-width:950px){.columns{grid-template-columns:1fr}}
 </style>

@@ -1797,7 +1797,16 @@ paths:
       operationId: listConsultations
       tags: [Consultations]
       summary: List consultations
-      description: Task M3-03. The workspace groups these as waiting, active, and ended.
+      description: |
+        Task M3-03. The workspace groups these as waiting, active, and ended.
+        Waiting consultations are visible within the caller's patient data scope.
+        After acceptance, only the creator (patient-assisting side) and the accepting
+        doctor can access the conversation, including ended sessions. Administrators
+        and temporary grants do not bypass this participant restriction. This applies
+        to lists, records, CSV exports, messages, images, calls, and WebSocket access.
+        Hidden sessions are omitted from lists; direct HTTP access returns 404.
+        The workbench searches GET /api/patients?name=... for a literal name substring,
+        displays name and patient_no choices, then uses the selected patient_no here.
       parameters:
         - name: status
           in: query
@@ -1854,7 +1863,10 @@ paths:
       operationId: acceptConsultation
       tags: [Consultations]
       summary: Accept a waiting consultation
-      description: Task M3-03. Moves `waiting` to `active`.
+      description: |
+        Task M3-03. Moves `waiting` to `active` and assigns the caller as doctor_id.
+        Other doctors lose access once accepted, including callers with a stale
+        waiting-list entry. The creator retains access as the patient-assisting side.
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
@@ -1965,7 +1977,8 @@ paths:
       description: |
         Task M3-04. Patient, date range, and keyword combine with AND and all three may be
         sent at once. Date bounds use consultation creation dates in Asia/Shanghai, inclusive.
-        CSV exports all matching rows; compare row count to the list total.
+        CSV exports all matching visible rows; compare row count to the list total.
+        Active and ended consultations require creator or accepting-doctor participation.
         Results fall under the M1-05 department scope: a keyword naming a
         patient from another department returns **zero rows**, not a permission error —
         M3-04 scenario S2 calls this a security defect if it leaks.
@@ -2010,7 +2023,7 @@ paths:
         Task M3-04. Returns `text/csv`, not the JSON envelope, so the frontend uses a blob
         download path rather than the shared JSON client.
 
-        The rows must match the caller's current filters rather than dumping everything,
+        The rows must match the caller's current filters and consultation participant scope,
         and the body must start with a **UTF-8 BOM** — M3-04 scenario S1 opens the file in
         Excel and requires no mojibake and a row count equal to the filtered total, across all pages.
       parameters:
@@ -2166,8 +2179,8 @@ paths:
         in-progress record, and this design makes one impossible.
 
         Criterion 5 restricts calling to the physicians on this session, so a caller
-        who is not a participant is refused with 403 rather than silently allowed —
-        the same rule the signalling room in M3-01 applies.
+        who is not a participant cannot access an accepted session (HTTP 404).
+        For a visible waiting session, participant-only actions return 403.
       requestBody:
         required: true
         content:
