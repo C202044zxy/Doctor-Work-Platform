@@ -90,9 +90,31 @@ function select(name) {
 
 <!-- Page furniture (.page, .panel, .chip, .empty, .muted) lives in src/style.css. -->
 <style scoped>
-/* `.empty` carries vertical padding only, so as a direct child of a panel it runs
-   into the border. Same override the health panel needs, for the same reason. */
-.panel > .empty {
-  padding: 28px 20px;
+/* Element Plus' strip reads as a library default: a hairline across the full
+   width under a thick active bar. Tightened so the strip belongs to the page
+   rather than to the component library. */
+.tabs :deep(.el-tabs__header) {
+  margin: 0 0 18px;
+}
+
+.tabs :deep(.el-tabs__nav-wrap::after) {
+  height: 1px;
+  background: var(--line);
+}
+
+.tabs :deep(.el-tabs__item) {
+  height: 36px;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+
+.tabs :deep(.el-tabs__item.is-active) {
+  font-weight: 600;
+  color: var(--teal-dark);
+}
+
+.tabs :deep(.el-tabs__active-bar) {
+  height: 2px;
+  background: var(--teal);
 }
 </style>

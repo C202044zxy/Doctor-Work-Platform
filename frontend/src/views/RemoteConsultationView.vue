@@ -1,13 +1,14 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, Plus, Printer, Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { Check, Download, Plus, Printer, Refresh, UploadFilled } from '@element-plus/icons-vue'
 import {
   downloadMaterial,
   meetings as meetingsApi,
   openReportSheet,
   patients as patientsApi,
 } from '../api/client'
+import { initials } from '../people'
 import { currentUserId } from '../session'
 
 // T30/T31/T32. Four states, one branch, and the two things that leave the
@@ -106,6 +107,13 @@ function size(bytes) {
   if (!bytes) return '0 KB'
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+// The badge in front of a shared file. The extension is what a reader scans for,
+// and printing it beats an icon legend they would have to learn.
+function extOf(filename) {
+  const ext = (filename || '').split('.').pop()
+  return ext && ext !== filename ? ext.slice(0, 4).toUpperCase() : 'FILE'
 }
 
 function invitationOf(meeting) {
@@ -502,10 +510,10 @@ onMounted(load)
 
 <template>
   <div class="page page-wide">
-    <header class="page-head">
+    <header class="screen-bar">
       <div>
-        <h2 class="page-heading">Remote Consultation</h2>
-        <p class="page-sub">
+        <h2 class="screen-title">Remote Consultation</h2>
+        <p class="screen-sub">
           <span><span class="data">{{ total }}</span> consultations in scope</span>
           <span>An invitation opens a 24-hour window on one patient</span>
         </p>
@@ -522,6 +530,7 @@ onMounted(load)
         <section class="panel">
           <header class="panel-head">
             <h3>Consultations</h3>
+            <span class="panel-count data">{{ total }}</span>
             <span class="panel-tail">Started by you, and invitations to you</span>
           </header>
 
@@ -555,7 +564,7 @@ onMounted(load)
             </div>
           </div>
 
-          <p class="toolbar-note">
+          <p class="panel-note">
             Filtering by patient number widens the list to that patient's consultations —
             it is how a colleague reads the archived report back out of the patient
             record. Outside your department the answer is an empty page, not an error.
@@ -579,15 +588,15 @@ onMounted(load)
           >
             <el-table-column label="Ref" width="104">
               <template #default="{ row }">
-                <span class="data">RC-{{ String(row.id).padStart(5, '0') }}</span>
+                <span class="ref data">RC-{{ String(row.id).padStart(5, '0') }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="Patient" width="128">
+            <el-table-column label="Patient" width="124">
               <template #default="{ row }">
                 <span class="data">{{ row.patient_no }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="Purpose" min-width="220">
+            <el-table-column label="Purpose" min-width="200">
               <template #default="{ row }">
                 <span class="purpose">{{ row.purpose }}</span>
               </template>
@@ -599,16 +608,19 @@ onMounted(load)
                 </span>
               </template>
             </el-table-column>
-            <el-table-column label="Scheduled" width="132">
+            <el-table-column label="Scheduled" width="156">
               <template #default="{ row }">
-                <span class="data">{{ stamp(row.scheduled_at) }}</span>
+                <span class="data scheduled">{{ stamp(row.scheduled_at) }}</span>
               </template>
             </el-table-column>
             <template #empty>
-              <p class="empty">
-                No consultations yet. Start one and the invited expert finds it in their
-                invitation box.
-              </p>
+              <div class="empty-state">
+                <p class="empty">
+                  No consultations yet. Start one and the invited expert finds it in their
+                  invitation box.
+                </p>
+                <el-button :icon="Plus" @click="openCreate">New consultation</el-button>
+              </div>
             </template>
           </el-table>
 
@@ -630,45 +642,45 @@ onMounted(load)
 
         <section v-else-if="detail" class="panel">
           <header class="panel-head">
-            <h3>RC-{{ String(detail.id).padStart(5, '0') }}</h3>
+            <span class="ref data">RC-{{ String(detail.id).padStart(5, '0') }}</span>
             <span class="chip" :data-severity="statusOf(detail).severity">
               {{ statusOf(detail).label }}
             </span>
             <span class="panel-tail">{{ detail.title }}</span>
           </header>
 
-          <dl class="kv">
-            <div>
-              <dt>Patient</dt>
-              <dd class="data">{{ detail.patient_no }}</dd>
-            </div>
-            <div>
-              <dt>Requested by</dt>
-              <dd>{{ detail.initiator_name }}</dd>
-            </div>
-            <div>
-              <dt>Purpose</dt>
-              <dd class="prose">{{ detail.purpose }}</dd>
-            </div>
-            <div>
-              <dt>Scheduled</dt>
-              <dd class="data">{{ stamp(detail.scheduled_at) }}</dd>
-            </div>
-            <div>
-              <dt>Requested</dt>
-              <dd class="data">{{ stamp(detail.created_at) }}</dd>
-            </div>
-            <div v-if="detail.started_at">
-              <dt>Started</dt>
-              <dd class="data">{{ stamp(detail.started_at) }}</dd>
-            </div>
-            <div v-if="detail.completed_at">
-              <dt>Completed</dt>
-              <dd class="data">{{ stamp(detail.completed_at) }}</dd>
-            </div>
-          </dl>
+          <div class="panel-body detail-grid">
+            <dl class="facts">
+              <div>
+                <dt>Patient</dt>
+                <dd class="data">{{ detail.patient_no }}</dd>
+              </div>
+              <div>
+                <dt>Requested by</dt>
+                <dd>{{ detail.initiator_name }}</dd>
+              </div>
+              <div class="wide">
+                <dt>Purpose</dt>
+                <dd>{{ detail.purpose }}</dd>
+              </div>
+              <div>
+                <dt>Scheduled</dt>
+                <dd class="data">{{ stamp(detail.scheduled_at) }}</dd>
+              </div>
+              <div>
+                <dt>Requested</dt>
+                <dd class="data">{{ stamp(detail.created_at) }}</dd>
+              </div>
+              <div v-if="detail.started_at">
+                <dt>Started</dt>
+                <dd class="data">{{ stamp(detail.started_at) }}</dd>
+              </div>
+              <div v-if="detail.completed_at">
+                <dt>Completed</dt>
+                <dd class="data">{{ stamp(detail.completed_at) }}</dd>
+              </div>
+            </dl>
 
-          <div class="panel-body">
             <ol class="states">
               <li
                 v-for="(stage, index) in STAGES"
@@ -678,13 +690,22 @@ onMounted(load)
                   index < stageIndex ? 'done' : index === stageIndex ? 'current' : 'ahead'
                 "
               >
-                <span class="state-mark" aria-hidden="true"></span>
+                <span class="state-mark" aria-hidden="true">
+                  <el-icon v-if="index < stageIndex"><Check /></el-icon>
+                </span>
                 <span class="state-label">{{ stage.label }}</span>
-                <span class="state-at data">{{ stageAt(stage.key) }}</span>
+                <span
+                  class="state-at data"
+                  :class="{ 'is-empty': stageAt(stage.key) === '—' }"
+                >
+                  {{ stageAt(stage.key) }}
+                </span>
               </li>
             </ol>
+          </div>
 
-            <p v-if="detail.status === 'declined'" class="notice" data-severity="warn">
+          <div v-if="detail.status === 'declined'" class="panel-body">
+            <p class="notice" data-severity="warn">
               <span>
                 Every invited expert declined. The consultation keeps this record; it
                 cannot be started.
@@ -727,10 +748,12 @@ onMounted(load)
         </section>
 
         <section v-else class="panel">
-          <p class="empty">
-            Pick a consultation to see its participants, the material it shares and the
-            report it archives.
-          </p>
+          <div class="empty-state">
+            <p class="empty">
+              Pick a consultation to see its participants, the material it shares and the
+              report it archives.
+            </p>
+          </div>
         </section>
 
         <!-- Shared material --------------------------------------------------- -->
@@ -758,6 +781,7 @@ onMounted(load)
 
           <ul v-if="materials.length" class="materials">
             <li v-for="material in materials" :key="material.id" class="material">
+              <span class="file-kind" aria-hidden="true">{{ extOf(material.filename) }}</span>
               <div class="material-main">
                 <span class="material-name">{{ material.filename }}</span>
                 <span class="material-meta data">
@@ -797,9 +821,10 @@ onMounted(load)
           </header>
 
           <div v-if="report" class="panel-body report">
-            <p class="report-meta muted">
-              Version <span class="data">{{ report.version }}</span> ·
-              {{ report.status }} · written by {{ report.created_by_name }} ·
+            <p class="report-meta">
+              <span class="chip" data-severity="info">{{ report.status }}</span>
+              <span>Version <span class="data">{{ report.version }}</span></span>
+              <span>Written by {{ report.created_by_name }}</span>
               <span class="data">{{ stamp(report.created_at) }}</span>
             </p>
 
@@ -809,9 +834,16 @@ onMounted(load)
                 :key="opinion.expert_id"
                 class="opinion"
               >
-                <span class="opinion-author">
-                  {{ opinion.expert_name || nameOf(opinion.expert_id) }}
-                </span>
+                <div class="who">
+                  <span class="who-badge" aria-hidden="true">
+                    {{ initials(opinion.expert_name || nameOf(opinion.expert_id)) }}
+                  </span>
+                  <span class="who-text">
+                    <span class="who-name">
+                      {{ opinion.expert_name || nameOf(opinion.expert_id) }}
+                    </span>
+                  </span>
+                </div>
                 <p class="opinion-text">{{ opinion.opinion }}</p>
               </li>
             </ul>
@@ -856,15 +888,17 @@ onMounted(load)
 
           <ul v-if="pendingInvitations.length" class="invites">
             <li v-for="row in pendingInvitations" :key="row.id" class="invite">
-              <p class="invite-head">
-                <span class="data">RC-{{ String(row.id).padStart(5, '0') }}</span>
-                <span class="data">{{ row.patient_no }}</span>
-              </p>
+              <div class="invite-head">
+                <span class="ref data">RC-{{ String(row.id).padStart(5, '0') }}</span>
+                <span class="chip" data-severity="warn">Awaiting your answer</span>
+              </div>
               <p class="invite-purpose">{{ row.purpose }}</p>
-              <p class="invite-meta muted">
-                From {{ row.initiator_name }} · {{ stamp(row.scheduled_at) }}
+              <p class="invite-meta">
+                <span class="data">{{ row.patient_no }}</span>
+                · from {{ row.initiator_name }}
+                · <span class="data">{{ stamp(row.scheduled_at) }}</span>
               </p>
-              <div class="page-actions">
+              <div class="invite-actions">
                 <el-button size="small" :loading="acting" @click="answer('decline', row.id)">
                   Decline
                 </el-button>
@@ -891,17 +925,25 @@ onMounted(load)
           <template v-if="detail">
             <ul class="people">
               <li class="person">
-                <span class="person-name">
-                  {{ detail.initiator_name }}
-                  <span class="person-dept muted">initiator</span>
-                </span>
+                <div class="who">
+                  <span class="who-badge" data-tone="teal" aria-hidden="true">
+                    {{ initials(detail.initiator_name) }}
+                  </span>
+                  <span class="who-text">
+                    <span class="who-name">{{ detail.initiator_name }}</span>
+                    <span class="who-meta">Initiator</span>
+                  </span>
+                </div>
                 <span class="chip" data-severity="info">Requested</span>
               </li>
               <li v-for="person in experts" :key="person.user_id" class="person">
-                <span class="person-name">
-                  {{ person.name }}
-                  <span class="person-dept muted">{{ person.department }}</span>
-                </span>
+                <div class="who">
+                  <span class="who-badge" aria-hidden="true">{{ initials(person.name) }}</span>
+                  <span class="who-text">
+                    <span class="who-name">{{ person.name }}</span>
+                    <span class="who-meta">{{ person.department }}</span>
+                  </span>
+                </div>
                 <span class="chip" :data-severity="person.status === 'accepted' ? 'ok' : 'info'">
                   {{ person.status }}
                 </span>
@@ -1017,7 +1059,7 @@ onMounted(load)
     </el-dialog>
 
     <el-dialog v-model="editorOpen" title="Consultation report" width="640px">
-      <p class="field-hint">
+      <p class="field-hint editor-hint">
         Saving writes a new version; the text above stays readable. A blank line is left
         out of the report rather than stored empty.
       </p>
@@ -1049,9 +1091,47 @@ onMounted(load)
   </div>
 </template>
 
-<!-- Page furniture (.page, .split, .panel, .kv, .notice, .chip, .field, .empty,
-     .muted) lives in src/style.css; only what is specific to this screen is here. -->
+<!-- Page furniture (.page, .split, .panel, .who, .ref, .notice, .chip, .field,
+     .empty, .muted) lives in src/style.css; only what is specific to this screen
+     is here. -->
 <style scoped>
+/* The tab strip above this screen already prints "Consultations", so this page
+   states its own name at section weight instead of opening a second heading
+   directly under the first. */
+.screen-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 14px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.screen-title {
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+
+.screen-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.screen-sub > span + span::before {
+  margin-right: 14px;
+  color: var(--ink-3);
+  content: '\00b7';
+}
+
+/* List --------------------------------------------------------------------- */
+
 .filters {
   display: flex;
   flex-wrap: wrap;
@@ -1071,9 +1151,25 @@ onMounted(load)
   width: 100%;
 }
 
-/* The highlighted row is the one the detail below belongs to. */
-:deep(.row-active) td.el-table__cell {
+/* Every row opens the detail below it, so it has to look like something that
+   can be opened. */
+.table :deep(tbody tr) {
+  cursor: pointer;
+}
+
+/* Denser than the library default: the list is a picker, not the page. */
+.table :deep(.el-table__cell) {
+  padding: 9px 0;
+}
+
+/* The highlighted row is the one the detail below belongs to; the edge bar is
+   the same marker the sidebar uses for the current screen. */
+.table :deep(.row-active) td.el-table__cell {
   background: var(--teal-soft);
+}
+
+.table :deep(.row-active) td.el-table__cell:first-child {
+  box-shadow: inset 3px 0 0 var(--teal);
 }
 
 .purpose {
@@ -1083,49 +1179,125 @@ onMounted(load)
   white-space: nowrap;
 }
 
-/* `.kv dd` bolds and right-aligns its value, which is right for a date and wrong
-   for a sentence: the purpose is the sentence. */
-.kv .prose {
-  max-width: 62%;
+/* Sized so that "2026-09-18 11:49" never wraps into two lines mid-table. */
+.scheduled {
+  white-space: nowrap;
+}
+
+.empty-state {
+  padding: 26px 20px;
+  text-align: center;
+}
+
+.empty-state .empty {
+  padding: 0 0 12px;
+}
+
+/* Detail ------------------------------------------------------------------- */
+
+/* The facts of the meeting on the left, the state machine down the right. */
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 2px 32px;
+  align-items: start;
+}
+
+.facts {
+  margin: 0;
+}
+
+.facts > div {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.facts > div:last-child {
+  border-bottom: 0;
+}
+
+.facts dt {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.facts dd {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: right;
+}
+
+/* The purpose is a sentence rather than a value: it takes the full width and
+   the paragraph's own alignment. */
+.facts > div.wide {
+  display: block;
+}
+
+.facts > div.wide dd {
+  margin-top: 4px;
   font-weight: 400;
   text-align: left;
+  white-space: pre-wrap;
 }
 
 .states {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 22px;
-  padding: 0;
+  padding: 4px 0 0;
   margin: 0;
   list-style: none;
 }
 
 .state {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  font-size: 13px;
-  color: var(--ink-3);
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 11px;
+  padding-bottom: 16px;
+}
+
+.state:last-child {
+  padding-bottom: 0;
+}
+
+/* The rail hangs off the row rather than the marker, so it runs between the
+   dots instead of around them. */
+.state::before {
+  position: absolute;
+  top: 17px;
+  bottom: -2px;
+  left: 6px;
+  width: 2px;
+  content: '';
+  background: var(--line);
+}
+
+.state:last-child::before {
+  display: none;
+}
+
+.state[data-position='done']::before {
+  background: var(--ok);
 }
 
 .state-mark {
-  width: 8px;
-  height: 8px;
+  display: grid;
+  grid-row: span 2;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  margin-top: 4px;
+  font-size: 9px;
+  color: #fff;
   background: var(--line);
   border-radius: 50%;
 }
 
-.state[data-position='done'] {
-  color: var(--ink-2);
-}
-
 .state[data-position='done'] .state-mark {
   background: var(--ok);
-}
-
-.state[data-position='current'] {
-  font-weight: 600;
-  color: var(--ink);
 }
 
 .state[data-position='current'] .state-mark {
@@ -1133,8 +1305,29 @@ onMounted(load)
   box-shadow: 0 0 0 3px var(--teal-soft);
 }
 
-.state-at {
+.state-label {
+  font-size: 13px;
   color: var(--ink-3);
+}
+
+.state[data-position='done'] .state-label {
+  color: var(--ink-2);
+}
+
+.state[data-position='current'] .state-label {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.state-at {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* The contract records no acceptance time (M5-01), so that step shows the same
+   dash the API does -- quieter than a date it does not have. */
+.state-at.is-empty {
+  color: var(--line);
 }
 
 .actions {
@@ -1151,6 +1344,8 @@ onMounted(load)
   font-size: 13px;
   color: var(--ink-2);
 }
+
+/* Rail and report ---------------------------------------------------------- */
 
 .materials,
 .invites,
@@ -1176,50 +1371,80 @@ onMounted(load)
   border-bottom: 0;
 }
 
-.material-main,
-.person-name {
+.material-main {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 3px;
   min-width: 0;
 }
 
+/* The extension in front of a shared file: enough to tell a photograph from a
+   scan without an icon set. */
+.file-kind {
+  flex: none;
+  width: 40px;
+  padding: 3px 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  text-align: center;
+  letter-spacing: 0.04em;
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+}
+
 .material-name {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.material-meta,
-.person-dept {
+.material-meta {
   font-size: 12px;
   color: var(--ink-3);
 }
 
-.invite {
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--line-2);
+/* One card per invitation, inset from the panel so the rail reads as a set of
+   things waiting for an answer rather than as a list. */
+.invites {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
 }
 
-.invite:last-child {
-  border-bottom: 0;
+.invite {
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
 }
 
 .invite-head {
   display: flex;
-  gap: 10px;
-  margin: 0;
-  font-size: 12.5px;
-  color: var(--ink-2);
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 .invite-purpose {
-  margin: 6px 0 4px;
+  margin: 8px 0 5px;
   font-size: 13.5px;
+  line-height: 1.45;
 }
 
 .invite-meta {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   font-size: 12px;
+  color: var(--ink-3);
+}
+
+.invite-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .version-picker {
@@ -1227,12 +1452,20 @@ onMounted(load)
 }
 
 .report-meta {
-  margin: 0 0 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  margin: 0 0 6px;
   font-size: 12.5px;
+  color: var(--ink-2);
 }
 
 .opinion {
-  padding: 10px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px 0;
   border-bottom: 1px solid var(--line-2);
 }
 
@@ -1240,27 +1473,36 @@ onMounted(load)
   border-bottom: 0;
 }
 
-.opinion-author {
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .opinion-text,
 .report-conclusion {
-  margin: 5px 0 0;
+  margin: 0;
   font-size: 13.5px;
   line-height: 1.55;
   white-space: pre-wrap;
 }
 
+/* The conclusion is the sentence the report exists for, so it gets a block of
+   its own instead of being the last paragraph in the stack. */
 .report-heading {
-  margin: 14px 0 0;
-  font-size: 13px;
+  margin: 16px 0 7px;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--ink-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .report-conclusion {
-  margin-top: 6px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-left: 3px solid var(--teal);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+/* The editor opens with a sentence about versioning; it needs the same gap
+   below it that a field has. */
+.editor-hint {
+  margin: 0 0 18px;
 }
 
 /* T30's second scenario stops the service and expects "load failed, click to
@@ -1293,6 +1535,12 @@ onMounted(load)
   justify-content: flex-end;
   padding: 14px 20px;
   border-top: 1px solid var(--line-2);
+}
+
+@media (max-width: 1100px) {
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 900px) {

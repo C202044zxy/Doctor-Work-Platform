@@ -249,6 +249,74 @@ h4 {
   border-radius: 10px;
 }
 
+/* `.empty` carries vertical padding only, so as a direct child of a panel the
+   sentence runs into the border. */
+.panel > .empty {
+  padding: 28px 20px;
+}
+
+/* A sentence that belongs to a panel but sits outside its toolbar -- the filter
+   note above a table, say. It carries the panel's own side padding, which a bare
+   paragraph dropped between the toolbar and the table would miss. */
+.panel-note {
+  padding: 0 20px 14px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+/* A person, drawn the same way everywhere the consultation screens show one:
+   the participants rail, a report opinion, the patient's record. */
+.who {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.who-badge {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.02em;
+  background: var(--ink-3);
+  border-radius: 50%;
+}
+
+.who-badge[data-tone='teal'] {
+  background: var(--teal);
+}
+
+.who-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.who-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.who-meta {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* The identifier a consultation screen prints in front of a record: RC-00001. */
+.ref {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--teal-dark);
+}
+
 /* Layout ------------------------------------------------------------------- */
 
 .split {
