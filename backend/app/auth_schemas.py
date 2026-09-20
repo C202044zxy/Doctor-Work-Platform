@@ -21,6 +21,20 @@ class Model(RootModel[Any]):
     root: Any
 
 
+class SmsSendRequest(BaseModel):
+    ticket: constr(min_length=1, max_length=200)
+    phone: constr(pattern=r"^1[3-9][0-9]{9}$")
+
+
+class SmsTicketRequest(BaseModel):
+    ticket: constr(min_length=1, max_length=200)
+
+
+class SmsVerifyRequest(BaseModel):
+    ticket: constr(min_length=1, max_length=200)
+    code: constr(pattern=r"^[0-9]{6}$")
+
+
 class SignupRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",

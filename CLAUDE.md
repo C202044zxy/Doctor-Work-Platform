@@ -21,18 +21,12 @@ citation to a document that does not exist (`project_plan.md`, the task-chain or
 requirements papers), treat it as a stale citation to fix, not a file to go looking for.
 For old task IDs use the mapping table in `docs/01` §7.1; for history, use `git log`.
 
-One legacy file is still on disk: **`新任务安排.md`** at the repo root. It is a
-pre-overhaul document (marks M0–M2 complete, claims WebSocket and video calling were
-delivered, uses Chinese department names) and its removal was blocked by a permissions
-failure. **Do not read it as fact.** Delete it with `git rm 新任务安排.md` when you can.
+The obsolete root planning duplicate was removed during M3 integration. Use docs/01.
 
 ## The four things most likely to mislead you
 
-1. **`docs/api/openapi.yaml` describes a target state, not the current one.** It
-   declares 77 paths; 17 have implementations. `/api/users`, `/api/roles`, all of
-   `/api/emr/*`, `/api/consultations*`, `/api/meetings*`, `/api/audit-logs*`,
-   `/api/health-plans*`, `/api/patients/{no}/vitals*` and `/ws/chat/{room_id}` are
-   **contract-only**. There are no WebSocket routes anywhere in the app.
+1. **The API contract describes the target, not completion.** This branch now has M3 chat, records, signaling and main audit APIs. See `docs/03-实现现状.md` for the current snapshot and `docs/M3-架构与工作记录.md` for pending physical-media/M5 checks.
+
 2. **Face login is a simulation, and it is on the anonymous allowlist.**
    `backend/app/face_login.py`'s `match_face()` returns `True` unconditionally, so any
    valid JPEG plus the username of an existing active account yields a real two-hour

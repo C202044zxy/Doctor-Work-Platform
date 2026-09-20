@@ -31,8 +31,7 @@ def resolve(redis_url: str | None) -> tuple[str, int, int]:
 
 def ping(redis_url: str | None) -> bool:
     """Return True when Redis is reachable at the URL."""
-    host, port, database = resolve(redis_url)
-    client = Redis(host=host, port=port, db=database, socket_timeout=2, socket_connect_timeout=2)
+    client = Redis.from_url(redis_url or DEFAULT_URL, socket_timeout=2, socket_connect_timeout=2)
     try:
         client.ping()
         return True

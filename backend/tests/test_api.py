@@ -587,6 +587,7 @@ def test_invalid_patient(client, body, status):
 
 def test_health_dependencies(client, monkeypatch):
     assert client.get("/api/health/live").status_code == 200
+    assert client.get("/api/health/ready").status_code == 503
     assert client.get("/api/health/ready").json()["checks"] == {
         "db": "ok",
         "redis": "disabled",

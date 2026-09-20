@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from typing import Annotated
@@ -13,7 +15,21 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import auth, auth_schemas, crypto, face_login, grants, groups, meetings, signup
+from app import (
+    auth,
+    auth_schemas,
+    calls,
+    chat,
+    consultation_records,
+    crypto,
+    face_login,
+    grants,
+    groups,
+    health_work,
+    meetings,
+    orders,
+    signup,
+)
 from app.allergies import allergen_name, dictionary, get_patient_allergens
 from app.audit import audit_request, mark_audit
 from app.audit_export import audit_csv, content_disposition, filename_range
@@ -26,6 +42,7 @@ from app.dependencies import Pagination
 # it the moment that `def` runs.
 from app.health import register_jobs as register_health_jobs
 from app.health import router as health_router
+from app.logging_utils import protect_socket_logs
 from app.models import Allergy, AuditLog, Department, Patient, PatientGroupMember, PatientTag
 from app.patients import department_id, patient_scope, visible_patient
 from app.schemas import (
@@ -245,6 +262,7 @@ class AuditFilters:
 
 
 def create_app(settings: Settings | None = None):
+    protect_socket_logs()
     settings = settings or Settings()
     crypto.configure(settings.patient_data_key)
     engine = make_engine(settings.database_url)
@@ -267,15 +285,31 @@ def create_app(settings: Settings | None = None):
                 max_instances=1,
                 coalesce=True,
             )
+            scheduler.add_job(
+                health_work.fire_reminders,
+                "cron",
+                second=0,
+                args=[app.state.sessions, settings.reminder_timezone],
+                id="legacy_health_reminders",
+                max_instances=1,
+                coalesce=True,
+                replace_existing=True,
+            )
             # M6-04. Registered here rather than in the module, because the
             # application owns exactly one scheduler and two registrations would
             # double every reminder.
             register_health_jobs(scheduler, app.state.sessions)
             scheduler.start()
         app.state.scheduler = scheduler
+        call_sweeper = asyncio.create_task(calls.sweep(app))
         try:
             yield
         finally:
+            call_sweeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await call_sweeper
+            for room in list(app.state.chat.calls):
+                await calls.finish(app, room, "server_restart")
             if scheduler.running:
                 scheduler.shutdown(wait=True)
             if cache:
@@ -285,10 +319,20 @@ def create_app(settings: Settings | None = None):
     app = ProtectedFastAPI(title="Doctor Work Platform", version="0.1.0", lifespan=lifespan)
     app.middleware("http")(audit_request)
     app.state.settings = settings
+    from app import sms
+
+    app.include_router(sms.router)
     app.include_router(auth.router)
     app.include_router(signup.router)
     app.include_router(face_login.router)
     app.include_router(grants.router)
+    # Static records/export paths must precede the integer /{id} route.
+    app.include_router(consultation_records.router)
+    app.include_router(chat.router)
+    app.include_router(chat.socket_router)
+    app.include_router(health_work.router)
+    app.include_router(orders.router)
+    app.state.chat = chat.ChatHub()
     # T17/M2-05. Groups are department-scoped, carry their member counts, and
     # never widen the T09 patient scope -- see `app.groups` for why the membership
     # rule is a 422 rather than a silent skip.
@@ -313,6 +357,7 @@ def create_app(settings: Settings | None = None):
     async def http_error(request, exc):
         return JSONResponse(
             status_code=exc.status_code,
+            headers=exc.headers,
             content={"code": exc.status_code, "message": str(exc.detail), "data": None},
         )
 
@@ -385,7 +430,7 @@ def create_app(settings: Settings | None = None):
                 checks["redis"] = "ok"
             except RedisError:
                 checks["redis"] = "down"
-        available = "down" not in checks.values()
+        available = all(value == "ok" for value in checks.values())
         return JSONResponse(
             status_code=200 if available else 503,
             content={

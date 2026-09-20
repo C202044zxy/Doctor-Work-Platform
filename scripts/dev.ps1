@@ -22,6 +22,8 @@ param(
     [Parameter(Position = 0)]
     [ValidateSet("local", "docker")]
     [string]$Mode = "local",
+    [switch]$NoServe,
+    [switch]$SkipInstall,
     [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs = @()
 )
@@ -46,5 +48,5 @@ if ($Mode -eq "docker") {
 }
 
 $start = Join-Path $root "backend\start.ps1"
-& $start @ExtraArgs
+& $start -Reload -DockerRedis -NoServe:$NoServe -SkipInstall:$SkipInstall @ExtraArgs
 exit $LASTEXITCODE

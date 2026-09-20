@@ -21,6 +21,7 @@ services:
       # Four slashes: an absolute path inside the container, on the volume below.
       DATABASE_URL: sqlite:////data/doctor.db
       REDIS_URL: redis://redis:6379/0
+      UPLOAD_DIR: /data/uploads
       JWT_SECRET: ${JWT_SECRET:-}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}

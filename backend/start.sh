@@ -25,9 +25,15 @@ redis_version="7.4.2"
 redis_url="${REDIS_URL:-redis://127.0.0.1:6379/0}"
 
 no_serve=0
+reload=0
+docker_redis=0
+skip_install=0
 for arg in "$@"; do
   case "$arg" in
     --no-serve) no_serve=1 ;;
+    --reload) reload=1 ;;
+    --docker-redis) docker_redis=1 ;;
+    --skip-install) skip_install=1 ;;
     -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $arg (see --help)" >&2; exit 1 ;;
   esac
@@ -92,6 +98,16 @@ build_redis_from_source() {
 }
 
 ensure_redis() {
+  if (( docker_redis )); then
+    assert_command docker "Start Docker before running development mode."
+    docker info --format '{{.ServerVersion}}' >/dev/null || {
+      echo "Docker is unavailable. Start Docker (Linux containers), then retry." >&2
+      exit 1
+    }
+    docker compose -f "$root_dir/compose.dev.yaml" up --detach --wait --wait-timeout 60
+    redis_bootstrap wait --url "$redis_url" --timeout 30
+    return
+  fi
   if redis_bootstrap probe --url "$redis_url"; then
     log "Redis is already reachable at $redis_url."
     return 0
@@ -128,8 +144,17 @@ assert_command node "Install Node.js 22.12 or newer."
 assert_command npm "Install Node.js and npm."
 
 log "Syncing backend dependencies ..."
-(cd "$backend_dir" && uv sync --frozen)
+if (( ! skip_install )); then (cd "$backend_dir" && uv sync --frozen); fi
+(cd "$backend_dir" && uv run --no-sync python -m app.dev_config)
+if (( docker_redis )); then
+  redis_url="redis://127.0.0.1:16379/0"
+  export APP_ENV=dev
+else
+  redis_url="$(cd "$backend_dir" && uv run --no-sync python -c "from app.config import Settings; print(Settings().redis_url or 'redis://127.0.0.1:6379/0')")"
+fi
+export REDIS_URL="$redis_url"
 
+if (( ! no_serve )); then (cd "$backend_dir" && uv run --no-sync python -m app.dev_runtime ports); fi
 ensure_redis
 
 log "Applying database migrations and seeding ..."
@@ -148,7 +173,7 @@ install_proxy="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}}"
 if [[ -n "$install_proxy" ]]; then
   npm_args+=(--proxy="$install_proxy" --https-proxy="$install_proxy")
 fi
-if ! (cd "$frontend_dir" && npm ci "${npm_args[@]}"); then
+if (( ! skip_install )) && ! (cd "$frontend_dir" && npm ci "${npm_args[@]}"); then
   echo "Frontend dependency installation failed. Check your registry and HTTP(S)_PROXY settings." >&2
   exit 1
 fi
@@ -163,9 +188,12 @@ pids=()
 cleanup() { for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
-(cd "$backend_dir" && exec uv run uvicorn app.main:app --host 127.0.0.1 --port 8000) &
+api_args=(--host 127.0.0.1 --port 8000 --no-access-log --log-level warning)
+if (( reload )); then api_args+=(--reload --reload-dir app); fi
+(cd "$backend_dir" && exec uv run uvicorn app.main:app "${api_args[@]}") &
 pids+=("$!")
-(cd "$frontend_dir" && exec node node_modules/vite/bin/vite.js --host 127.0.0.1) &
+(cd "$frontend_dir" && exec node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort) &
 pids+=("$!")
-echo "Frontend: http://127.0.0.1:5173 | API docs: http://127.0.0.1:8000/docs"
+(cd "$backend_dir" && uv run --no-sync python -m app.dev_runtime ready)
+echo "Redis: ready | Frontend: http://127.0.0.1:5173 | API docs: http://127.0.0.1:8000/docs"
 wait -n "${pids[@]}"

@@ -1,4 +1,5 @@
 <script setup>
+import PatientConsultationView from './PatientConsultationView.vue'
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import RemoteConsultationView from './RemoteConsultationView.vue'
@@ -15,12 +16,7 @@ import RemoteConsultationView from './RemoteConsultationView.vue'
 // repetition of the word is the price of not reaching into another module's markup
 // to hide half its header.
 //
-// The patient half is M3 and has no code. The panel below says exactly that
-// instead of dressing the place up: fabricated rows here would sit inside the
-// demo path pretending to be a delivered feature, and the previous screen went
-// further than most -- it announced "Connected over WebSocket" on a build with no
-// WebSocket route anywhere in it. That screen is in `git show 65eaf88` if the
-// layout is worth reusing; what M3 replaces is one `el-tab-pane`.
+// M3 mounts the real patient workbench here; unmounting releases media and sockets.
 //
 // The tab lives in the URL so either half can be linked to. M5 shipped as its own
 // page, so `/remote-consultation` is now a redirect to `?tab=remote`.
@@ -47,7 +43,9 @@ watch(
 function select(name) {
   // `replace`, because switching tabs is not a step the back button should
   // replay. The patient tab is the default, so it keeps a clean URL.
-  router.replace({ query: name === 'patient' ? {} : { tab: name } })
+  const query = { ...route.query }
+  delete query.tab
+  router.replace({ query: name === 'patient' ? query : { ...query, tab: name } })
 }
 </script>
 
@@ -62,27 +60,16 @@ function select(name) {
       </div>
     </header>
 
-    <el-tabs v-model="active" @tab-change="select">
+    <el-tabs class="tabs" v-model="active" @tab-change="select">
       <el-tab-pane label="Patient consultation" name="patient">
-        <section class="panel">
-          <header class="panel-head">
-            <h3>Patient consultation</h3>
-            <span class="chip" data-severity="info">Not built</span>
-          </header>
-          <p class="empty">
-            Text and image sessions with patients, one thread each, in the shape of a chat app.
-            <strong>M3 owns this module and has no code yet</strong>, so the tab states the gap
-            rather than showing a conversation that does not exist. The remote consultation tab
-            beside it is the half that works today.
-          </p>
-        </section>
+        <PatientConsultationView v-if="active === 'patient'" />
       </el-tab-pane>
 
       <!-- M5's screen, mounted as delivered. `lazy` because it asks the API for its
            list, its counts and its invitation box on mount, and a visit that only
            wants the patient half should not pay for four requests it will not read. -->
       <el-tab-pane label="Remote consultation" name="remote" lazy>
-        <RemoteConsultationView />
+        <RemoteConsultationView v-if="active === 'remote'" />
       </el-tab-pane>
     </el-tabs>
   </div>

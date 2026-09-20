@@ -577,9 +577,15 @@
 | GET | `/api/consultations/records` | 🔒 | 检索历史问诊（按患者/日期/关键词） | M3-04 |
 | GET | `/api/consultations/export` | 🔒 | 导出 CSV | M3-04 |
 | POST | `/api/uploads/images` | 🔒 | 上传图片，`multipart/form-data`，返回 `{"url":"/uploads/…"}` | M3-02 |
-| GET | `/api/consultations/{id}/calls` | 参与人 | 通话记录列表（分页、倒序）；**"可在问诊记录中查看"就靠这条**（M3-05） | M3-05 |
+| GET | `/api/consultations/{id}/calls` | 患者数据范围 | 通话记录列表（分页、倒序）；**"可在问诊记录中查看"就靠这条**（M3-05） | M3-05 |
 | POST | `/api/consultations/{id}/calls` | 参与人 | 记录一次通话的元数据（发起/接通/结束时间、时长）。**通话结束后才写**，非参与人 403 | M3-05 |
 | WS | **`/ws/chat/{room_id}`** | 🔒 | 实时图文消息（房间 = `consultation_id` 或 `meeting_id`） | M3-01 |
+
+**2026-09-18 M3 实现补充**：records/export 增加 `patient`（患者姓名包含或患者号精确），其余 `patient_no/q/from/to` 保留且 AND 组合；日期按 Asia/Shanghai 创建日期，CSV 导出全部匹配结果，行数对应 total。`Consultation` 增加 `is_participant`；只读历史/图片/通话记录跟随患者数据范围，发消息和 WS 则额外限制为参与者。图片下载 `GET /uploads/{filename}` 需要 Bearer，不是匿名 StaticFiles。上传超限 413，伪装或无效图片 422。
+
+通话 GET 返回 `call_id/end_reason`；POST 支持可选 call_id 重试键并验证时间顺序与时长。浏览器正常通话由 WS 服务自动结束落库。信令为 `call_offer/call_answer`（call_id+sdp）、`ice_candidate`（call_id+candidate）、`call_connected/call_end/call_reject`（call_id）；服务端结束事件增加 reason。完整细则见 YAML 与 M3 架构文档。
+
+**M5 边界**：下面“复用同一路由”是跨模块目标；当前整数 room_id 仅解析问诊。M5 没有模型和参与者服务，不能把 meeting_id 当 consultation_id 使用。联调时需明确命名空间或全局房间注册。
 
 **上传图片的四条硬约束**（M3-02，安全项，容易被跳过）：
 
@@ -924,3 +930,18 @@
 ---
 
 *本文档由模块视图重排，2026-09-14。任务编号、负责人与状态口径见 `docs/01-任务安排.md`；测试场景与答辩口径见 `docs/02-测试场景.md`；字段级细节以 `docs/api/openapi.yaml` 为准，两者冲突时以 `openapi.yaml` 为准并在同一 PR 内同步本文。*
+
+
+### S1 模拟短信（开发环境）
+
+- `POST /api/auth/sms/send`：密码 ticket + 测试号码，模拟发送，复用邮箱限流。
+- `POST /api/auth/sms/preview`：密码 ticket 查看自己的短期模拟消息（dev 明文例外）。
+- `POST /api/auth/sms/verify`：ticket + code，原子消费后签发 JWT，mock=true。
+- `GET /api/notify-outbox`：仅 admin，分页读取模拟记录。
+
+字段与错误状态以 openapi.yaml 为准。查看接口使用 POST 请求体避免 ticket 出现在 URL；这次不实现短信注册或微信提醒。
+
+
+### main 与旧分支兼容接口（2026-09-20）
+
+标准 `/api/emr/orders`、`/api/health-plans`、`/api/reminder-rules`、`/api/reminders` 使用 main 的 M4/M6 契约。原分支接口加 `/api/legacy` 前缀，保留旧数据访问；字段见 `openapi.yaml` 引用的 `legacy.openapi.json`。例如标准未读响应为 `{unread}`，旧接口为 `{unread_count}`，前端不可混用。旧医嘱仍需要原适配器，缺失返回 503，正式开医嘱请用 M4 病历页面。

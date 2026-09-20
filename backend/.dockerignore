@@ -4,3 +4,9 @@ __pycache__
 .env
 .pytest_cache
 .ruff_cache
+
+.env.*
+*.db-wal
+*.db-shm
+uploads/
+backups/

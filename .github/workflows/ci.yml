@@ -23,7 +23,7 @@ jobs:
         working-directory: backend
       - run: uv run pytest -q && uv run ruff check app tests migrations && uv run ruff format --check app tests migrations
         working-directory: backend
-      - run: npm ci && npm run build
+      - run: npm ci && npm test && npm run build
         working-directory: frontend
       # T04 acceptance S1: start SQLite, Redis, backend, and frontend with the
       # documented one-command script, exactly as a newcomer would.
@@ -62,7 +62,9 @@ jobs:
       # dev.ps1 runs as a job so its output streams into this log. A cold runner installs
       # every dependency from scratch, which is slow, and a silent step would be
       # impossible to diagnose.
-      - name: Run scripts\dev.ps1 and smoke-test the stack
+      # Hosted Windows runners cannot start the Linux Redis container. Exercise
+      # the shared local implementation using its native Redis fallback.
+      - name: Run backend\start.ps1 with reload and smoke-test the stack
         shell: pwsh
         env:
           SMOKE_REQUIRE_REDIS: '0'
@@ -75,7 +77,7 @@ jobs:
           $root = $env:GITHUB_WORKSPACE
           $job = Start-Job -ScriptBlock {
             Set-Location $using:root
-            & (Join-Path $using:root 'scripts\dev.ps1')
+            & (Join-Path $using:root 'backend\start.ps1') -Reload
           }
           $deadline = $start.AddMinutes(25)
           $printed = 0

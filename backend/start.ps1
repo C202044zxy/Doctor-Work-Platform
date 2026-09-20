@@ -17,7 +17,10 @@ That directory is gitignored -- never commit binaries.
 #>
 [CmdletBinding()]
 param(
-    [switch]$NoServe
+    [switch]$NoServe,
+    [switch]$Reload,
+    [switch]$DockerRedis,
+    [switch]$SkipInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -137,6 +140,16 @@ function Install-RedisFromArchive {
 }
 
 function Ensure-Redis {
+    if ($DockerRedis) {
+        Assert-Command "docker" "Start Docker Desktop before running development mode."
+        & docker info --format '{{.ServerVersion}}' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Docker is unavailable. Start Docker Desktop (Linux containers), then retry." }
+        Write-Host "Starting development Redis on 127.0.0.1:16379..." -ForegroundColor Cyan
+        & docker compose -f (Join-Path $rootDir "compose.dev.yaml") up --detach --wait --wait-timeout 60
+        Assert-LastExit "Development Redis"
+        if (-not (Wait-Redis)) { throw "Development Redis did not become ready." }
+        return
+    }
     if (Test-RedisReachable) {
         Write-Host "Redis is already reachable at $redisUrl." -ForegroundColor Cyan
         return
@@ -191,8 +204,24 @@ try {
     Write-Host "Syncing backend dependencies..." -ForegroundColor Cyan
     Push-Location $backendDir
     try {
-        & uv sync --frozen
-        Assert-LastExit "uv sync"
+        if (-not $SkipInstall) {
+            & uv sync --frozen
+            Assert-LastExit "uv sync"
+        }
+        if (-not (Test-Path -LiteralPath $pythonExe)) { throw "Run without -SkipInstall once to install dependencies." }
+        & $pythonExe -m app.dev_config
+        Assert-LastExit "Local configuration"
+        if ($DockerRedis) {
+            $redisUrl = "redis://127.0.0.1:16379/0"
+        } else {
+            $redisUrl = (& $pythonExe -c "from app.config import Settings; print(Settings().redis_url or 'redis://127.0.0.1:6379/0')").Trim()
+        }
+        $env:REDIS_URL = $redisUrl
+        if ($DockerRedis) { $env:APP_ENV = "dev" }
+        if (-not $NoServe) {
+            & $pythonExe -m app.dev_runtime ports
+            Assert-LastExit "Development ports"
+        }
     } finally {
         Pop-Location
     }
@@ -224,6 +253,7 @@ try {
     if ($proxy) {
         $npmArgs += @("--proxy=$proxy", "--https-proxy=$proxy")
     }
+    if (-not $SkipInstall) {
     Push-Location $frontendDir
     try {
         & npm.cmd ci @npmArgs
@@ -233,44 +263,46 @@ try {
     } finally {
         Pop-Location
     }
+    }
 
     if ($NoServe) {
-        Write-Host "Setup finished. Start the servers with: .\backend\start.ps1" -ForegroundColor Green
+        Write-Host "Setup finished. For hot reload run: .\scripts\dev.ps1 -SkipInstall" -ForegroundColor Green
         exit 0
     }
 
     if (-not (Test-Path -LiteralPath $pythonExe)) {
         throw "Expected a virtual environment at $pythonExe, but it is missing. Re-run this script."
     }
+    if (-not (Test-Path -LiteralPath (Join-Path $frontendDir 'node_modules/vite/bin/vite.js'))) {
+        throw "Frontend dependencies are missing. Run again without -SkipInstall."
+    }
 
-    Write-Host "Starting FastAPI and Vite. One window per server; closing a window stops it." -ForegroundColor Cyan
-    $api = Start-Process -FilePath $pythonExe -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") -WorkingDirectory $backendDir -PassThru
-    $web = Start-Process -FilePath "node" -ArgumentList @("node_modules/vite/bin/vite.js", "--host", "127.0.0.1") -WorkingDirectory $frontendDir -PassThru
-
+    $logDir = Join-Path $backendDir "runtime"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    Write-Host "Starting FastAPI and Vite. Logs: backend/runtime/*.log. Ctrl+C stops both." -ForegroundColor Cyan
+    $apiArgs = @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000", "--no-access-log", "--log-level", "warning")
+    if ($Reload) { $apiArgs += @("--reload", "--reload-dir", "app") }
+    $api = Start-Process -FilePath $pythonExe -ArgumentList $apiArgs -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "api.log") -RedirectStandardError (Join-Path $logDir "api-error.log") -PassThru
+    $web = $null
     try {
-        $ready = $false
-        for ($attempt = 0; $attempt -lt 60; $attempt++) {
-            if ($api.HasExited) { break }
-            try {
-                Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/health/live" -UseBasicParsing -TimeoutSec 2 | Out-Null
-                $ready = $true
-                break
-            } catch {
-                Start-Sleep -Milliseconds 500
-            }
-        }
-        if ($ready) {
-            Write-Host "Frontend: http://127.0.0.1:5173 | API docs: http://127.0.0.1:8000/docs" -ForegroundColor Green
-        } else {
-            Write-Host "The API did not answer on port 8000 yet. Check the FastAPI window for errors." -ForegroundColor Yellow
-        }
+        $web = Start-Process -FilePath "node" -ArgumentList @("node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5173", "--strictPort") -WorkingDirectory $frontendDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "web.log") -RedirectStandardError (Join-Path $logDir "web-error.log") -PassThru
+
+        Push-Location $backendDir
+        try {
+            & $pythonExe -m app.dev_runtime ready
+            Assert-LastExit "API dependency readiness"
+        } finally { Pop-Location }
+        if ($api.HasExited) { throw "API exited. Check backend/runtime/api-error.log." }
+        Write-Host "Redis: ready | Frontend: http://127.0.0.1:5173 | API docs: http://127.0.0.1:8000/docs" -ForegroundColor Green
+        if ($web.HasExited) { throw "Vite exited. Check backend/runtime/web-error.log and port 5173." }
         while (-not $api.HasExited -and -not $web.HasExited) {
             Start-Sleep -Milliseconds 500
         }
     } finally {
         foreach ($server in @($api, $web)) {
             if ($server -and -not $server.HasExited) {
-                Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+                # Uvicorn --reload owns a worker child; stop the entire tree.
+                & taskkill.exe /PID $server.Id /T /F 2>$null | Out-Null
             }
         }
     }

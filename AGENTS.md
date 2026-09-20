@@ -19,8 +19,8 @@ for one, and treat any citation to a missing document as a stale reference to fi
 task IDs are traceable through the mapping table in `docs/01` §7.1; history lives in
 `git log`.
 
-The last pre-overhaul document, `新任务安排.md`, was removed on 2026-09-19.
-Use `git log` for history; do not restore it as a specification.
+The obsolete root planning duplicate was removed during the M3 integration.
+Use the current `docs/01` task allocation.
 
 `README.md` covers install, run, and verify. Setting up for the first time? Follow
 `docs/onboarding.md`.
@@ -43,7 +43,7 @@ Vue 3, Vite, and Element Plus on the frontend.
 
 - **SQLite** is the database, not MySQL. The default file is `backend/doctor.db`.
 - **Redis is a hard dependency of authentication** (login tickets, verification codes, the JWT blacklist, and login rate limiting), not an optional cache. When Redis is down the login flow is unusable, but other endpoints still return 200 with `redis: "down"`.
-- The frontend uses native `fetch` and `sessionStorage`. No Pinia, no axios.
+- The frontend uses native `fetch` and `localStorage` for the current main-branch login session. Use separate browser profiles for two-account tests. No Pinia, no axios.
 - **All user-facing frontend text is English.** Do not add Chinese UI strings.
 
 ## Build, Test, and Development Commands

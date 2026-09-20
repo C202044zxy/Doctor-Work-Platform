@@ -220,10 +220,7 @@ def test_grant_visibility_revoke_expiry_and_audit(client):
         actions = list(db.scalars(select(AuditLog.action)))
         assert actions.count("temp_grant.create") == 2
         assert actions.count("temp_grant.expire") == 1
-    # This job is registered once and on a one-minute interval. The count is not
-    # asserted: M6's reminder job shares the application's single scheduler, and
-    # a count would make every later module fail this test for existing.
-    assert client.app.state.scheduler.get_job("expire_temp_grants") is not None
+    assert sum(job.id == "expire_temp_grants" for job in client.app.state.scheduler.get_jobs()) == 1
     assert (
         client.app.state.scheduler.get_job("expire_temp_grants").trigger.interval.total_seconds()
         == 60

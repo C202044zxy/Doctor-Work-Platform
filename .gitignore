@@ -9,6 +9,10 @@ __pycache__/
 node_modules/
 dist/
 backups/
+.env.server
+uploads/
+*.db-wal
+*.db-shm
 
 # A Redis unpacked by backend/start.* when none was installed. Binaries must
 # never be committed: the startup script re-downloads them on demand.

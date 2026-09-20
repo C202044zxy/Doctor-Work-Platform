@@ -25,5 +25,5 @@ if [[ "$mode" != "local" ]]; then
   exit 1
 fi
 
-shift
-exec ./backend/start.sh "$@"
+if (( $# )); then shift; fi
+exec ./backend/start.sh --reload --docker-redis "$@"

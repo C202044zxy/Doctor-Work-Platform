@@ -1,0 +1,28 @@
+name: SQLite Docker onboarding
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fresh-machine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize configuration and build with Docker only
+        run: bash scripts/docker.sh up
+      - name: Verify frontend proxy
+        run: |
+          curl --fail http://127.0.0.1:8080/ > /dev/null
+          curl --fail http://127.0.0.1:8080/api/health/ready
+      - name: Restart without deleting volumes and check again
+        run: |
+          docker compose --env-file .env.server -f compose.sqlite.yaml restart backend
+          docker compose --env-file .env.server -f compose.sqlite.yaml up --detach --wait --wait-timeout 120
+          bash scripts/docker.sh check
+      - if: failure()
+        run: bash scripts/docker.sh logs
+      - if: always()
+        run: docker compose --env-file .env.server -f compose.sqlite.yaml down

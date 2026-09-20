@@ -80,6 +80,15 @@ EXPECTED_TABLES = frozenset(
         "roles",
         "temp_grant",
         "users",
+        "consultation",
+        "consult_message",
+        "image_upload",
+        "call_log",
+        "notify_outbox",
+        "legacy_medical_order",
+        "health_plan",
+        "reminder_rule",
+        "reminder_log",
         "vital_signs",
         "vital_thresholds",
     }
@@ -314,6 +323,7 @@ def main():
 
     restore_from = None
     try:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
         if db_path.exists():
             restore_from = snapshot(db_path)
             print(f"Previous database snapshotted to {restore_from}")
