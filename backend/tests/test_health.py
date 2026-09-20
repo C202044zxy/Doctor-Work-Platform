@@ -7,7 +7,7 @@ of those raise, they just produce wrong data quietly. Everything else here is
 plumbing.
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import fakeredis
 import pytest
@@ -29,8 +29,11 @@ from app.models import (
 )
 from app.seed import seed
 
-TODAY = date(2026, 9, 18)
-YESTERDAY = datetime.now(UTC) - timedelta(days=1)
+# Both ends of the window come from one clock. A frozen TODAY against a live
+# YESTERDAY agrees only until the calendar moves past the frozen date.
+NOW = datetime.now(UTC)
+TODAY = NOW.date()
+YESTERDAY = NOW - timedelta(days=1)
 
 
 @pytest.fixture
