@@ -17,7 +17,6 @@ export const navigation = [
   { name: 'patients', label: 'Patients', icon: 'User' },
   { name: 'records', label: 'Medical Records', icon: 'Document' },
   { name: 'consultations', label: 'Consultations', icon: 'ChatDotRound' },
-  { name: 'consultation-records', label: 'Consultation Records', icon: 'Document' },
   { name: 'my-submissions', label: 'My submissions', icon: 'Document' },
   { name: 'review', label: 'Review Queue', icon: 'Checked', roles: MODULE_ROLES.review },
   { name: 'audit', label: 'Audit Log', icon: 'Tickets', roles: MODULE_ROLES.audit },
@@ -27,8 +26,11 @@ const routes = [
   {
     path: '/consultation-records',
     name: 'consultation-records',
-    component: () => import('../views/ConsultationRecordsView.vue'),
-    meta: { title: 'Consultation Records' },
+    redirect: to => ({
+      name: 'consultations',
+      query: { ...to.query, tab: 'patient', view: 'records' },
+      hash: to.hash,
+    }),
   },
   {
     path: '/legacy/health-plans',

@@ -44,7 +44,7 @@ onMounted(() => load(true))
 
 <template>
   <section>
-    <h2>Consultation records</h2>
+    <h3>Consultation records</h3>
     <form class="filters" @submit.prevent="load(true)">
       <el-input v-model="patient" placeholder="Patient name or number" aria-label="Patient name or number" />
       <el-input v-model="keyword" placeholder="Message keyword" aria-label="Message keyword" />
@@ -58,12 +58,14 @@ onMounted(() => load(true))
     <p v-else-if="busy" role="status">Loading records…</p>
     <p v-else-if="!rows.length">No matching consultations.</p>
     <el-table v-else :data="rows">
+      <el-table-column prop="id" label="Session" width="90" />
       <el-table-column prop="patient_name" label="Patient" />
       <el-table-column prop="patient_no" label="Patient number" />
       <el-table-column prop="doctor_name" label="Doctor" />
       <el-table-column prop="status" label="Status" />
       <el-table-column prop="last_message" label="Last message" />
       <el-table-column label="Created"><template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template></el-table-column>
+      <el-table-column label="Ended"><template #default="{ row }">{{ row.ended_at ? new Date(row.ended_at).toLocaleString() : '—' }}</template></el-table-column>
       <el-table-column label="Details"><template #default="{ row }"><el-button @click="router.push({ name: 'consultations', query: { room: row.id } })">Open record</el-button></template></el-table-column>
     </el-table>
     <el-pagination v-model:current-page="page" :total="total" :page-size="20" layout="total, prev, pager, next" @current-change="load()" />

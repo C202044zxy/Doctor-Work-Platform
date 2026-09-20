@@ -61,3 +61,9 @@
 建议标题：`feat: integrate M3 consultations and simulated SMS with main`。
 
 建议说明：保留 M3 图文、记录和同机视频模式，整合 main 的患者/M4/M5/M6 页面；修复重复路由与医嘱表冲突，兼容保留原分支数据。注明本页测试结果、真实硬件仍待手测，以及两条历史迁移增加兼容判断的原因。
+
+## UI 入口修正
+
+上次合并误保留了 Consultation Records 独立侧栏，现已按新版 UI 移除。记录检索和 CSV 合入 Consultations → Patient consultation → Search consultation records；旧地址重定向到 /consultations?tab=patient&view=records，原记录组件不再注册为独立页面。工作台/记录互相切换以及 M5 标签保持可用。
+
+结束状态补充：会话显示 Session 编号与起止时间，刷新/远端结束后列表跟随当前会话状态；浏览器两端刷新、后端种子重复运行和新应用重启后 Ended 保留测试通过。没有复现已结束数据库记录恢复 Active，也没有改写现有手测数据。
