@@ -93,7 +93,7 @@ def order_data(db, row):
     }
 
 
-@router.get("/api/emr/orders", response_model=Envelope[list[OrderRead]])
+@router.get("/api/legacy/emr/orders", response_model=Envelope[list[OrderRead]])
 def list_orders(record_id: int, db: DB):
     record_for(db, record_id)
     mark_audit(db.info["request"], "medical_order.view", "medical_record", record_id)
@@ -109,7 +109,7 @@ def list_orders(record_id: int, db: DB):
     )
 
 
-@router.post("/api/emr/orders", response_model=Envelope[list[OrderRead]])
+@router.post("/api/legacy/emr/orders", response_model=Envelope[list[OrderRead]])
 def create_orders(body: OrderCreate, db: DB):
     patient = record_for(db, body.record_id, write=True)
     results = validate(db, patient.id, body.items)
@@ -150,7 +150,7 @@ def editable_order(db, id):
     return row
 
 
-@router.patch("/api/emr/orders/{id}", response_model=Envelope[OrderRead])
+@router.patch("/api/legacy/emr/orders/{id}", response_model=Envelope[OrderRead])
 def update_order(id: int, body: OrderItem, db: DB):
     row = editable_order(db, id)
     result = validate(db, row.patient_id, [body])[0]
@@ -167,7 +167,7 @@ def update_order(id: int, body: OrderItem, db: DB):
     return ok(order_data(db, row))
 
 
-@router.post("/api/emr/orders/{id}/stop", response_model=Envelope[OrderRead])
+@router.post("/api/legacy/emr/orders/{id}/stop", response_model=Envelope[OrderRead])
 def stop_order(id: int, db: DB):
     row = editable_order(db, id)
     row.status = "stopped"

@@ -133,7 +133,7 @@ def write_plan(db, body, row=None):
     return ok(plan_data(db, row))
 
 
-@router.get("/api/health-plans", response_model=Envelope[PageData[PlanRead]])
+@router.get("/api/legacy/health-plans", response_model=Envelope[PageData[PlanRead]])
 def list_plans(db: DB, pagination: Paging, patient_no: str | None = None):
     stmt = scoped(HealthPlan, db)
     if patient_no:
@@ -143,24 +143,24 @@ def list_plans(db: DB, pagination: Paging, patient_no: str | None = None):
     )
 
 
-@router.post("/api/health-plans", response_model=Envelope[PlanRead])
+@router.post("/api/legacy/health-plans", response_model=Envelope[PlanRead])
 def create_plan(body: PlanWrite, db: DB):
     return write_plan(db, body)
 
 
-@router.get("/api/health-plans/{id}", response_model=Envelope[PlanRead])
+@router.get("/api/legacy/health-plans/{id}", response_model=Envelope[PlanRead])
 def read_plan(id: int, db: DB):
     row = get_plan(db, id)
     audit(db, "health_plan.view", row)
     return ok(plan_data(db, row))
 
 
-@router.patch("/api/health-plans/{id}", response_model=Envelope[PlanRead])
+@router.patch("/api/legacy/health-plans/{id}", response_model=Envelope[PlanRead])
 def update_plan(id: int, body: PlanWrite, db: DB):
     return write_plan(db, body, get_plan(db, id))
 
 
-@router.get("/api/reminder-rules", response_model=Envelope[list[RuleRead]])
+@router.get("/api/legacy/reminder-rules", response_model=Envelope[list[RuleRead]])
 def list_rules(db: DB, patient_no: str | None = None):
     stmt = scoped(ReminderRule, db).where(ReminderRule.doctor_id == db.info["user"].id)
     if patient_no:
@@ -168,7 +168,7 @@ def list_rules(db: DB, patient_no: str | None = None):
     return ok([rule_data(db, row) for row in db.scalars(stmt.order_by(ReminderRule.id.desc()))])
 
 
-@router.post("/api/reminder-rules", response_model=Envelope[RuleRead])
+@router.post("/api/legacy/reminder-rules", response_model=Envelope[RuleRead])
 def create_rule(body: RuleCreate, db: DB):
     row = add_rule(db, body)
     audit(db, "reminder_rule.create", row)
@@ -176,7 +176,7 @@ def create_rule(body: RuleCreate, db: DB):
     return ok(rule_data(db, row))
 
 
-@router.patch("/api/reminder-rules/{id}", response_model=Envelope[RuleRead])
+@router.patch("/api/legacy/reminder-rules/{id}", response_model=Envelope[RuleRead])
 def update_rule(id: int, body: RuleUpdate, db: DB):
     row = owned_rule(db, id)
     updates = body.model_dump(exclude_unset=True)
@@ -207,12 +207,12 @@ def unread_count(db):
     )
 
 
-@router.get("/api/reminders/unread-count", response_model=Envelope[UnreadRead])
+@router.get("/api/legacy/reminders/unread-count", response_model=Envelope[UnreadRead])
 def count_reminders(db: DB):
     return ok({"unread_count": unread_count(db)})
 
 
-@router.get("/api/reminders", response_model=Envelope[LogPage])
+@router.get("/api/legacy/reminders", response_model=Envelope[LogPage])
 def list_reminders(
     db: DB,
     pagination: Paging,
@@ -242,7 +242,7 @@ def list_reminders(
     return ok(data)
 
 
-@router.post("/api/reminders/{id}/done", response_model=Envelope[LogRead])
+@router.post("/api/legacy/reminders/{id}/done", response_model=Envelope[LogRead])
 def done_reminder(id: int, db: DB):
     row = db.scalar(log_scope(db).where(ReminderLog.id == id))
     if row is None:

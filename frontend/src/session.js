@@ -34,6 +34,11 @@ export function accessToken() { return token.value }
 // T42 §4.3.1 ② names the account by username rather than by id, and the face
 // sign-in page has to send the one being claimed.
 export const currentUsername = computed(() => user.value?.username || '')
+// T30/M5. The consultation payload names people by id, so the screen needs the
+// signed-in account's id to answer "which side of this meeting am I on?" --
+// initiator, invitee, or neither. The server decides what that allows; this is
+// only how the screen knows which buttons to offer.
+export const currentUserId = computed(() => user.value?.id ?? null)
 // The API calls this `title`, not `role`, and the contract forbids renaming it.
 // The route guard reads it to decide who may open a gated screen.
 export const currentTitle = computed(() => user.value?.title || '')

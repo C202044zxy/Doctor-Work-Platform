@@ -1,3 +1,4 @@
+import { isScreenRefusal } from '../access.js'
 import { accessToken, signOut } from '../session.js'
 import { filenameFromDisposition } from './csv.js'
 import { face as mockFace } from './mock-auth.js'
@@ -18,6 +19,7 @@ const SESSION_LOST = [
   [/unavailable or disabled/i, 'This account is no longer active. Contact an administrator.'],
   [/missing access token/i, 'Sign in to continue.'],
 ]
+
 
 function sessionLostCopy(message) {
   for (const [pattern, copy] of SESSION_LOST) if (pattern.test(message)) return copy
@@ -60,9 +62,12 @@ async function request(path, options = {}) {
       signOut()
       sessionLostHandler?.({ kind: 'session-lost', message: sessionLostCopy(error.message) })
     }
-    // 403 is a permission refusal, not an identity one: keep the session and send
-    // the reader to the page that explains which permission is missing.
-    if (response.status === 403) {
+    // 403 is not an identity failure, so the session stays. Only the refusal that
+    // names a missing permission replaces the screen; any other 403 is thrown, and
+    // the caller shows it inline -- a senior who picks the wrong department has to
+    // read "you cannot write patients in another department" on the form, not lose
+    // the page they were working on.
+    if (isScreenRefusal(response.status, error.message)) {
       sessionLostHandler?.({ kind: 'forbidden' })
     }
     throw error
@@ -153,6 +158,124 @@ export const departments = {
   },
 }
 
+// M5. The consultation module: its state machine, the materials its participants
+// share, and the report that archives to the patient record.
+//
+// Everything goes through `request()` except the two calls whose answers are not
+// the JSON envelope -- a file and an HTML sheet. Those are below, and each
+// repeats the 401/403 handling `request()` does, because they cannot use it.
+export const meetings = {
+  async list({ status = '', patientNo = '', page = 1, size = 20 } = {}) {
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    // An unused filter is left out rather than sent blank, for the reason
+    // `patients.list` spells out: the server validates the ones it receives.
+    if (status) params.set('status', status)
+    if (patientNo) params.set('patient_no', patientNo)
+    return request(`/meetings?${params}`)
+  },
+
+  async get(id) {
+    return request(`/meetings/${id}`)
+  },
+
+  async create(payload) {
+    return request('/meetings', json(payload))
+  },
+
+  async accept(id) { return request(`/meetings/${id}/accept`, json({})) },
+  async decline(id) { return request(`/meetings/${id}/decline`, json({})) },
+  async start(id) { return request(`/meetings/${id}/start`, json({})) },
+  async complete(id) { return request(`/meetings/${id}/complete`, json({})) },
+
+  // The invite picker's directory. `/api/users` exists in the contract but is
+  // administrator-only, so it cannot feed a junior's picker (T30 S1 has a junior
+  // initiate the consultation). This returns identity and department only.
+  async doctors({ q = '', department = '', size = 50 } = {}) {
+    const params = new URLSearchParams({ size: String(size) })
+    if (q) params.set('q', q)
+    if (department) params.set('department', department)
+    return request(`/meetings/doctors?${params}`)
+  },
+
+  async materials(id) {
+    return request(`/meetings/${id}/materials`)
+  },
+
+  async uploadMaterial(id, file) {
+    // `form()` leaves Content-Type off on purpose so the browser can set the
+    // multipart boundary.
+    return request(`/meetings/${id}/materials`, form({ file }))
+  },
+
+  async report(id, version) {
+    return request(`/meetings/${id}/report${version ? `?version=${version}` : ''}`)
+  },
+
+  async saveReport(id, payload) {
+    return request(`/meetings/${id}/report`, json(payload))
+  },
+}
+
+// The two M5 answers that are not the envelope. `request()` would `await
+// response.json()` on them and report a parse failure that is not there, so the
+// authorised fetch is repeated here -- including the 401 that ends a session and
+// the 403 that is a permission refusal, which is the same split `download()` makes
+// for the audit CSV.
+async function fetchAuthorised(path) {
+  const token = accessToken()
+  let response
+  try {
+    response = await fetch(`${BASE}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+  } catch {
+    throw new Error('Cannot reach the service. Is the backend running?')
+  }
+  if (!response.ok) {
+    // The failure is JSON even though the success is not.
+    const body = await response.json().catch(() => null)
+    const error = new Error(body?.message || `Request failed (${response.status})`)
+    error.status = response.status
+    if (response.status === 401 && token) {
+      signOut()
+      sessionLostHandler?.({ kind: 'session-lost', message: sessionLostCopy(error.message) })
+    }
+    throw error
+  }
+  return response
+}
+
+// T31. The server keeps the original filename -- it is the last place the Chinese
+// name still exists intact -- so it is read back out of `Content-Disposition`
+// rather than guessed from the numeric id in the URL.
+export async function downloadMaterial(materialId) {
+  const response = await fetchAuthorised(`/materials/${materialId}/download`)
+  const name =
+    filenameFromDisposition(response.headers.get('content-disposition')) ??
+    `material-${materialId}`
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+// T32. The printable sheet is HTML rendered by the backend, so it is fetched with
+// the token and written into a fresh window: neither `window.open(href)` nor an
+// `<a href>` can carry an Authorization header, and the route is participants-only.
+export async function openReportSheet(meetingId, version) {
+  const response = await fetchAuthorised(
+    `/meetings/${meetingId}/report/print${version ? `?version=${version}` : ''}`,
+  )
+  const html = await response.text()
+  const sheet = window.open('', '_blank')
+  if (!sheet) throw new Error('The print window was blocked. Allow pop-ups for this site.')
+  sheet.document.write(html)
+  sheet.document.close()
+  sheet.focus()
+}
+
 export const allergens = {
   async list() {
     return request('/allergens')
@@ -168,8 +291,16 @@ export const patients = {
     patientNo = '',
     symptomTags = [],
     department = '',
+    gender = '',
     admittedFrom = '',
     admittedTo = '',
+    birthFrom = '',
+    birthTo = '',
+    allergenCodes = [],
+    allergySeverity = [],
+    phone = '',
+    idCard = '',
+    groupId = null,
     page = 1,
     size = 20,
   } = {}) {
@@ -185,7 +316,25 @@ export const patients = {
     if (department) params.set('department', department)
     if (admittedFrom) params.set('admitted_from', admittedFrom)
     if (admittedTo) params.set('admitted_to', admittedTo)
+    // A blank `gender` would be a 422 rather than "no filter": the server tells the
+    // two apart by the parameter being absent, which is why none of these are sent
+    // empty.
+    if (gender) params.set('gender', gender)
+    if (birthFrom) params.set('birth_from', birthFrom)
+    if (birthTo) params.set('birth_to', birthTo)
     symptomTags.forEach((tag) => params.append('symptom_tags', tag))
+    // Repeatable, so any of several codes matches. The local names are plural for
+    // that reason; `allergen` and `allergy_severity` are the names on the wire.
+    allergenCodes.forEach((code) => params.append('allergen', code))
+    allergySeverity.forEach((severity) => params.append('allergy_severity', severity))
+    // Exact matches against the blind index kept beside the ciphertext, so the whole
+    // number is what finds a patient and a prefix is not a hit.
+    if (phone) params.set('phone', phone)
+    if (idCard) params.set('id_card', idCard)
+    // 0 is a legal id, so this one is compared against null instead of truthiness.
+    if (groupId !== null && groupId !== undefined && groupId !== '') {
+      params.set('group_id', String(groupId))
+    }
     return request(`/patients?${params}`)
   },
 
@@ -217,6 +366,16 @@ export const patients = {
     async remove(id) {
       return request(`/allergies/${id}`, { method: 'DELETE' })
     },
+  },
+}
+
+// T17's group filter needs the groups to filter by. The management screen (create,
+// rename, members) is not built, so this is the one read the list uses; the server
+// answers with the caller's own department only, which is why the options and the
+// filter agree without the client checking anything.
+export const patientGroups = {
+  async list() {
+    return request('/patient-groups')
   },
 }
 
@@ -257,6 +416,111 @@ export const audit = {
   // matched rather than the page that happens to be on screen.
   async exportCsv(filters = {}) {
     return download('/audit-logs/export', auditParams(filters, { paged: false }))
+  },
+}
+
+// M6. Vitals, health plans, reminder rules and their log, assessments.
+//
+// Every call here is real: the module has a full backend, so there is no mock
+// path and no switch to fall back to. An unused filter is left out rather than
+// sent blank, for the reason `patients.list` spells out -- `from=` is not a
+// date, and the server rejects the whole request with 422 rather than ignoring it.
+export const vitals = {
+  // `sign_type` and the two instants are optional here; the trend endpoint below
+  // requires all three, which is why they are separate builders.
+  async list(patientNo, { signType = '', from = '', to = '', page = 1, size = 20 } = {}) {
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    if (signType) params.set('sign_type', signType)
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    return request(`/patients/${encodeURIComponent(patientNo)}/vitals?${params}`)
+  },
+
+  // `from` and `to` are dates, not instants: the server treats `to` as the whole
+  // day, so a caller does not have to work out 23:59 itself.
+  async trend(patientNo, { signType, from, to }) {
+    const params = new URLSearchParams({ sign_type: signType, from, to })
+    return request(`/patients/${encodeURIComponent(patientNo)}/vitals/trend?${params}`)
+  },
+
+  async create(patientNo, payload) {
+    return request(`/patients/${encodeURIComponent(patientNo)}/vitals`, json(payload))
+  },
+}
+
+export const healthPlans = {
+  async list({ patientNo = '', page = 1, size = 20 } = {}) {
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    if (patientNo) params.set('patient_no', patientNo)
+    return request(`/health-plans?${params}`)
+  },
+
+  async get(id) {
+    return request(`/health-plans/${id}`)
+  },
+
+  async create(payload) {
+    return request('/health-plans', json(payload))
+  },
+
+  // The body is the full write shape, `patient_no` included: the contract gives
+  // this route no partial-update schema, so a status change resends the plan.
+  async update(id, payload) {
+    return request(`/health-plans/${id}`, send('PATCH', payload))
+  },
+}
+
+export const reminderRules = {
+  async list(patientNo = '') {
+    return request(`/reminder-rules${patientNo ? `?patient_no=${encodeURIComponent(patientNo)}` : ''}`)
+  },
+
+  async create(payload) {
+    return request('/reminder-rules', json(payload))
+  },
+
+  // Partial: `{ active: false }` alone is a complete request.
+  async update(id, payload) {
+    return request(`/reminder-rules/${id}`, send('PATCH', payload))
+  },
+}
+
+export const reminders = {
+  // Reading this list clears the red dot for the entries it returns.
+  async list({ patientNo = '', done, unreadOnly, page = 1, size = 20 } = {}) {
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    if (patientNo) params.set('patient_no', patientNo)
+    if (done !== undefined && done !== null) params.set('done', String(done))
+    if (unreadOnly) params.set('unread_only', 'true')
+    return request(`/reminders?${params}`)
+  },
+
+  async unreadCount() {
+    return request('/reminders/unread-count')
+  },
+
+  async markDone(id) {
+    return request(`/reminders/${id}/done`, json({}))
+  },
+}
+
+export const assessments = {
+  async list(patientNo) {
+    return request(`/patients/${encodeURIComponent(patientNo)}/assessments`)
+  },
+
+  async get(id) {
+    return request(`/assessments/${id}`)
+  },
+
+  async create(patientNo, payload) {
+    return request(`/patients/${encodeURIComponent(patientNo)}/assessments`, json(payload))
+  },
+
+  // A revision writes a new row: the reply is version + 1, and the assessment it
+  // replaces stays readable.
+  async revise(id, payload) {
+    return request(`/assessments/${id}`, send('PATCH', payload))
   },
 }
 
@@ -312,4 +576,11 @@ export async function faceImageUrl(ref, actingUsername) {
     throw error
   }
   return URL.createObjectURL(await response.blob())
+}
+
+// M4 uses the shared authenticated fetch client and the canonical API contract.
+export const emr = {
+  get: (path) => request(path),
+  post: (path, body = {}) => request(path, json(body)),
+  patch: (path, body) => request(path, send('PATCH', body)),
 }

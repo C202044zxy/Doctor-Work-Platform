@@ -6,19 +6,19 @@ const form = ref({ patient_no: '', title: '', rtype: 'medication', cron_expr: '0
 let timer
 async function load() {
   try {
-    const [data, schedules] = await Promise.all([work(`/reminders?page=${page.value}&size=20`), work('/reminder-rules')])
+    const [data, schedules] = await Promise.all([work(`/legacy/reminders?page=${page.value}&size=20`), work('/legacy/reminder-rules')])
     logs.value = data.items; total.value = data.total; unread.value = data.unread_count; rules.value = schedules
     window.dispatchEvent(new Event('reminders-read'))
   } catch (err) { error.value = err.message }
 }
 async function create() {
   busy.value = true; error.value = ''
-  try { await work('/reminder-rules', 'POST', form.value); await load() } catch (err) { error.value = err.message }
+  try { await work('/legacy/reminder-rules', 'POST', form.value); await load() } catch (err) { error.value = err.message }
   finally { busy.value = false }
 }
-async function toggle(rule) { try { await work(`/reminder-rules/${rule.id}`, 'PATCH', { active: !rule.active }); await load() } catch (err) { error.value = err.message } }
-async function done(log) { try { await work(`/reminders/${log.id}/done`, 'POST', {}); await load() } catch (err) { error.value = err.message } }
-async function schedule(rule) { try { await work(`/reminder-rules/${rule.id}`, 'PATCH', { cron_expr: rule.cron_expr }); await load() } catch (err) { error.value = err.message } }
+async function toggle(rule) { try { await work(`/legacy/reminder-rules/${rule.id}`, 'PATCH', { active: !rule.active }); await load() } catch (err) { error.value = err.message } }
+async function done(log) { try { await work(`/legacy/reminders/${log.id}/done`, 'POST', {}); await load() } catch (err) { error.value = err.message } }
+async function schedule(rule) { try { await work(`/legacy/reminder-rules/${rule.id}`, 'PATCH', { cron_expr: rule.cron_expr }); await load() } catch (err) { error.value = err.message } }
 onMounted(() => { load(); timer = setInterval(load, 30000) })
 onUnmounted(() => clearInterval(timer))
 </script>

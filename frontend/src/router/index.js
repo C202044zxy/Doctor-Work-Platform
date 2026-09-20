@@ -18,18 +18,32 @@ export const navigation = [
   { name: 'records', label: 'Medical Records', icon: 'Document' },
   { name: 'consultations', label: 'Consultations', icon: 'ChatDotRound' },
   { name: 'consultation-records', label: 'Consultation Records', icon: 'Document' },
-  { name: 'remote-consultation', label: 'Remote Consultation', icon: 'VideoCamera' },
-  { name: 'health-plans', label: 'Health Plans', icon: 'Document' },
-  { name: 'reminders', label: 'Reminders', icon: 'Tickets' },
-  { name: 'health', label: 'Health Management', icon: 'TrendCharts' },
+  { name: 'my-submissions', label: 'My submissions', icon: 'Document' },
   { name: 'review', label: 'Review Queue', icon: 'Checked', roles: MODULE_ROLES.review },
   { name: 'audit', label: 'Audit Log', icon: 'Tickets', roles: MODULE_ROLES.audit },
 ]
 
 const routes = [
-  { path: '/consultation-records', name: 'consultation-records', component: () => import('../views/ConsultationRecordsView.vue'), meta: { title: 'Consultation Records' } },
-  { path: '/health-plans', name: 'health-plans', component: () => import('../views/HealthPlansView.vue'), meta: { title: 'Health Plans' } },
-  { path: '/reminders', name: 'reminders', component: () => import('../views/RemindersView.vue'), meta: { title: 'Reminders' } },
+  {
+    path: '/consultation-records',
+    name: 'consultation-records',
+    component: () => import('../views/ConsultationRecordsView.vue'),
+    meta: { title: 'Consultation Records' },
+  },
+  {
+    path: '/legacy/health-plans',
+    name: 'legacy-health-plans',
+    component: () => import('../views/HealthPlansView.vue'),
+    meta: { title: 'Previous health plans' },
+  },
+  {
+    path: '/legacy/reminders',
+    name: 'legacy-reminders',
+    component: () => import('../views/RemindersView.vue'),
+    meta: { title: 'Previous reminders' },
+  },
+  { path: '/health-plans', redirect: '/legacy/health-plans' },
+  { path: '/reminders', redirect: '/legacy/reminders' },
   {
     path: '/login',
     name: 'login',
@@ -49,32 +63,51 @@ const routes = [
     component: () => import('../views/PatientListView.vue'),
     meta: { title: 'Patients' },
   },
+  // M5-T7. The consultation report is archived into the patient record, and the
+  // tab that reads it back has to hang off a patient-scoped screen. M2-04 owns
+  // this page; what stands here today is the header plus that one tab.
+  {
+    path: '/patients/:patientNo',
+    name: 'patient-detail',
+    component: () => import('../views/PatientDetailView.vue'),
+    // The number is a prop so the view never reaches into the route object.
+    props: true,
+    meta: { title: 'Patient detail' },
+  },
 
-  // B consultations, health plans and reminders use real APIs.
-  // Other owners replace their own demo screens.
+  // The remaining modules. Each screen is built and navigable; the content
+  // behind it is fabricated (see api/demo-data.js) until the owning backend
+  // task lands. Patients, the two patient-detail tabs (consultation records and
+  // health data) and the remote-consultation tab under /consultations read the
+  // real service today.
   {
     path: '/records',
     name: 'records',
     component: () => import('../views/MedicalRecordView.vue'),
     meta: { title: 'Medical Records' },
   },
+  // M3 + M5 behind one entry: the patient thread and the expert consultation are
+  // the two halves of `ConsultationsView.vue`, which picks between them with a tab
+  // in the query string.
   {
     path: '/consultations',
     name: 'consultations',
     component: () => import('../views/ConsultationsView.vue'),
     meta: { title: 'Consultations' },
   },
+  // M5 shipped remote consultation as a page of its own. The path stays as a
+  // redirect so a link written before the merge -- a bookmark, a scenario sheet,
+  // a screenshot in a slide -- still lands on the right tab. Deliberately no
+  // sidebar entry: it is the same screen the entry above opens, one tab over.
   {
     path: '/remote-consultation',
-    name: 'remote-consultation',
-    component: () => import('../views/RemoteConsultationView.vue'),
-    meta: { title: 'Remote Consultation' },
+    redirect: { name: 'consultations', query: { tab: 'remote' } },
   },
   {
-    path: '/health',
-    name: 'health',
-    component: () => import('../views/HealthManagementView.vue'),
-    meta: { title: 'Health Management' },
+    path: '/my-submissions',
+    name: 'my-submissions',
+    component: () => import('../views/ReviewQueueView.vue'),
+    meta: { title: 'My submissions' },
   },
   {
     path: '/review',

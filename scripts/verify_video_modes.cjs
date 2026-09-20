@@ -130,4 +130,4 @@ async function main() {
     await browser.close()
   }
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1 })
+main().catch(error => { console.error(error.message.replace(/Bearer [A-Za-z0-9_.-]+/g, 'Bearer [redacted]')); process.exitCode = 1 })

@@ -6,10 +6,10 @@ const today = () => new Date().toLocaleDateString('en-CA')
 const blank = () => ({ patient_no: '', title: '', goals: '', instructions: '', entries: [{ kind: 'medication', text: '', done: false }], start_date: today(), end_date: today(), status: 'active' })
 const form = ref(blank()), editing = ref(false), reminder = ref(false), cron = ref('0 9 * * *'), rtype = ref('medication')
 async function load() {
-  try { const data = await work(`/health-plans?${new URLSearchParams({ page: page.value, size: 20, ...(query.value ? { patient_no: query.value.trim() } : {}) })}`); plans.value = data.items; total.value = data.total }
+  try { const data = await work(`/legacy/health-plans?${new URLSearchParams({ page: page.value, size: 20, ...(query.value ? { patient_no: query.value.trim() } : {}) })}`); plans.value = data.items; total.value = data.total }
   catch (err) { error.value = err.message }
 }
-async function open(id) { try { selected.value = await work(`/health-plans/${id}`); editing.value = false } catch (err) { error.value = err.message } }
+async function open(id) { try { selected.value = await work(`/legacy/health-plans/${id}`); editing.value = false } catch (err) { error.value = err.message } }
 function create() { selected.value = null; form.value = blank(); reminder.value = false; editing.value = true; error.value = '' }
 function edit() {
   const p = selected.value
@@ -20,7 +20,7 @@ async function save() {
   busy.value = true; error.value = ''
   try {
     const body = { ...form.value, ...(reminder.value ? { new_reminder_rules: [{ patient_no: form.value.patient_no, title: form.value.title, rtype: rtype.value, cron_expr: cron.value, active: true }] } : {}) }
-    selected.value = await work(selected.value ? `/health-plans/${selected.value.id}` : '/health-plans', selected.value ? 'PATCH' : 'POST', body)
+    selected.value = await work(selected.value ? `/legacy/health-plans/${selected.value.id}` : '/legacy/health-plans', selected.value ? 'PATCH' : 'POST', body)
     editing.value = false; await load()
   } catch (err) { error.value = err.message }
   finally { busy.value = false }
@@ -29,7 +29,7 @@ onMounted(load)
 </script>
 <template>
   <p v-if="error" class="error" role="alert">{{ error }}</p>
-  <div class="toolbar"><el-input v-model="query" placeholder="Patient number" clearable style="width:220px" /><el-button @click="page = 1; load()">Search</el-button><el-button type="primary" @click="create">Create health plan</el-button><router-link to="/reminders">Reminders</router-link></div>
+  <div class="toolbar"><el-input v-model="query" placeholder="Patient number" clearable style="width:220px" /><el-button @click="page = 1; load()">Search</el-button><el-button type="primary" @click="create">Create health plan</el-button><router-link to="/legacy/reminders">Reminders</router-link></div>
   <div class="columns">
     <section class="panel"><h2>Health plans</h2><p v-if="!plans.length">No plans found.</p><button v-for="plan in plans" :key="plan.id" class="plan" @click="open(plan.id)"><strong>{{ plan.title }}</strong><p>{{ plan.patient_no }} · {{ plan.status }}</p><small>{{ plan.start_date }} — {{ plan.end_date }}</small></button><el-pagination v-model:current-page="page" :total="total" :page-size="20" layout="prev, pager, next" @current-change="load" /></section>
     <section class="panel">

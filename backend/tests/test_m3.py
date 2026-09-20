@@ -244,7 +244,7 @@ def test_upgrade_from_each_branch_preserves_data_and_can_downgrade(previous, tmp
             assert (
                 db.scalar(text("SELECT name FROM departments WHERE id=99")) == "Migration sentinel"
             )
-            assert db.scalar(text("SELECT version_num FROM alembic_version")) == "c93f105d2e71"
+            assert db.scalar(text("SELECT version_num FROM alembic_version")) == "e6a31c29d408"
         assert "call_log" in inspect(engine).get_table_names()
     finally:
         engine.dispose()

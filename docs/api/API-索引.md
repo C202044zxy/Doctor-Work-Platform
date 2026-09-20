@@ -333,14 +333,24 @@
 |---|---|---|
 | `name` | string | 姓名**模糊**匹配 |
 | `patient_no` | string | 患者号**精确**匹配（不是模糊） |
-| `symptom_tags` | string[] | 症状标签匹配 |
+| `symptom_tags` | string[] | 症状标签**精确**匹配，可重复传参命中任意一个（存一行一个标签，不再是字符串子串匹配） |
 | `admitted_from` / `admitted_to` | date | 入院日期区间 |
+| `birth_from` / `birth_to` | date | 出生日期区间（含端点） |
 | `department` | string | 科室筛选（非 admin 时强制为本人科室） |
+| `gender` | string | 性别精确匹配：`male` / `female` / `unknown` |
+| `allergen` | string[] | 过敏原编码匹配，可重复传参；比较前转大写，`penicillin` 能命中 `PENICILLIN` |
+| `allergy_severity` | string[] | 过敏严重程度匹配：`mild` / `moderate` / `severe`。与 `allergen` 是**两个独立条件**（同一位患者的两条过敏记录可以分别满足） |
+| `phone` / `id_card` | string | 精确匹配，比对的是加密列旁的**盲索引**（HMAC 摘要），空格与短横线被忽略：`138-0000-1234` 与 `13800001234` 是同一个号；明文不参与比较，该列也不返回 |
 | `group_id` | int | 按分组筛选 |
 | `page` / `size` | int | 分页 |
 
-> **四个搜索条件必须可任意 AND 组合**（M2-01）：姓名模糊、`patient_no` 精确、`symptom_tags` 匹配、入院日期区间。四条件全空 → 返回全量分页（场景 M2-T1）。
+> **所有搜索条件必须可任意 AND 组合**（M2-01）：姓名模糊、`patient_no` 精确、`symptom_tags` 匹配、入院日期区间等。全部留空 → 返回全量分页（场景 M2-T1）。
 > 默认按 `created_at` 倒序（M2-01）。
+> 筛不到东西不是错误：未登记的科室、不存在的分组、没人有的标签都返回空列表；但 `gender` / `allergy_severity` 的非法枚举值、以及起止日倒置返回 422——那是拼写错误。
+
+**`POST /api/patients` 请求体**（M2-01 / M2-02）
+
+一次请求即可建立**全套信息**：基础字段（`name`、`gender`、`birth_date`、`department`、`notes`、`admitted_at`、`phone`、`id_card`）+ `symptom_tags`（去重后一行一个标签）+ `allergies`（与患者**同一事务**写入；任一条不合法则整单 422，不会留下半个患者）。`allergen` 允许自定义值，字典随后自动列出它（字典从"已记录的过敏"长出，不需要单独注册接口）。
 
 **`GET /api/patients` 单条 `items[]` 结构**
 
@@ -457,7 +467,7 @@
 | GET | `/api/emr/records` | 🔒 | 列表，支持 `patient_no` / `status` / `author_id` 筛选 + 分页 | M4-02 |
 | POST | `/api/emr/records` | `senior`/`junior` | 新建草稿 | M4-02 |
 | GET | `/api/emr/records/{id}` | 🔒 | 详情，含 `content_json`、`status`、`version` | M4-02 |
-| PATCH | `/api/emr/records/{id}` | 作者 | 保存草稿，**带 `version` 做乐观锁** | M4-05 |
+| PATCH | `/api/emr/records/{id}` | 作者 | 保存草稿，**带 `version` 与 `revision` 做乐观锁** | M4-05 |
 | POST | `/api/emr/records/{id}/submit` | 作者 | 提交审阅：`draft` → `pending` | M4-02 |
 | GET | `/api/emr/records/{id}/versions` | 🔒 | 版本历史 | M4-02 |
 | POST | `/api/emr/records/{id}/amend` | **作者** | 对**已归档**病历追加补记（不修改原文）。**不是 `senior` 专属**——场景 M4-T5 里补记的人正是 `dr_wang`（junior） | M4-02 |
@@ -465,11 +475,12 @@
 **`PATCH` 请求体**
 
 ```json
-{ "content_json": { "chief_complaint": "…" }, "version": 3 }
+{ "content_json": { "chief_complaint": "…" }, "version": 3, "revision": 7 }
 ```
 
-- `version` 不匹配返回 **409**，前端提示"病历已被他人修改，请刷新"。
+- `version` 或 `revision` 不匹配返回 **409**，前端提示"病历已被他人修改，请刷新"。
 - 目标病历 `status = archived` 时返回 **409**（归档锁定，只读）——**不是 400**。两个 409 用 `message` 区分。
+- `revision` 是独立并发标识，每次变更递增；`PATCH` 不增加 `version`，但必须携带读回的 `revision`，数据库以 compare-and-swap 防止并发覆盖。详情返回 `template_snapshot`，编辑器始终按创建时的模板渲染。
 - 版本号每次提交 **+1 并存全量快照**（不是只存差异）；可查历史版本列表并按版本号查看内容。
 - 病历内容按模板 `fields_json` 校验，必填项缺失 → **422 且指出字段名**。
 - 归档后的修订只能走**「补记」**（新增关联版本，原版本内容不变），不能改原文。
@@ -521,7 +532,7 @@
 
 | `status` | 触发条件 | 前端表现 | 能否保存 | HTTP |
 |---|---|---|---|---|
-| 🔴 `blocked` | 药品与患者过敏原冲突 | 红色弹窗，**只有"取消"/"更换药品"，没有"强制开立"** | **禁止，不写库** | **409** |
+| 🔴 `blocked` | 药品与患者过敏原冲突 | 红色弹窗，**只有"取消"/"更换药品"，没有"强制开立"** | **禁止，不写库** | 保存 **409**；预检 **200** |
 | 🟡 `warning` | 剂量超出常规范围 | 黄色弹窗，"确认继续"，理由**可选填** | 可保存（有理由则记） | 200 |
 | 🟢 `passed` | 无冲突 | 无弹窗 | 可保存 | 200 |
 
@@ -627,7 +638,9 @@
 | GET | `/api/meetings/{id}/report` | 参与人 **或**能触达该患者的同科室医生 | 会诊报告（归档后从患者档案可读） | M5-03 |
 | POST | `/api/meetings/{id}/report` | **参与人** | 生成/保存报告（场景 M5-T5 要让非参与医生拿 403） | M5-03 |
 | GET | `/api/meetings/{id}/report/print` | 参与人 | 返回可打印的 HTML（Jinja2 渲染） | M5-03 |
+| GET | `/api/meetings/doctors` | 🔒 | **契约之外**：专家候选目录（`id/username/name/title/department`，**不含邮箱**）。契约里 `/api/users` 是管理员专属，喂不了 `junior` 发起的专家选择框；M1-07 落地后删除 | M5-01 |
 
+- **实现状态（2026-09-17）**：上表 11 条契约路径 + 1 条契约外新增（`/api/meetings/doctors`）全部落地于 `backend/app/meetings.py`，`backend/tests/test_meetings.py` **17 个用例通过**；前端 `/remote-consultation` 与患者详情「会诊记录」Tab 已接真实接口。该页自 2026-09-18 起作为 `ConsultationsView.vue` 的子组件挂在 `/consultations?tab=remote` 上，`RemoteConsultationView.vue` 本身未改；旧路径 `/remote-consultation` 保留为重定向。
 - **发起人可以是 `junior`。** 场景 M5-T1 的原文就是"**`dr_wang` 对 `P20260001` 发起会诊邀请 `dr_chen`**"，而 `dr_wang` 是 junior。早期草稿把发起限死为 `senior`，**会让流程 2 的演示跑不起来**。
 - **状态机非法跳转返回 409**（如 `requested` 直接跳 `completed`；场景 M5-T3）。
 - 非受邀人访问该会诊 → 403/404，不泄露存在性。
@@ -812,22 +825,23 @@
 
 ## 3. 前端页面 ↔ 接口对照
 
-> 本表按 `frontend/src/router/index.js`、`frontend/src/views/`、`frontend/src/api/` 的**代码事实**填写（2026-09-14 核对），**不含负责人/归属列**——任务归属见 `docs/01-任务安排.md`。
-> "现状"只有两种取值：**真实接口**（`import ... from '../api/client'`）与 **假数据**（`import ... from '../api/demo-data'`）。
+> 本表按 `frontend/src/router/index.js`、`frontend/src/views/`、`frontend/src/api/` 的**代码事实**填写（2026-09-18 核对），**不含负责人/归属列**——任务归属见 `docs/01-任务安排.md`。
+> "现状"取值：**真实接口**（`import ... from '../api/client'`）、**假数据**（`import ... from '../api/demo-data'`）、**空态**（模块零代码，页面写明这一点，既无接口也无假数据）。第三种是为 `/consultations` 的「Patient consultation」Tab 立的——那个模块还没有代码，而它原来的假数据已经删掉，两种旧取值都描述不了它。
 
 **路由与视图（`frontend/src/router/index.js`）**
 
 | 路由 | 视图 | 消费的接口 | 现状 |
 |---|---|---|---|
 | `/login` | `LoginView.vue` | `POST /api/auth/login` → `POST /api/auth/send-code` → `POST /api/auth/verify-code`；注册分支 `POST /api/auth/signup` → `POST /api/auth/signup/verify`；人脸分支 `POST /api/auth/face/login` | ✅ **真实接口** |
-| `/dashboard` | `DashboardView.vue` | 无（工作台计数、排班、待办全部来自 `demo-data.js`） | ⚠️ **假数据** |
+| `/dashboard` | `DashboardView.vue` | `GET /api/me`（会话里已有，无独立请求）/ `/api/meetings`（邀请与本周会诊）/ `/api/patients`（本人范围内患者与姓名）/ `/api/reminders?unread_only=true`（未读项，非消费式）/ `/api/reminders/unread-count` | ✅ **真实接口**（2026-09-19） |
 | `/patients` | `PatientListView.vue` | `GET /api/patients`、`POST /api/patients`、`DELETE /api/patients/{patient_no}`、`GET /api/departments` | ✅ **真实接口** |
-| `/records` | `MedicalRecordView.vue` | 计划消费 `/api/emr/templates`、`/api/emr/records`、`PATCH /api/emr/records/{id}`、`/api/drugs`、`POST /api/emr/orders/validate` | ⚠️ **假数据** |
-| `/consultations` | `ConsultationsView.vue` | 计划消费 `/api/consultations`、`GET /api/consultations/{id}/messages`、`WS /ws/chat/{room_id}`、`POST /api/uploads/images` | ⚠️ **假数据** |
-| `/remote-consultation` | `RemoteConsultationView.vue` | 计划消费 `/api/meetings`、`/api/meetings/{id}/materials`、`/api/meetings/{id}/report` | ⚠️ **假数据** |
-| `/health` | `HealthManagementView.vue` | 计划消费 `/api/health-plans`、`GET /api/patients/{no}/vitals/trend`、`/api/reminders/unread-count` | ⚠️ **假数据** |
-| `/review` | `ReviewQueueView.vue` | 计划消费 `/api/emr/reviews`、`POST /api/emr/records/{id}/review`、`GET /api/emr/my-submissions` | ⚠️ **假数据** |
-| `/audit` | `AuditLogView.vue` | 计划消费 `GET /api/audit-logs`、`GET /api/audit-logs/export` | ⚠️ **假数据** |
+| `/patients/:patientNo` | `PatientDetailView.vue` | `GET /api/patients/{patient_no}`、`GET /api/meetings?patient_no=…`、`GET /api/meetings/{id}/report`（`?version=` 读历史版本）、`GET /api/meetings/{id}/report/print`（仅参与人）；「Health data」Tab（`components/PatientHealth.vue`，M6）消费 `/api/patients/{no}/vitals`、`/vitals/trend`、`/api/health-plans`、`/api/reminder-rules`、`/api/reminders`、`/unread-count`、`/api/patients/{no}/assessments`、`/api/assessments/{id}` | ✅ **真实接口**（**「会诊记录」Tab** 属 M5、**「Health data」Tab** 属 M6，其余 Tab 属 M2-04） |
+| `/records` | `MedicalRecordView.vue` | 消费 `/api/emr/templates`、`/api/emr/records`、`PATCH /api/emr/records/{id}`、`/api/drugs`、`POST /api/emr/orders/validate` | ✅ **真实接口** |
+| `/consultations` | `ConsultationsView.vue` | **两个 Tab**：「Patient consultation」（M3，**零代码**，当前是写明未做的空态，不消费任何接口，也没有假数据）；「Remote consultation」（M5，消费列在下一行的那组接口） | ⚠️ **一半真实、一半空态** |
+| `/consultations?tab=remote` | `RemoteConsultationView.vue`（作为子组件） | `GET/POST /api/meetings`、`/accept`、`/decline`、`/start`、`/complete`、`/api/meetings/doctors`、`/api/meetings/{id}/materials`、`/api/materials/{id}/download`、`/api/meetings/{id}/report`、`/report/print` | ✅ **真实接口** |
+| `/remote-consultation` | — | 无（重定向到 `/consultations?tab=remote`） | ➡️ **重定向** |
+| `/review`（senior）与 `/my-submissions`（本人） | `ReviewQueueView.vue` | 消费 `/api/emr/reviews`、`POST /api/emr/records/{id}/review`、`GET /api/emr/my-submissions` | ✅ **真实接口** |
+| `/audit` | `AuditLogView.vue` | `GET /api/audit-logs`（筛选 / 分页）、`GET /api/audit-logs/export`（服务端 CSV） | ✅ **真实接口**（T12） |
 
 **应用外壳（`frontend/src/App.vue` / `frontend/src/session.js`）**
 
@@ -835,21 +849,21 @@
 |---|---|---|
 | 会话恢复（路由守卫） | `GET /api/me` | ✅ **真实接口** |
 | 顶栏登出 | `POST /api/auth/logout` | ✅ **真实接口** |
-| 侧边栏计数 | `demo-data.js` 的 `counts` | ⚠️ **假数据** |
+| 外壳铃铛红点 | `GET /api/reminders/unread-count` | ✅ **真实接口** |
 | 后端可用性探测 | `GET /api/health/ready`（`health.ready()`） | ✅ **真实接口** |
 
 **尚未建立的前端页面**（有接口、有场景，但没有对应的 `.vue` 文件）
 
 | 页面 | 对应任务 | 说明 |
 |---|---|---|
-| 患者详情页 | M2-04 | `PatientDetailView` 不存在 |
+| 患者详情页 | M2-04 | `PatientDetailView` 已随 M5 建出**身份头 + 「会诊记录」Tab**；病史 / 分组 / 过敏编辑仍属 M2-04 |
 | 用户管理页 | M1-07 | `frontend/src/views/` 下无对应文件 |
 | 临时授权管理页 | M1-06 | 同上 |
-| 我的提交 | M4-07 | 现由 `ReviewQueueView` 以假数据承担 |
-| 医嘱面板 | M4-06 | 现由 `MedicalRecordView` 以假数据承担 |
+| 我的提交 | M4-07 | 已实现：`/my-submissions` 使用真实接口 |
+| 医嘱面板 | M4-06 | 已实现：`MedicalRecordView` 使用真实校验与医嘱接口 |
 | 系统监控页 / 设备管理页 / 回放页 / 权限矩阵页 | S5 / S4 / S3 / S6 | 模拟模块，均零代码 |
 
-> **⚠️ 演示红线**：`demo-data.js` 目前被 **7 个 View + `App.vue`** 直接 import（`AuditLogView` / `DashboardView` / `ConsultationsView` / `MedicalRecordView` / `HealthManagementView` / `ReviewQueueView` / `RemoteConsultationView`）。**在 M9-05 收口前，这些页面上的任何数字都不是真实数据**，不得进入演示路径。目前只有 `/login`、`/patients` 两页以及外壳的会话/登出/探针走真实接口。
+> **演示口径**：合并 M4 与 M6 后，View 和 App.vue 无 demo-data.js 直接导入。M4、M5、M6 与工作台使用真实接口；M3 患者问诊仍为未实现空态。
 
 ---
 
@@ -926,3 +940,8 @@
 - `GET /api/notify-outbox`：仅 admin，分页读取模拟记录。
 
 字段与错误状态以 openapi.yaml 为准。查看接口使用 POST 请求体避免 ticket 出现在 URL；这次不实现短信注册或微信提醒。
+
+
+### main 与旧分支兼容接口（2026-09-20）
+
+标准 `/api/emr/orders`、`/api/health-plans`、`/api/reminder-rules`、`/api/reminders` 使用 main 的 M4/M6 契约。原分支接口加 `/api/legacy` 前缀，保留旧数据访问；字段见 `openapi.yaml` 引用的 `legacy.openapi.json`。例如标准未读响应为 `{unread}`，旧接口为 `{unread_count}`，前端不可混用。旧医嘱仍需要原适配器，缺失返回 503，正式开医嘱请用 M4 病历页面。

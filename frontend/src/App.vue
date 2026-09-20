@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
@@ -11,17 +11,14 @@ import {
   Odometer,
   SwitchButton,
   Tickets,
-  TrendCharts,
   User,
-  VideoCamera,
 } from '@element-plus/icons-vue'
 
 import { navigation } from './router'
 import { canOpen } from './access'
-import { currentClinician, signOut } from './session'
+import { currentClinician, isSignedIn, signOut } from './session'
 import { ElMessage } from 'element-plus'
-import { authentication, health } from './api/client'
-import { work } from './api/work'
+import { authentication, health, reminders } from './api/client'
 
 // Navigation entries carry an icon name; resolve them to components here so the
 // route table itself stays free of presentation concerns.
@@ -30,8 +27,6 @@ const ICONS = {
   User,
   Document,
   ChatDotRound,
-  VideoCamera,
-  TrendCharts,
   Checked,
   Tickets,
 }
@@ -58,15 +53,33 @@ const visibleNavigation = computed(() =>
 const serviceState = ref('checking')
 const serviceLabel = computed(() => SERVICE_LABELS[serviceState.value])
 
-// T36 counts only the signed-in doctor's unread persisted reminders.
-const attentionCount = ref(0)
-let reminderTimer
-async function refreshReminders() {
-  if (route.meta.public) return
-  try { attentionCount.value = (await work('/reminders/unread-count')).unread_count } catch { attentionCount.value = 0 }
+// M6-T6. This badge was `counts.alerts + counts.pendingReviews` -- two fabricated
+// figures from api/demo-data.js, shown on every screen in the shell, so the one
+// piece of the demo path that was visible everywhere was invented. It is now the
+// real unread-reminder count, which is exactly what `GET /api/reminders/unread-count`
+// exists for: "so the workspace shell can poll one cheap endpoint instead of
+// fetching the list to decide whether to show it".
+const unread = ref(0)
+let unreadTimer = null
+
+async function refreshUnread() {
+  // Nothing to count while signed out, and the endpoint would answer 401.
+  if (!isSignedIn.value) {
+    unread.value = 0
+    return
+  }
+  try {
+    unread.value = (await reminders.unreadCount()).unread
+  } catch {
+    // A poll that fails leaves the last number on screen. There is nothing the
+    // reader could do about it, and a toast per minute would be worse than a
+    // stale badge.
+  }
 }
- onMounted(() => { refreshReminders(); reminderTimer = setInterval(refreshReminders, 15000); window.addEventListener('reminders-read', refreshReminders) })
-onUnmounted(() => { clearInterval(reminderTimer); window.removeEventListener('reminders-read', refreshReminders) })
+
+// A screen change is the natural moment to re-check: the reader may have just
+// marked a reminder done, or opened the list that consumes them.
+watch(() => route.fullPath, refreshUnread)
 
 onMounted(async () => {
   try {
@@ -75,7 +88,14 @@ onMounted(async () => {
   } catch {
     serviceState.value = 'unreachable'
   }
+  await refreshUnread()
+  // The reminder job fires on a cron the shell does not control, so the bell has
+  // to ask. One minute is well inside the demo's "wait two minutes" step and
+  // costs one indexed count.
+  unreadTimer = setInterval(refreshUnread, 60_000)
 })
+
+onUnmounted(() => clearInterval(unreadTimer))
 
 const accountBusy = ref(false)
 async function handleAccount(command) {
@@ -143,8 +163,18 @@ async function handleAccount(command) {
             {{ serviceLabel }}
           </span>
 
-          <el-badge :value="attentionCount" :hidden="attentionCount === 0" :max="99" class="bell">
-            <el-button text circle :icon="Bell" aria-label="Notifications" @click="router.push('/reminders')" />
+          <!-- No `:max`, so the badge shows the count it actually has. The
+               dashboard is where the notifications are listed, so that is where
+               the bell goes; there is no separate notifications screen. -->
+          <el-badge :value="unread" class="bell">
+            <el-button
+              text
+              circle
+              :icon="Bell"
+              aria-label="Notifications — open the dashboard"
+              title="Notifications"
+              @click="router.push({ name: 'dashboard' })"
+            />
           </el-badge>
 
           <el-dropdown trigger="click" @command="handleAccount">

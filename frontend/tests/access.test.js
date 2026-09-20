@@ -6,7 +6,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { canOpen, MODULE_ROLES } from '../src/access.js'
+import { canOpen, isScreenRefusal, MODULE_ROLES } from '../src/access.js'
 
 test('a junior may not open the review queue or the audit log', () => {
   assert.equal(canOpen(MODULE_ROLES.review, 'junior'), false)
@@ -19,8 +19,8 @@ test('a senior reviews but does not read the audit log', () => {
   assert.equal(canOpen(MODULE_ROLES.audit, 'senior'), false)
 })
 
-test('an admin may open both', () => {
-  assert.equal(canOpen(MODULE_ROLES.review, 'admin'), true)
+test('an admin may read audit but cannot review clinical records', () => {
+  assert.equal(canOpen(MODULE_ROLES.review, 'admin'), false)
   assert.equal(canOpen(MODULE_ROLES.audit, 'admin'), true)
 })
 
@@ -32,4 +32,16 @@ test('an ungated screen is open to anyone signed in, and to nobody else', () => 
   assert.equal(canOpen(undefined, 'admin'), true)
   // An empty role is an unloaded user, not a superuser.
   assert.equal(canOpen(MODULE_ROLES.audit, ''), false)
+})
+
+test('only a missing permission is a refusal of the whole screen', () => {
+  // The service uses 403 for both, and the difference decides whether the reader
+  // loses the page. A senior creating a patient in another department must read the
+  // sentence on the form; a role without `audit.read` must be sent to the explainer.
+  assert.equal(isScreenRefusal(403, 'Missing permission: audit.read'), true)
+  assert.equal(isScreenRefusal(403, 'Cannot write patients in another department'), false)
+  assert.equal(isScreenRefusal(403, 'Only meeting participants may do this'), false)
+  // Nothing else is a screen refusal, whatever the message says.
+  assert.equal(isScreenRefusal(404, 'Missing permission: audit.read'), false)
+  assert.equal(isScreenRefusal(500, undefined), false)
 })

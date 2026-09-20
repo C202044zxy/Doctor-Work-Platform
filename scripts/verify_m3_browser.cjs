@@ -79,6 +79,17 @@ async function main() {
     await a.page.screenshot({ path: path.join(backend, 'runtime', 'm3-records-browser.png'), fullPage: true })
     assert.deepEqual(errors, [])
     console.log('PASS: hangup metadata, caller history refresh, ended read-only, record filter, BOM CSV, no browser exceptions')
+    await a.page.goto(`${base}/consultations?room=${room.id}`)
+    await a.page.getByText('This conversation is read-only.', { exact: true }).waitFor()
+    const remoteResponse = a.page.waitForResponse(response => response.url().includes('/api/meetings?') && response.request().method() === 'GET')
+    await a.page.getByRole('tab', { name: 'Remote consultation', exact: true }).click()
+    assert.equal((await remoteResponse).status(), 200)
+    await a.page.getByRole('heading', { name: 'Remote Consultation', exact: true }).waitFor()
+    assert.equal(new URL(a.page.url()).searchParams.get('room'), String(room.id))
+    await a.page.getByRole('tab', { name: 'Patient consultation', exact: true }).click()
+    await a.page.getByText('This conversation is read-only.', { exact: true }).waitFor()
+    assert.deepEqual(errors, [])
+    console.log('PASS: M3/M5 tab switching loads real meeting API, preserves room query and remounts chat')
     console.log('Manual physical-camera, microphone quality, LAN HTTPS and Excel checks remain required.')
   } finally {
     for (const { context, jwt } of contexts) {
@@ -87,4 +98,4 @@ async function main() {
     await browser.close()
   }
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1 })
+main().catch(error => { console.error(error.message.replace(/Bearer [A-Za-z0-9_.-]+/g, 'Bearer [redacted]')); process.exitCode = 1 })

@@ -68,9 +68,9 @@ tags:
   - name: Patients
     description: Patient records, history, allergies, groups. Tasks T13, T14, T17.
   - name: EMR
-    description: Templates, records, orders, review and archive. Tasks T18-T24.
+    description: Templates, records, orders, review and archive. Tasks M4-01-M4-07.
   - name: Prescriptions
-    description: Order validation and the drug dictionary. Task T21.
+    description: Order validation and the drug dictionary. Task M4-04.
   - name: Consultations
     description: Online consultation, messaging, image upload, call metadata. Tasks T25-T29.
   - name: Meetings
@@ -84,6 +84,26 @@ security:
   - bearerAuth: []
 
 paths:
+  /api/legacy/health-plans:
+    $ref: './legacy.openapi.json#/paths/~1api~1legacy~1health-plans'
+  /api/legacy/health-plans/{id}:
+    $ref: './legacy.openapi.json#/paths/~1api~1legacy~1health-plans~1{id}'
+  /api/legacy/reminder-rules:
+    $ref: './legacy.openapi.json#/paths/~1api~1legacy~1reminder-rules'
+  /api/legacy/reminder-rules/{id}:
+    $ref: './legacy.openapi.json#/paths/~1api~1legacy~1reminder-rules~1{id}'
+  /api/legacy/reminders/unread-count:
+    $ref: './legacy.openapi.json#/paths/~1api~1legacy~1reminders~1unread-count'
+  /api/legacy/reminders:
+    $ref: './legacy.openapi.json#/paths/~1api~1legacy~1reminders'
+  /api/legacy/reminders/{id}/done:
+    $ref: './legacy.openapi.json#/paths/~1api~1legacy~1reminders~1{id}~1done'
+  /api/legacy/emr/orders:
+    $ref: './legacy.openapi.json#/paths/~1api~1legacy~1emr~1orders'
+  /api/legacy/emr/orders/{id}:
+    $ref: './legacy.openapi.json#/paths/~1api~1legacy~1emr~1orders~1{id}'
+  /api/legacy/emr/orders/{id}/stop:
+    $ref: './legacy.openapi.json#/paths/~1api~1legacy~1emr~1orders~1{id}~1stop'
   /api/auth/sms/send:
     post:
       tags: [Auth]
@@ -678,13 +698,18 @@ paths:
       tags: [Patients]
       summary: Search patients
       description: |
-        Task T13. The four search conditions — fuzzy name, exact patient number,
-        symptom tag, and admission-date range — combine freely with AND, and all four
-        may be sent at once. With none set, the full page for the caller's department is
-        returned. Results default to `created_at` descending.
+        Task T13. Every condition below combines freely with AND and all of them may be
+        sent at once: fuzzy name, exact patient number, symptom tag, department, gender,
+        the admission-date and birth-date ranges, the allergy code and severity, the two
+        identifier matches, and the T17 group filter. With none set, the full page for
+        the caller's department is returned. Results default to `created_at` descending.
 
-        A non-admin caller is silently restricted to their own department (T09); passing
-        another department does not widen the result set.
+        A caller without `data.all` is silently restricted to their own department
+        (T09); naming another department, or another department's group, narrows the
+        result rather than widening it. A filter that matches nothing — an unknown
+        department, an unknown group, a tag nobody carries — is an empty page, while a
+        value that is not a legal enum (`gender`, `allergy_severity`) or a reversed
+        date range is a 422.
       parameters:
         - name: name
           in: query
@@ -712,6 +737,60 @@ paths:
             example: [胸痛, 高血压]
         - name: department
           in: query
+          description: |
+            Exact department name. It **stacks with** the other conditions instead of
+            replacing them, so a caller without `data.all` who names another department
+            narrows their own scope to nothing rather than widening it.
+          schema: { type: string }
+        - name: gender
+          in: query
+          description: |
+            Exact gender. Any value outside the enum is a 422 naming the parameter,
+            because it is a typo rather than a filter that matches nothing.
+          schema: { type: string, enum: [male, female, unknown] }
+        - name: birth_from
+          in: query
+          description: Start of the birth-date range, inclusive.
+          schema: { type: string, format: date }
+        - name: birth_to
+          in: query
+          description: End of the birth-date range, inclusive.
+          schema: { type: string, format: date }
+        - name: allergen
+          in: query
+          description: |
+            Allergen dictionary code recorded on the patient, compared uppercase, so
+            `penicillin` finds `PENICILLIN`. Repeat the parameter to match any of
+            several codes.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+            example: [PENICILLIN, SULFONAMIDE]
+        - name: allergy_severity
+          in: query
+          description: |
+            Allergy severity. Repeatable, and a value outside the enum is a 422. This is
+            a separate condition over the patient's allergy rows, not a second test on
+            the row `allergen` matched: `allergen=PENICILLIN&allergy_severity=mild` means
+            "has a penicillin allergy and has a mild allergy".
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string, enum: [mild, moderate, severe] }
+        - name: phone
+          in: query
+          description: |
+            Exact mobile number, compared against a blind index — a keyed HMAC of the
+            normalised value kept beside the ciphertext. Spacing and hyphens are ignored,
+            so `138-0000-1234` and `13800001234` are one number; a prefix does not match.
+            The plaintext is never compared and the indexed column is never returned.
+          schema: { type: string }
+        - name: id_card
+          in: query
+          description: Exact national ID, matched the same way as `phone`.
           schema: { type: string }
         - name: group_id
           in: query
@@ -1108,7 +1187,7 @@ paths:
       operationId: listEmrTemplates
       tags: [EMR]
       summary: List record templates
-      description: Task T18. Feeds the template picker in the record editor.
+      description: Task M4-01. Feeds the template picker in the record editor.
       responses:
         '200':
           description: Templates.
@@ -1121,7 +1200,7 @@ paths:
       tags: [EMR]
       summary: Create a record template
       description: |
-        Task T18. **Administrator only** — T18 scenario S2 calls this with a `junior`
+        Task M4-01. **Administrator only** — M4-01 scenario S2 calls this with a `junior`
         account and requires 403, so the check must be on the endpoint and not merely on
         the menu. Writes an `emr_template.create` audit entry.
       requestBody:
@@ -1146,11 +1225,11 @@ paths:
       tags: [EMR]
       summary: Read a template with its field definitions
       description: |
-        Task T18. `fields_json` is the sole input to the frontend's dynamic form.
+        Task M4-01. `fields_json` is the sole input to the frontend's dynamic form.
         **Five** field types only: `text`, `number`, `date`, `select`, `textarea`.
         The dynamic-form engine is deliberately not generalised this term; a template
         that declares any other type is rejected with 422 naming the offending field,
-        which is what T18 scenario S2 submits.
+        which is what M4-01 scenario S2 submits.
       responses:
         '200':
           description: The template.
@@ -1163,7 +1242,7 @@ paths:
       tags: [EMR]
       summary: Update or deactivate a record template
       description: |
-        Task T18. Administrator only. Sending `is_active: false` is the "deactivate"
+        Task M4-01. Administrator only. Sending `is_active: false` is the "deactivate"
         action. Deactivating hides the template from the picker for new records but
         **leaves existing records renderable** — they keep rendering against the field
         list they were written with, so a later template change cannot scramble them.
@@ -1187,7 +1266,7 @@ paths:
       operationId: listEmrRecords
       tags: [EMR]
       summary: List medical records
-      description: Task T19. Restricted to the caller's department unless they are an administrator.
+      description: Task M4-02. Restricted to the caller's department unless they are an administrator.
       parameters:
         - name: patient_no
           in: query
@@ -1211,7 +1290,7 @@ paths:
       operationId: createEmrRecord
       tags: [EMR]
       summary: Start a record draft
-      description: Task T19. Creates an empty draft bound to a patient and a template.
+      description: Task M4-02. Creates an empty draft bound to a patient and a template.
       requestBody:
         required: true
         content:
@@ -1233,7 +1312,7 @@ paths:
       operationId: getEmrRecord
       tags: [EMR]
       summary: Read a record
-      description: Task T19. Includes `content_json`, `status`, and `version`.
+      description: Task M4-02. Includes `content_json`, `status`, and `version`.
       responses:
         '200':
           description: The record.
@@ -1246,9 +1325,9 @@ paths:
       tags: [EMR]
       summary: Save a record draft
       description: |
-        Task T22. The author only.
+        Task M4-05. The author only.
 
-        `version` is an optimistic lock; a mismatch returns 409 and the client must
+        `version` and `revision` are checked together; a mismatch returns 409 and the client must
         reload rather than overwrite. A save against an `archived` record returns 409
         because archiving locks the record to read-only. Both cases share the status
         code and are told apart by `message`.
@@ -1264,7 +1343,7 @@ paths:
         '200':
           description: |
             Saved. A draft save **does not** create a version — `version` advances only on
-            `submit` and `amend`. That is what makes T19 S1 read v1 (draft) → v2 (pending)
+            `submit` and `amend`. That is what makes M4-02 S1 read v1 (draft) → v2 (pending)
             → v3 rather than one version per save.
           content:
             application/json:
@@ -1276,7 +1355,7 @@ paths:
             One of two conflicts, told apart by `message`:
 
             - `"Already archived; it cannot be modified"` — the record was archived by a
-              senior physician. T19 scenario S2 asserts **409** here, not 400.
+              senior physician. M4-02 scenario S2 asserts **409** here, not 400.
             - `"The record was changed by someone else"` — the submitted `version` is stale.
           content:
             application/json:
@@ -1289,12 +1368,12 @@ paths:
       tags: [EMR]
       summary: Submit a draft for review
       description: |
-        Task T19. Moves `draft` to `pending` and places the record in a senior
+        Task M4-02. Moves `draft` to `pending` and places the record in a senior
         physician's queue. **Only `pending` records are reviewable**, so this call is the
         sole doorway into the queue.
 
         Each submit increments `version` and stores a **full snapshot** of the content,
-        not a diff — the version history must be readable on its own. T19 scenario S1
+        not a diff — the version history must be readable on its own. M4-02 scenario S1
         walks v1 (draft) → v2 (pending) → v3 and reads all three back.
 
         Content is validated against the template's `fields_json`; a missing required
@@ -1310,7 +1389,7 @@ paths:
         '400':
           description: |
             The record is in neither `draft` nor `rejected`, so there is nowhere to advance
-            from. **`rejected` is explicitly allowed**: T24 §3 has the author open a record a
+            from. **`rejected` is explicitly allowed**: M4-07 §3 has the author open a record a
             senior physician sent back, edit it, and submit it again — that increments
             `version` and returns it to `pending`.
           content:
@@ -1320,7 +1399,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: |
-            The record is `archived`. Archiving locks it read-only, and T24 §4 requires
+            The record is `archived`. Archiving locks it read-only, and M4-07 §4 requires
             **every** modifying call against an archived record to answer 409 — this one
             included, not just the draft save.
           content:
@@ -1338,7 +1417,7 @@ paths:
       tags: [EMR]
       summary: List a record's version history
       description: |
-        Task T19. Every submit appends a **full snapshot** of the content, so any version
+        Task M4-02. Every submit appends a **full snapshot** of the content, so any version
         can be read on its own without replaying the ones before it. History is never
         rewritten.
       parameters:
@@ -1357,11 +1436,11 @@ paths:
       tags: [EMR]
       summary: Append an amendment to an archived record
       description: |
-        Task T19. The only way to add to a record after archiving: the original text
+        Task M4-02. The only way to add to a record after archiving: the original text
         is never modified, the amendment is appended as a new version.
 
         **The author of the record**, and no one else — the same rule as saving a
-        draft. This is deliberately *not* a senior-only action: T19 scenario S2 has
+        draft. This is deliberately *not* a senior-only action: M4-02 scenario S2 has
         `dr_wang`, a junior physician, take the record he wrote to `archived` and then
         amend it into v4. A senior reviews and archives; the author amends.
 
@@ -1395,7 +1474,7 @@ paths:
       operationId: listOrders
       tags: [EMR]
       summary: List the orders on a record
-      description: Task T20.
+      description: Task M4-03.
       parameters:
         - name: record_id
           in: query
@@ -1413,14 +1492,14 @@ paths:
       tags: [EMR]
       summary: Place orders
       description: |
-        Task T20 / T21. **Validation runs again on the server before anything is
+        Task M4-03 / M4-04. **Validation runs again on the server before anything is
         persisted.** The client-side pre-check is a convenience; the server is the only
-        authority. T21 scenario S2 calls this endpoint directly with curl, bypassing the
+        authority. M4-04 scenario S2 calls this endpoint directly with curl, bypassing the
         frontend entirely, and still requires the block to hold — if a direct call can
         write a contraindicated order, that is a critical defect.
 
         A `blocked` item rejects the **whole request** and nothing is written; the audit
-        trail records `medical_order.blocked`. T21 writes the status code as 422 or 409;
+        trail records `medical_order.blocked`. M4-04 writes the status code as 422 or 409;
         this contract fixes **409** so the frontend has one case to handle.
 
         A `warning` item is allowed through and `validation_status` becomes `warning`, with
@@ -1428,11 +1507,11 @@ paths:
         when supplied it is stored, and a warning is never refused for want of one.
 
         A successful placement writes a `medical_order.create` audit entry — the third of
-        the three actions T20 S2 looks for, alongside the `medical_order.modify` written by
+        the three actions M4-03 S2 looks for, alongside the `medical_order.modify` written by
         the PATCH and the `medical_order.stop` written by the stop route.
 
         Each item is validated against its own required fields. A `medication` item with no
-        `dose` is refused with **422** and a `message` naming `dose` (T20 S2); lab and
+        `dose` is refused with **422** and a `message` naming `dose` (M4-03 S2); lab and
         examination items carry no dose and are not held to that rule.
 
         The patient is the owner of the record named by `record_id`; the server resolves
@@ -1479,7 +1558,7 @@ paths:
       tags: [EMR]
       summary: Modify an order
       description: |
-        Task T20. Re-runs validation; a modification can still be blocked. Writes a
+        Task M4-03. Re-runs validation; a modification can still be blocked. Writes a
         `medical_order.modify` audit entry.
       requestBody:
         required: true
@@ -1510,7 +1589,7 @@ paths:
       tags: [EMR]
       summary: Stop an order
       description: |
-        Task T20. A **soft stop**: `status` becomes `stopped` and the row stays, so the
+        Task M4-03. A **soft stop**: `status` becomes `stopped` and the row stays, so the
         prescription history remains complete. Nothing is physically deleted. Writes a
         `medical_order.stop` audit entry.
       parameters:
@@ -1529,7 +1608,7 @@ paths:
       tags: [Prescriptions]
       summary: Validate orders without saving them
       description: |
-        Task T21 and the centrepiece of the demonstration. Runs the same three-level
+        Task M4-04 and the centrepiece of the demonstration. Runs the same three-level
         check the save path uses and returns the verdict per item.
 
         - `blocked` — the drug conflicts with a recorded allergy. The client shows a
@@ -1545,7 +1624,7 @@ paths:
         - `passed` — no conflict.
 
         Both checks can fire on one item. Then both entries appear in `reasons`, ordered
-        by severity so the block reads first. T21 scenario S1 walks a six-case matrix —
+        by severity so the block reads first. M4-04 scenario S1 walks a six-case matrix —
         allergy hit, allergy miss, dose over range, dose in range, both at once, and a
         patient with no allergy history — and every cell must match.
 
@@ -1574,7 +1653,7 @@ paths:
       tags: [Prescriptions]
       summary: List the drug dictionary
       description: |
-        Task T21. Each drug carries the allergen codes it conflicts with, so the
+        Task M4-04. Each drug carries the allergen codes it conflicts with, so the
         dictionary and the allergy records share one vocabulary.
       parameters:
         - name: q
@@ -1595,7 +1674,7 @@ paths:
       tags: [EMR]
       summary: List records awaiting review
       description: |
-        Task T24. Senior physician only. Returns `pending` records from the caller's
+        Task M4-07. Senior physician only. Returns `pending` records from the caller's
         department. A junior physician receives 403, which is the behaviour the menu
         must reflect by hiding the review queue.
       parameters:
@@ -1615,18 +1694,18 @@ paths:
       tags: [EMR]
       summary: Approve or reject a record
       description: |
-        Task T24. Senior physician only, and only for a `pending` record.
+        Task M4-07. Senior physician only, and only for a `pending` record.
 
         **`approve` archives directly.** Status becomes `archived` in one step and
         `reviewer_id` / `reviewed_at` are recorded. There is **no intermediate
-        `approved` state** — T24 criterion 2 is "approve → archive", and the two-step
+        `approved` state** — M4-07 criterion 2 is "approve → archive", and the two-step
         flow this document previously asked A to decide on is settled here. There is
         therefore no separate archive call to make afterwards.
 
         `reject` requires `comment` and sets `rejected`, storing the comment as
         `review_comment`. The author sees it under "My submissions" and can edit and
         resubmit, which increments `version` and returns the record to `pending`
-        (T24 scenario S2 fails sign-off if the comment is not visible to the author).
+        (M4-07 scenario S2 fails sign-off if the comment is not visible to the author).
 
         Either outcome writes an audit entry naming the reviewer, the time, and the
         comment.
@@ -1648,6 +1727,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Archived record is locked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422':
@@ -1662,7 +1746,7 @@ paths:
       tags: [EMR]
       summary: List the caller's own submissions, including rejections
       description: |
-        Task T24. Feeds the author's "My submissions" view. It must include `rejected`
+        Task M4-07. Feeds the author's "My submissions" view. It must include `rejected`
         records **together with their `review_comment`**, because the author cannot act
         on a rejection they cannot read.
       parameters:
@@ -1685,10 +1769,9 @@ paths:
       tags: [EMR]
       summary: Archive a record
       description: |
-        Task T24. Senior physician only, and retained for archiving something that did
-        not come through approval. The normal path is `approve`, which archives in the
-        same call; this endpoint exists so an already-reviewed record can be locked
-        deliberately.
+        Task M4-07. Senior physician only. This is an alias for approving a pending
+        record and archives it immediately; draft and rejected records must first
+        be submitted. It records the reviewer and review time.
 
         Archiving locks the record to read-only: **every later `PATCH` returns 409**
         with "already archived", and only `/amend` can add to it. The frontend editor
@@ -3805,6 +3888,25 @@ components:
         symptom_tags:
           type: array
           items: { type: string }
+          description: |
+            Stored one row per tag, so a tag search is an equality rather than a
+            substring match. A repeat within one request is dropped, not stored twice.
+        allergies:
+          type: array
+          description: |
+            Allergies recorded in the same transaction as the patient: if one of them is
+            invalid the whole create is a 422 and no patient, tag or allergy row is
+            written. A custom allergen code is accepted, and the dictionary lists it from
+            then on because the dictionary grows from what has been recorded.
+          items:
+            type: object
+            required: [allergen, allergy_type, severity, recorded_at]
+            properties:
+              allergen: { type: string, example: PENICILLIN }
+              allergy_type: { type: string, enum: [drug, food, other] }
+              severity: { type: string, enum: [mild, moderate, severe] }
+              recorded_at: { type: string, format: date }
+              reaction: { type: string, example: Anaphylaxis }
 
     PatientUpdateRequest:
       type: object
@@ -3864,7 +3966,7 @@ components:
     EmrTemplate:
       type: object
       description: |
-        Table shape is `emr_template(id, name, fields_json, is_active)` per T18. Two
+        Table shape is `emr_template(id, name, fields_json, is_active)` per M4-01. Two
         presets ship seeded — "Admission note" (入院记录) and "Daily progress note"
         (日常病程记录) — each with at least six fields spanning several control types.
       required: [id, name, fields_json, is_active]
@@ -3923,7 +4025,7 @@ components:
 
     EmrRecordSummary:
       type: object
-      required: [id, patient_no, template_id, status, version]
+      required: [id, patient_no, template_id, status, version, revision]
       properties:
         id: { type: integer }
         patient_no: { type: string }
@@ -3934,6 +4036,7 @@ components:
         author_name: { type: string }
         status: { $ref: '#/components/schemas/RecordStatus' }
         version: { type: integer }
+        revision: { type: integer, description: Independent optimistic lock incremented on every mutation. }
         reviewer_id: { type: integer }
         review_comment:
           type: string
@@ -3948,6 +4051,8 @@ components:
         - type: object
           required: [content_json]
           properties:
+            template_snapshot:
+              $ref: '#/components/schemas/EmrTemplate'
             content_json:
               type: object
               additionalProperties: true
@@ -3962,14 +4067,16 @@ components:
     EmrRecordUpdateRequest:
       type: object
       description: |
-        Draft save. `version` is an optimistic lock: a mismatch returns 409 and the
-        client must reload. Saving against an archived record also returns 409.
-      required: [content_json, version]
+        Draft save. Send both `version` and `revision`; either mismatch returns 409.
+        PATCH increments only `revision`. Submit and amend also increment `version`.
+        The client must reload on conflicts and retain its local draft. Saving against an archived record also returns 409.
+      required: [content_json, version, revision]
       properties:
         content_json:
           type: object
           additionalProperties: true
         version: { type: integer }
+        revision: { type: integer, description: Independent optimistic lock incremented on every mutation. }
 
     EmrRecordListResponse:
       allOf:
@@ -4051,12 +4158,12 @@ components:
       description: |
         Table shape is
         `medical_order(id, record_id, patient_id, doctor_id, order_type, content_json,
-        status, validation_status)` per T20. That `patient_id` is the table's internal
+        status, validation_status)` per M4-03. That `patient_id` is the table's internal
         key; the property below is the patient's business key (`P20260001`), which is
         the only form the API exposes. The drug's dose and frequency live inside
         `content_json`, which is why the four fields below are not flat columns.
 
-        `validation_detail` carries which rule fired, so the T23 dialog can render the
+        `validation_detail` carries which rule fired, so the M4-06 dialog can render the
         reason without re-deriving it.
       required: [id, record_id, patient_no, doctor_id, order_type, content_json, status, validation_status]
       properties:
@@ -4126,7 +4233,7 @@ components:
 
         `order_type` is the only field required by the schema, but `drug` items are held to
         a further rule the server enforces: **a `drug` item with no `dose` is refused with
-        422** and a `message` naming `dose` (T20 S2 — "未填写剂量 → 422 且指明字段"). The
+        422** and a `message` naming `dose` (M4-03 S2 — "未填写剂量 → 422 且指明字段"). The
         requirement is not expressed as a blanket `required` because `lab` and `exam` items
         have no dose and must not be rejected for lacking one.
       required: [order_type]
@@ -4159,7 +4266,7 @@ components:
           type: string
           enum: [allergy, dose]
           description: |
-            T21's check has exactly these two firing cases. An item that trips neither is
+            M4-04's check has exactly these two firing cases. An item that trips neither is
             `passed` with an empty `reasons` array, so there is no third kind to model.
         severity: { $ref: '#/components/schemas/AllergySeverity' }
         allergen:
@@ -4179,7 +4286,7 @@ components:
         message:
           type: string
           description: |
-            **User-facing, unlike most `message` fields.** T23 criterion 5 requires the
+            **User-facing, unlike most `message` fields.** M4-06 criterion 5 requires the
             dialog to render the backend's validation detail rather than a second set of
             client-side copy, so this string is shown verbatim to a physician. Write it
             as a sentence a clinician reads, and keep it in English like the rest of the

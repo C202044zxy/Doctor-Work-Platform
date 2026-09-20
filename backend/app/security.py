@@ -60,7 +60,9 @@ class ProtectedRoute(APIRoute):
         if path not in ANONYMOUS_PATHS:
             permission = None
             methods = set(kwargs.get("methods") or ["GET"])
-            if path.startswith(("/api/patients", "/api/allergies", "/api/allergens")):
+            if path.startswith(
+                ("/api/patients", "/api/patient-groups", "/api/allergies", "/api/allergens")
+            ):
                 permission = "patient.read" if methods <= {"GET", "HEAD"} else "patient.write"
             dependencies.insert(
                 0, Depends(require_permission(permission) if permission else current_user)

@@ -237,31 +237,35 @@ def test_plan_reminder_atomic_scope_and_validation(client):
     body["new_reminder_rules"] = [
         {"patient_no": number, "title": "Check-in", "rtype": "checkin", "cron_expr": "* * * * *"}
     ]
-    plan = data(client.post("/api/health-plans", headers=h, json=body))
-    rules = data(client.get("/api/reminder-rules", headers=h))
+    plan = data(client.post("/api/legacy/health-plans", headers=h, json=body))
+    rules = data(client.get("/api/legacy/reminder-rules", headers=h))
     assert rules[0]["health_plan_id"] == plan["id"]
     assert plan["reminder_rule_ids"] == [rules[0]["id"]]
     assert (
-        client.get(f"/api/health-plans/{plan['id']}", headers=headers(client, 3)).status_code == 404
+        client.get(f"/api/legacy/health-plans/{plan['id']}", headers=headers(client, 3)).status_code
+        == 404
     )
     assert (
-        client.post("/api/health-plans", headers=headers(client, 3), json=body).status_code == 404
+        client.post("/api/legacy/health-plans", headers=headers(client, 3), json=body).status_code
+        == 404
     )
     assert (
         client.post(
-            "/api/health-plans", headers=h, json={**body, "end_date": "2025-01-01"}
+            "/api/legacy/health-plans", headers=h, json={**body, "end_date": "2025-01-01"}
         ).status_code
         == 422
     )
     assert (
         client.patch(
-            f"/api/reminder-rules/{rules[0]['id']}", headers=h, json={"cron_expr": "nonsense"}
+            f"/api/legacy/reminder-rules/{rules[0]['id']}",
+            headers=h,
+            json={"cron_expr": "nonsense"},
         ).status_code
         == 422
     )
     assert (
         client.patch(
-            f"/api/reminder-rules/{rules[0]['id']}",
+            f"/api/legacy/reminder-rules/{rules[0]['id']}",
             headers=headers(client, 2),
             json={"active": False},
         ).status_code
@@ -271,12 +275,12 @@ def test_plan_reminder_atomic_scope_and_validation(client):
         **body,
         "new_reminder_rules": [{**body["new_reminder_rules"][0], "patient_no": "P-NOT-FOUND"}],
     }
-    assert client.post("/api/health-plans", headers=h, json=bad).status_code == 404
+    assert client.post("/api/legacy/health-plans", headers=h, json=bad).status_code == 404
     with client.app.state.sessions() as db:
         assert db.scalar(select(func.count()).select_from(HealthPlan)) == 1
     changed = data(
         client.patch(
-            f"/api/health-plans/{plan['id']}",
+            f"/api/legacy/health-plans/{plan['id']}",
             headers=h,
             json={
                 **plan_body(number),
@@ -293,7 +297,7 @@ def test_reminder_idempotency_read_and_disable(client):
     h = headers(client)
     rule = data(
         client.post(
-            "/api/reminder-rules",
+            "/api/legacy/reminder-rules",
             headers=h,
             json={
                 "patient_no": number,
@@ -307,21 +311,27 @@ def test_reminder_idempotency_read_and_disable(client):
     for _ in range(3):
         fire_reminders(client.app.state.sessions, at=start)
     fire_reminders(client.app.state.sessions, at=start + timedelta(minutes=1))
-    assert data(client.get("/api/reminders/unread-count", headers=h))["unread_count"] == 2
+    assert data(client.get("/api/legacy/reminders/unread-count", headers=h))["unread_count"] == 2
     assert (
-        data(client.get("/api/reminders/unread-count", headers=headers(client, 2)))["unread_count"]
+        data(client.get("/api/legacy/reminders/unread-count", headers=headers(client, 2)))[
+            "unread_count"
+        ]
         == 0
     )
-    peek = data(client.get("/api/reminders?unread_only=true", headers=h))
+    peek = data(client.get("/api/legacy/reminders?unread_only=true", headers=h))
     assert peek["unread_count"] == 2 and not peek["items"][0]["read"]
-    logs = data(client.get("/api/reminders", headers=h))
+    logs = data(client.get("/api/legacy/reminders", headers=h))
     assert logs["unread_count"] == 0 and all(row["read"] for row in logs["items"])
-    assert data(client.post(f"/api/reminders/{logs['items'][0]['id']}/done", headers=h))["done"]
-    data(client.patch(f"/api/reminder-rules/{rule['id']}", headers=h, json={"active": False}))
+    assert data(client.post(f"/api/legacy/reminders/{logs['items'][0]['id']}/done", headers=h))[
+        "done"
+    ]
+    data(
+        client.patch(f"/api/legacy/reminder-rules/{rule['id']}", headers=h, json={"active": False})
+    )
     fire_reminders(client.app.state.sessions, at=start + timedelta(minutes=2))
     with client.app.state.sessions() as db:
         assert db.scalar(select(func.count()).select_from(ReminderLog)) == 2
-    assert "health_reminders" in [job.id for job in client.app.state.scheduler.get_jobs()]
+    assert "legacy_health_reminders" in [job.id for job in client.app.state.scheduler.get_jobs()]
 
 
 def test_reminder_plan_dates_and_termination(client):
@@ -331,23 +341,23 @@ def test_reminder_plan_dates_and_termination(client):
     body["new_reminder_rules"] = [
         {"patient_no": number, "title": "Morning", "rtype": "medication", "cron_expr": "0 9 * * *"}
     ]
-    plan = data(client.post("/api/health-plans", headers=h, json=body))
+    plan = data(client.post("/api/legacy/health-plans", headers=h, json=body))
     with client.app.state.sessions() as db:
         rule = db.get(ReminderRule, plan["reminder_rule_ids"][0])
         rule.created_at = datetime(2026, 1, 1, tzinfo=UTC)
         db.commit()
     at = datetime(2026, 9, 13, 1, 0, tzinfo=UTC)
     fire_reminders(client.app.state.sessions, at=at)
-    assert data(client.get("/api/reminders?unread_only=true", headers=h))["total"] == 1
+    assert data(client.get("/api/legacy/reminders?unread_only=true", headers=h))["total"] == 1
     data(
         client.patch(
-            f"/api/health-plans/{plan['id']}",
+            f"/api/legacy/health-plans/{plan['id']}",
             headers=h,
             json={**plan_body(number), "status": "terminated"},
         )
     )
     fire_reminders(client.app.state.sessions, at=at + timedelta(days=1))
-    assert data(client.get("/api/reminders?unread_only=true", headers=h))["total"] == 1
+    assert data(client.get("/api/legacy/reminders?unread_only=true", headers=h))["total"] == 1
 
 
 def test_orders_dependency_lifecycle_and_whole_batch_block(client):
@@ -358,17 +368,19 @@ def test_orders_dependency_lifecycle_and_whole_batch_block(client):
     with client.app.state.sessions() as db:
         pid = db.scalar(select(Patient.id).where(Patient.patient_no == number))
     body = {"record_id": 10, "items": [{"order_type": "drug", "drug_code": "TEST", "dose": "20mg"}]}
-    assert client.post("/api/emr/orders", headers=h, json=body).status_code == 503
+    assert client.post("/api/legacy/emr/orders", headers=h, json=body).status_code == 503
     record = SimpleNamespace(patient_id=pid, status="draft")
     client.app.state.order_record_loader = lambda db, id: record if id == 10 else None
     assert (
-        client.post("/api/emr/orders", headers=h, json={**body, "record_id": 999}).status_code
+        client.post(
+            "/api/legacy/emr/orders", headers=h, json={**body, "record_id": 999}
+        ).status_code
         == 404
     )
-    assert client.post("/api/emr/orders", headers=h, json=body).status_code == 503
+    assert client.post("/api/legacy/emr/orders", headers=h, json=body).status_code == 503
     assert (
         client.post(
-            "/api/emr/orders",
+            "/api/legacy/emr/orders",
             headers=h,
             json={**body, "items": [{"order_type": "drug", "drug_code": "TEST"}]},
         ).status_code
@@ -378,14 +390,19 @@ def test_orders_dependency_lifecycle_and_whole_batch_block(client):
         "overall": "passed",
         "results": [{"index": i, "status": "passed", "reasons": []} for i in range(len(items))],
     }
-    row = data(client.post("/api/emr/orders", headers=h, json=body))[0]
+    row = data(client.post("/api/legacy/emr/orders", headers=h, json=body))[0]
     modified = data(
         client.patch(
-            f"/api/emr/orders/{row['id']}", headers=h, json={**body["items"][0], "dose": "40mg"}
+            f"/api/legacy/emr/orders/{row['id']}",
+            headers=h,
+            json={**body["items"][0], "dose": "40mg"},
         )
     )
     assert modified["content_json"]["dose"] == "40mg"
-    assert data(client.post(f"/api/emr/orders/{row['id']}/stop", headers=h))["status"] == "stopped"
+    assert (
+        data(client.post(f"/api/legacy/emr/orders/{row['id']}/stop", headers=h))["status"]
+        == "stopped"
+    )
     client.app.state.order_validator = lambda db, pid, items: {
         "overall": "blocked",
         "results": [
@@ -395,12 +412,12 @@ def test_orders_dependency_lifecycle_and_whole_batch_block(client):
     }
     assert (
         client.post(
-            "/api/emr/orders", headers=h, json={**body, "items": body["items"] * 2}
+            "/api/legacy/emr/orders", headers=h, json={**body, "items": body["items"] * 2}
         ).status_code
         == 409
     )
     record.status = "archived"
-    assert client.post("/api/emr/orders", headers=h, json=body).status_code == 409
+    assert client.post("/api/legacy/emr/orders", headers=h, json=body).status_code == 409
     with client.app.state.sessions() as db:
         assert db.scalar(select(func.count()).select_from(MedicalOrder)) == 1
         actions = set(db.scalars(select(AuditLog.action)))

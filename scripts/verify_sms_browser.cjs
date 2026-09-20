@@ -8,7 +8,7 @@ async function main() {
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
-  const base = 'http://127.0.0.1:5173'
+  const base = process.env.M3_BASE_URL || 'http://127.0.0.1:5173'
   try {
     await page.goto(`${base}/login`)
     await page.getByPlaceholder('Your username').fill('dr_wang')
@@ -51,4 +51,4 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(error.message); process.exitCode = 1 })
+main().catch(error => { console.error(error.message.replace(/Bearer [A-Za-z0-9_.-]+/g, 'Bearer [redacted]')); process.exitCode = 1 })

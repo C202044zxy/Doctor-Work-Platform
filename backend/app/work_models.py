@@ -12,8 +12,8 @@ def now():
     return datetime.now(UTC)
 
 
-class MedicalOrder(Base):
-    __tablename__ = "medical_order"
+class LegacyMedicalOrder(Base):
+    __tablename__ = "legacy_medical_order"
     id: Mapped[int] = mapped_column(primary_key=True)
     # M4 owns medical_record and its migration. The integration loader verifies
     # this reference in the same transaction; add its FK when that table lands.
@@ -82,7 +82,7 @@ class CallLog(Base):
     end_reason: Mapped[str] = mapped_column(String(30))
 
 
-class HealthPlan(Base):
+class LegacyHealthPlan(Base):
     __tablename__ = "health_plan"
     id: Mapped[int] = mapped_column(primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
@@ -97,7 +97,7 @@ class HealthPlan(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
-class ReminderRule(Base):
+class LegacyReminderRule(Base):
     __tablename__ = "reminder_rule"
     id: Mapped[int] = mapped_column(primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
@@ -110,7 +110,7 @@ class ReminderRule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
-class ReminderLog(Base):
+class LegacyReminderLog(Base):
     __tablename__ = "reminder_log"
     __table_args__ = (UniqueConstraint("rule_id", "due_at", name="uq_reminder_due"),)
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -123,3 +123,13 @@ class ReminderLog(Base):
     done: Mapped[bool] = mapped_column(Boolean, default=False)
     done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     read: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+# Compatibility import for the retained legacy order API.
+MedicalOrder = LegacyMedicalOrder
+
+HealthPlan = LegacyHealthPlan
+
+ReminderRule = LegacyReminderRule
+
+ReminderLog = LegacyReminderLog

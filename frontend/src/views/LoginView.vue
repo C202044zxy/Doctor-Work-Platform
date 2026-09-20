@@ -5,6 +5,7 @@ import { signIn } from '../session'
 
 import { USE_MOCK_AUTH, authentication } from '../api/client'
 import CameraCapture from '../components/CameraCapture.vue'
+import { loginWithPhoto } from '../face-login.js'
 import MockBadge from '../components/MockBadge.vue'
 import SmsCodeInput from '../components/SmsCodeInput.vue'
 
@@ -60,7 +61,7 @@ let timer = null
 const heading = computed(() => {
   if (step.value === 'choose') {
     if (channel.value === 'sms') return 'Verify by SMS'
-    if (channel.value === 'face') return 'Verify with your face'
+    if (channel.value === 'face') return 'Face-login demo'
     return 'Verify by email'
   }
   if (step.value === 'code') return 'Check your email'
@@ -239,10 +240,7 @@ function handleCaptured(blob) {
   error.value = ''
 }
 
-// §4.3.1 ② — the photo is matched against the account named in step 1, so the
-// username comes from there rather than being asked for again. `faceVerify` runs
-// the dHash comparison (§2 冲突 1 方案 A) in the mock, which means "a different
-// face is refused" is a real check and not a constant.
+// The backend demo accepts a valid photo without comparing faces.
 async function submitFace() {
   error.value = ''
   if (!photo.value) {
@@ -251,12 +249,8 @@ async function submitFace() {
   }
   faceBusy.value = true
   try {
-    const data = await authentication.faceVerify(username.value.trim(), photo.value)
+    const data = await loginWithPhoto(authentication, username.value.trim(), photo.value)
     notice.value = ''
-    if (data?.simulated) {
-      notice.value = 'Simulated step reached the end of the flow. No session was issued: the face endpoint is still being built.'
-      return
-    }
     finish(data)
   } catch (err) { error.value = err.message }
   finally { faceBusy.value = false }
@@ -302,7 +296,7 @@ function useAnotherAccount() {
         <ul class="pitch-points">
           <li>
             <strong>Two-factor sign-in</strong>
-            Your password, then a code by email or SMS, or a face match.
+            Your password, then an email code, SMS demo, or face-login demo.
           </li>
           <li>
             <strong>Scoped access</strong>
@@ -337,7 +331,7 @@ function useAnotherAccount() {
             Enter the code sent to your registered mobile number.
           </template>
           <template v-else-if="channel === 'face'">
-            Look at the camera to confirm it's you.
+            Demo only: capture a photo to sign in. No face matching is performed.
           </template>
           <template v-else>
             We'll email a 6-digit code to your account’s registered address.
@@ -438,7 +432,7 @@ function useAnotherAccount() {
               :disabled="faceBusy"
               @click="submitFace"
             >
-              Verify and sign in
+              Send photo and sign in
             </el-button>
           </div>
 
@@ -536,9 +530,17 @@ function useAnotherAccount() {
           </button>
         </p>
 
+        <!-- Signup reaches this step as well, and its way back is the way *out*
+             of signup: `useAnotherAccount` only resets the step and would leave
+             `registering` set, which lands on the signup form again. -->
         <p v-if="step === 'code'" class="back">
-          <button type="button" class="resend" :disabled="busy" @click="useAnotherAccount">
-            Use a different account
+          <button
+            type="button"
+            class="resend"
+            :disabled="busy"
+            @click="registering ? toggleSignup() : useAnotherAccount()"
+          >
+            {{ registering ? 'Back to sign in' : 'Use a different account' }}
           </button>
         </p>
 
@@ -548,10 +550,19 @@ function useAnotherAccount() {
           </button>
         </p>
 
+        <!-- 0915意见 item 1. The link above takes you into signup and nothing took
+             you back out: `toggleSignup` was only reachable while already signed
+             out of signup mode, so the signup form was one-way. -->
+        <p v-if="step === 'credentials' && registering" class="back">
+          <button type="button" class="resend" :disabled="busy" @click="toggleSignup">
+            Back to sign in
+          </button>
+        </p>
+
         <p v-if="!registering" class="demo-note">
           SMS delivery is simulated. In development mode, use “View simulated SMS”
           to read your code and complete sign-in. No message is sent to a phone.
-          Face recognition is also a simulation.
+          Face login uses the backend and accepts any valid photo for an active account; matching is simulated.
         </p>
       </form>
     </section>

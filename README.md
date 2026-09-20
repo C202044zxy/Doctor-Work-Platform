@@ -29,7 +29,7 @@ Linux/macOS（Bash 4.3+）：`bash scripts/dev.sh`；再次启动可用 `bash sc
 
 M3：三态问诊、WebSocket 图文、历史补齐、受保护图片、记录检索/CSV、WebRTC 视频信令及通话记录。详见 [M3 架构与工作记录](docs/M3-架构与工作记录.md)。状态为**部分完成**：真实音视频硬件、局域网 HTTPS 和 M5 房间接入仍需验收/联调。
 
-主线认证、患者和审计代码已整合。原分支健康方案、提醒、医嘱对接仍保留；医嘱需要 M4 真实病历/校验器，未接入时返回 503。其他未完成页面不能按截图宣称完成。
+已整合 main 的患者搜索/分组、M4 病历医嘱、M5 远程会诊和 M6 患者健康面板。问诊页包含 Patient consultation（M3）与 Remote consultation（M5）；原分支健康方案与提醒移至 `/legacy/health-plans`、`/legacy/reminders`，旧医嘱表保留为 `legacy_medical_order`，标准入口使用 main 实现。合并后的升级与验收见 [main 合并说明](docs/main合并与升级说明.md)。
 
 种子账号 `admin_zhang` / `dr_li` / `dr_wang` / `dr_chen`，初始密码 `Demo@2026`。正常邮箱登录需要 SMTP 和可收信邮箱；种子邮箱是 example.test。开发模式可用密码 + SMS (simulated) 登录：Send code → View simulated SMS → 填码 → Verify and sign in，签发真实会话但不发送真实短信。人脸页面仍为原有模拟实现。仅测本地业务可使用 `uv run python -m app.dev_session --username dr_wang`，操作见启动指南；不新增 HTTP 免密登录。
 
