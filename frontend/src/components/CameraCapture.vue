@@ -89,9 +89,9 @@ defineExpose({ reset })
 
 <template>
   <div class="capture">
-    <template v-if="state === 'idle'">
+    <div v-if="state === 'idle'" class="idle-actions">
       <el-button :disabled="busy" @click="start">Open the camera</el-button>
-    </template>
+    </div>
 
     <template v-else-if="state === 'streaming'">
       <video ref="video" class="frame" autoplay muted playsinline aria-label="Camera preview" />
@@ -127,10 +127,16 @@ defineExpose({ reset })
   display: block;
 }
 
+.idle-actions {
+  display: flex;
+  justify-content: center;
+}
+
 .frame {
   display: block;
   width: 100%;
   max-width: 320px;
+  margin-inline: auto;
   aspect-ratio: 4 / 3;
   object-fit: cover;
   background: var(--surface-2);
@@ -140,6 +146,7 @@ defineExpose({ reset })
 }
 
 .hint {
+  text-align: center;
   margin: 10px 0 0;
   font-size: 12.5px;
   line-height: 1.5;
@@ -148,6 +155,7 @@ defineExpose({ reset })
 
 .actions {
   display: flex;
+  justify-content: center;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
