@@ -27,7 +27,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from PIL import Image, UnidentifiedImageError
 from pydantic import ValidationError
 from redis.exceptions import RedisError
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 
@@ -38,7 +38,7 @@ from app.dependencies import Pagination
 from app.models import Patient, User
 from app.patients import visible_patient
 from app.security import allows, require_permission
-from app.work_common import DB, fields, ok, page, patient_for, scoped
+from app.work_common import DB, fields, ok, page, scoped
 from app.work_models import Consultation, ConsultMessage, ImageUpload
 from app.work_schemas import (
     ConsultationCreate,
@@ -85,11 +85,22 @@ class ChatHub:
                 queue.put_nowait(encoded)
 
 
+def consultation_scope(db):
+    """The waiting queue is shared; accepted conversations belong to their participants."""
+    user_id = db.info["user"].id
+    return scoped(Consultation, db).where(
+        or_(
+            Consultation.status == "waiting",
+            Consultation.created_by == user_id,
+            Consultation.doctor_id == user_id,
+        )
+    )
+
+
 def room_for(db, room_id, *, participant=False):
-    row = db.get(Consultation, room_id)
+    row = db.scalar(consultation_scope(db).where(Consultation.id == room_id))
     if row is None:
         raise HTTPException(404, "Consultation not found")
-    patient_for(db, row.patient_id)
     if participant and db.info["user"].id not in (row.created_by, row.doctor_id):
         raise HTTPException(403, "Only session participants may enter the room")
     return row
@@ -138,7 +149,7 @@ def list_rooms(
     status: Literal["waiting", "active", "ended"] | None = None,
     patient_no: str | None = None,
 ):
-    stmt = scoped(Consultation, db)
+    stmt = consultation_scope(db)
     if status:
         stmt = stmt.where(Consultation.status == status)
     if patient_no:
@@ -395,11 +406,7 @@ def socket_identity(ws, token, room_id):
         db.info["user"] = user
         # One scoped join instead of loading the room, patient, and patient again
         # for every outbound frame. Authorization still runs on every event.
-        room = db.scalar(scoped(Consultation, db).where(Consultation.id == room_id))
-        if room is None:
-            raise HTTPException(404, "Consultation not found")
-        if user.id not in (room.created_by, room.doctor_id):
-            raise HTTPException(403, "Only session participants may enter the room")
+        room_for(db, room_id, participant=True)
     return user
 
 
