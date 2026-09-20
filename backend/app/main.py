@@ -8,12 +8,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from redis import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import case, func, or_, select, text
+from sqlalchemy import case, delete, exists, func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import auth, auth_schemas, crypto, face_login, grants, meetings, signup
+from app import auth, auth_schemas, crypto, face_login, grants, groups, meetings, signup
 from app.allergies import allergen_name, dictionary, get_patient_allergens
 from app.audit import audit_request, mark_audit
 from app.audit_export import audit_csv, content_disposition, filename_range
@@ -26,9 +26,11 @@ from app.dependencies import Pagination
 # it the moment that `def` runs.
 from app.health import register_jobs as register_health_jobs
 from app.health import router as health_router
-from app.models import Allergy, AuditLog, Department, Patient
-from app.patients import patient_scope, visible_patient
+from app.models import Allergy, AuditLog, Department, Patient, PatientGroupMember, PatientTag
+from app.patients import department_id, patient_scope, visible_patient
 from app.schemas import (
+    ALLERGY_SEVERITIES,
+    GENDERS,
     AllergenDictionaryResponse,
     AllergenRead,
     AllergyCreate,
@@ -51,10 +53,8 @@ from app.schemas import (
     PatientResponse,
     PatientSummary,
     PatientUpdate,
-    join_tags,
-    split_tags,
 )
-from app.security import ProtectedFastAPI, allows, require_permission
+from app.security import ProtectedFastAPI, require_permission
 
 PATIENT_NO_RETRIES = 5
 
@@ -89,7 +89,30 @@ def _masked_identifiers(patient: Patient) -> tuple[str | None, str | None]:
     return phone, id_card
 
 
-def _summary(patient: Patient, allergy_count: int = 0, has_severe: bool = False) -> PatientSummary:
+def _tags_by_patient(db: Session, patient_ids: list[int]) -> dict[int, list[str]]:
+    """Symptom tags for a page of patients, in one query.
+
+    The tags live in `patient_symptom_tags` rather than in a joined string on the
+    patient row, so a tag search is an indexed equality instead of a LIKE. That
+    makes this the one read that has to be batched, or the list page would run a
+    query per row.
+    """
+    found: dict[int, list[str]] = {}
+    if not patient_ids:
+        return found
+    rows = db.execute(
+        select(PatientTag.patient_id, PatientTag.tag)
+        .where(PatientTag.patient_id.in_(patient_ids))
+        .order_by(PatientTag.id)
+    )
+    for patient_id, tag in rows:
+        found.setdefault(patient_id, []).append(tag)
+    return found
+
+
+def _summary(
+    patient: Patient, tags: list[str], allergy_count: int = 0, has_severe: bool = False
+) -> PatientSummary:
     phone, _ = _masked_identifiers(patient)
     return PatientSummary(
         patient_no=patient.patient_no,
@@ -99,7 +122,7 @@ def _summary(patient: Patient, allergy_count: int = 0, has_severe: bool = False)
         phone_masked=phone,
         phone=phone,
         department=patient.department.name,
-        symptom_tags=split_tags(patient.symptom_tags),
+        symptom_tags=tags,
         allergy_count=allergy_count,
         has_severe_allergy=has_severe,
         admitted_at=patient.admitted_at,
@@ -109,16 +132,18 @@ def _summary(patient: Patient, allergy_count: int = 0, has_severe: bool = False)
 
 
 def _detail(
-    patient: Patient, allergies: list[Allergy], allergy_count: int, has_severe: bool
+    db: Session, patient: Patient, tags: list[str], allergies: list[Allergy]
 ) -> PatientDetail:
+    """One patient, with the tags, allergies and groups the detail screen reads."""
+    allergy_count, has_severe = _severity_summary(allergies)
     _, id_card = _masked_identifiers(patient)
     return PatientDetail(
-        **_summary(patient, allergy_count, has_severe).model_dump(),
+        **_summary(patient, tags, allergy_count, has_severe).model_dump(),
         id_card_masked=id_card,
         id_card=id_card,
         allergies=[AllergyRead.model_validate(item, from_attributes=True) for item in allergies],
         histories=[],
-        groups=[],
+        groups=groups.groups_for_patient(db, patient),
     )
 
 
@@ -158,13 +183,8 @@ def _live_patient(db: Session, patient_no: str) -> Patient:
 
 
 def _department_id(db: Session, name: str) -> int:
-    department = db.scalar(select(Department).where(Department.name == name))
-    if department is None:
-        raise HTTPException(404, f"Department not found: {name}")
-    user = db.info["user"]
-    if not allows(user, "data.all") and department.id != user.department_id:
-        raise HTTPException(403, "Cannot write patients in another department")
-    return department.id
+    """The department rule lives in `app.patients`, shared with the group routes."""
+    return department_id(db, db.info["user"], name)
 
 
 def _audit(db: Session, action: str, patient_id: int, detail: dict | None = None) -> None:
@@ -269,6 +289,10 @@ def create_app(settings: Settings | None = None):
     app.include_router(signup.router)
     app.include_router(face_login.router)
     app.include_router(grants.router)
+    # T17/M2-05. Groups are department-scoped, carry their member counts, and
+    # never widen the T09 patient scope -- see `app.groups` for why the membership
+    # rule is a 422 rather than a silent skip.
+    app.include_router(groups.router)
     # T30/T31/T32. Uploaded materials live under `uploads/meeting/` and are
     # served by `GET /api/materials/{id}/download` rather than by StaticFiles:
     # T31 scenario S2 requires a non-participant's downloaded URL to answer 403,
@@ -392,20 +416,33 @@ def create_app(settings: Settings | None = None):
         response_model=PatientListResponse,
         summary="搜索患者 / Search patients",
         description=(
-            "姓名模糊、患者编号精确、症状标签、入院日期区间四个条件可以任意 AND 组合；"
-            "症状标签可重复传参，命中任意一个即可；四个条件都留空时返回全量，"
-            "默认按 created_at 倒序分页。\n\n"
-            "`department` 是第五个条件，按科室名精确匹配，与上面四个条件叠加而不是替换它们；"
-            "它只能收窄 T09 的科室范围，不能放宽。传入未登记的科室名得到空列表，"
-            "而不是 404：筛选条件不匹配不是错误。\n\n"
-            "Fuzzy name, exact patient number, symptom tag and admission-date range "
-            "combine with AND; repeat `symptom_tags` to match any of several tags. With "
-            "no filter the whole table is returned, ordered by `created_at` descending. "
-            "The payload is `{items, total, page, size}`.\n\n"
-            "`department` is a fifth condition that matches the department name exactly "
-            "and stacks with the other four rather than replacing them. It can only narrow "
-            "the T09 scope, never widen it. An unknown department name yields an empty "
-            "list rather than a 404: a filter that matches nothing is not an error."
+            "所有条件任意 AND 组合，全部留空时返回全量，默认按 created_at 倒序分页；"
+            "载荷为 `{items, total, page, size}`。\n\n"
+            "姓名模糊、患者编号精确（编号前缀不算命中）、`symptom_tags` 可重复传参"
+            "（命中任意一个标签即算匹配）、`gender` 精确匹配、`allergen` 与 "
+            "`allergy_severity` 可重复传参（命中该患者的任意一条过敏记录即算匹配）、"
+            "`admitted_from`/`admitted_to` 与 `birth_from`/`birth_to` 均为闭区间、"
+            "`group_id` 按患者分组过滤。`phone` 与 `id_card` 是**精确**匹配，比对的是"
+            "加密列旁的盲索引，因此带空格或短横线的写法同样能命中，明文既不参与比较"
+            "也不会被返回。\n\n"
+            "`department` 按科室名精确匹配，与其它条件叠加而不是替换它们；它只能收窄 "
+            "T09 的科室范围，不能放宽。取不到结果的筛选条件返回空列表而不是 404"
+            "——包括未登记的科室名、不存在的分组；但 `gender` / `allergy_severity` / "
+            "`allergen` 之外的非法枚举值返回 422，因为那是拼写错误而不是没有结果。\n\n"
+            "Fuzzy name, exact patient number, repeatable symptom tags, exact gender, "
+            "repeatable allergen and allergy-severity filters, admission-date and "
+            "birth-date ranges and `group_id` all combine with AND; with none set the "
+            "whole page for the caller's scope is returned, ordered by `created_at` "
+            "descending. `phone` and `id_card` are exact matches against a blind index "
+            "kept beside the ciphertext, so they are searchable without the plaintext "
+            "ever being compared or returned.\n\n"
+            "`department` matches the department name exactly and stacks with the other "
+            "conditions rather than replacing them; it can only narrow the T09 scope, "
+            "never widen it. A filter that matches nothing -- an unknown department, a "
+            "group nobody is in -- yields an empty list rather than a 404, because a "
+            "filter that matches nothing is not an error. An unknown `gender`, "
+            "`allergy_severity` or reversed date range is a 422, because that is a typo "
+            "rather than an empty result."
         ),
         responses={422: {"model": ErrorResponse}},
     )
@@ -428,6 +465,11 @@ def create_app(settings: Settings | None = None):
         department: str = Query(
             "", max_length=100, description="科室名称精确匹配 / Exact department name"
         ),
+        gender: str = Query(
+            "",
+            max_length=10,
+            description="性别精确匹配：male / female / unknown，留空不筛选 / Exact gender",
+        ),
         admitted_from: Annotated[
             date | None,
             Query(description="入院日期起（含）/ Admission date from, inclusive"),
@@ -436,10 +478,67 @@ def create_app(settings: Settings | None = None):
             date | None,
             Query(description="入院日期止（含）/ Admission date to, inclusive"),
         ] = None,
+        birth_from: Annotated[
+            date | None,
+            Query(description="出生日期起（含）/ Birth date from, inclusive"),
+        ] = None,
+        birth_to: Annotated[
+            date | None,
+            Query(description="出生日期止（含）/ Birth date to, inclusive"),
+        ] = None,
+        allergen: Annotated[
+            list[str] | None,
+            Query(
+                description=(
+                    "过敏原字典编码精确匹配；可重复传参，命中任意一条过敏记录即算匹配 / "
+                    "Exact allergen code; repeat the parameter to match any of several"
+                )
+            ),
+        ] = None,
+        allergy_severity: Annotated[
+            list[str] | None,
+            Query(
+                description=(
+                    "过敏严重程度精确匹配：mild / moderate / severe；可重复传参 / "
+                    "Exact allergy severity; repeat the parameter to match any of several"
+                )
+            ),
+        ] = None,
+        phone: str = Query(
+            "",
+            max_length=32,
+            description=(
+                "手机号精确匹配；服务端比对盲索引，带空格或短横线同样命中 / "
+                "Exact phone, matched against the blind index beside the ciphertext"
+            ),
+        ),
+        id_card: str = Query(
+            "",
+            max_length=32,
+            description=(
+                "身份证号精确匹配；服务端比对盲索引 / Exact national ID, matched the same way"
+            ),
+        ),
+        group_id: Annotated[
+            int | None,
+            Query(description="患者分组主键 / Patient group id"),
+        ] = None,
     ):
         page, size = pagination.page, pagination.size
-        if admitted_from and admitted_to and admitted_from > admitted_to:
-            raise HTTPException(422, "admitted_from must not be later than admitted_to")
+        for label, start, end in (
+            ("admitted", admitted_from, admitted_to),
+            ("birth", birth_from, birth_to),
+        ):
+            if start and end and start > end:
+                raise HTTPException(422, f"{label}_from must not be later than {label}_to")
+        if gender and gender not in GENDERS:
+            raise HTTPException(422, "gender must be male, female or unknown")
+        severities = [value.lower() for value in (allergy_severity or [])]
+        unsupported = [value for value in severities if value not in ALLERGY_SEVERITIES]
+        if unsupported:
+            raise HTTPException(
+                422, f"allergy_severity must be one of {', '.join(ALLERGY_SEVERITIES)}"
+            )
         conditions = [Patient.deleted_at.is_(None), patient_scope(db.info["user"])]
         if name:
             conditions.append(Patient.name.contains(name, autoescape=True))
@@ -447,11 +546,8 @@ def create_app(settings: Settings | None = None):
             conditions.append(Patient.patient_no == patient_no)
         if symptom_tags:
             conditions.append(
-                or_(
-                    *[
-                        Patient.symptom_tags.contains(f",{tag},", autoescape=True)
-                        for tag in symptom_tags
-                    ]
+                exists().where(
+                    PatientTag.patient_id == Patient.id, PatientTag.tag.in_(symptom_tags)
                 )
             )
         if department:
@@ -464,6 +560,39 @@ def create_app(settings: Settings | None = None):
             conditions.append(Patient.admitted_at >= admitted_from)
         if admitted_to:
             conditions.append(Patient.admitted_at <= admitted_to)
+        if gender:
+            conditions.append(Patient.gender == gender)
+        if birth_from:
+            conditions.append(Patient.birth_date >= birth_from)
+        if birth_to:
+            conditions.append(Patient.birth_date <= birth_to)
+        if allergen:
+            # Codes are stored uppercase (see AllergyCreate), so the comparison is
+            # normalised here rather than silently missing "penicillin".
+            codes = [code.upper() for code in allergen]
+            conditions.append(
+                exists().where(Allergy.patient_id == Patient.id, Allergy.allergen.in_(codes))
+            )
+        if severities:
+            conditions.append(
+                exists().where(Allergy.patient_id == Patient.id, Allergy.severity.in_(severities))
+            )
+        # An identifier search compares the blind index, never the ciphertext: the
+        # plaintext is not decrypted, and the column it matches is not returned.
+        if phone:
+            conditions.append(Patient.phone_hash == crypto.blind_index("phone", phone))
+        if id_card:
+            conditions.append(Patient.id_card_hash == crypto.blind_index("id_card", id_card))
+        if group_id is not None:
+            # No 404 for an unknown or foreign group: like an unknown department
+            # name, it is a filter that matches nothing, and the patient scope in
+            # `conditions` already guarantees a foreign group cannot widen anything.
+            conditions.append(
+                exists().where(
+                    PatientGroupMember.patient_id == Patient.id,
+                    PatientGroupMember.group_id == group_id,
+                )
+            )
         total = db.scalar(select(func.count()).select_from(Patient).where(*conditions)) or 0
         rows = list(
             db.scalars(
@@ -475,9 +604,13 @@ def create_app(settings: Settings | None = None):
             )
         )
         stats = _allergy_stats(db, [row.id for row in rows])
+        tags = _tags_by_patient(db, [row.id for row in rows])
         return _ok(
             PatientListData(
-                items=[_summary(row, *stats.get(row.id, (0, False))) for row in rows],
+                items=[
+                    _summary(row, tags.get(row.id, []), *stats.get(row.id, (0, False)))
+                    for row in rows
+                ],
                 total=total,
                 page=page,
                 size=size,
@@ -497,18 +630,19 @@ def create_app(settings: Settings | None = None):
         responses={404: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
     )
     def create_patient(body: PatientCreate, db: DB):
-        department_id = _department_id(db, body.department)
+        owner_id = _department_id(db, body.department)
         for _ in range(PATIENT_NO_RETRIES):
             patient = Patient(
                 patient_no=_next_patient_no(db),
                 name=body.name,
                 gender=body.gender,
                 birth_date=body.birth_date,
-                department_id=department_id,
+                department_id=owner_id,
                 notes=body.notes,
                 phone_enc=crypto.encrypt(body.phone) if body.phone else None,
                 id_card_enc=crypto.encrypt(body.id_card) if body.id_card else None,
-                symptom_tags=join_tags(body.symptom_tags),
+                phone_hash=crypto.blind_index("phone", body.phone),
+                id_card_hash=crypto.blind_index("id_card", body.id_card),
                 admitted_at=body.admitted_at,
             )
             db.add(patient)
@@ -518,12 +652,31 @@ def create_app(settings: Settings | None = None):
                 # A concurrent request claimed the number first; take the next one.
                 db.rollback()
                 continue
-            _audit(db, "patient.create", patient.id)
+            # The tags and the allergies are written in this same transaction, so a
+            # patient cannot come back half-created. One audit row covers the whole
+            # creation and names the allergies, rather than one row per nested row.
+            db.add_all(PatientTag(patient_id=patient.id, tag=tag) for tag in body.symptom_tags)
+            allergies = [
+                Allergy(
+                    patient_id=patient.id,
+                    allergen=item.allergen,
+                    allergy_type=item.allergy_type,
+                    severity=item.severity,
+                    reaction=item.reaction,
+                    recorded_at=item.recorded_at,
+                )
+                for item in body.allergies
+            ]
+            db.add_all(allergies)
+            detail = (
+                {"allergies": [item.allergen for item in body.allergies]} if allergies else None
+            )
+            _audit(db, "patient.create", patient.id, detail)
             db.commit()
             # Echo stored values: MySQL DATETIME keeps whole seconds, so the
             # in-memory microseconds would not match a later read.
             db.refresh(patient)
-            return _ok(_detail(patient, [], 0, False))
+            return _ok(_detail(db, patient, body.symptom_tags, allergies))
         raise HTTPException(409, "Could not allocate a patient number, please retry")
 
     @app.get(
@@ -542,7 +695,8 @@ def create_app(settings: Settings | None = None):
         mark_audit(db.info["request"], "patient.view", "patient", patient_no)
         patient = _live_patient(db, patient_no)
         allergies = get_patient_allergens(db, patient_no)
-        return _ok(_detail(patient, allergies, *_severity_summary(allergies)))
+        tags = _tags_by_patient(db, [patient.id]).get(patient.id, [])
+        return _ok(_detail(db, patient, tags, allergies))
 
     @app.patch(
         "/api/patients/{patient_no}",
@@ -567,18 +721,31 @@ def create_app(settings: Settings | None = None):
         if "phone" in updates:
             phone = updates.pop("phone")
             patient.phone_enc = crypto.encrypt(phone) if phone else None
+            patient.phone_hash = crypto.blind_index("phone", phone)
         if "id_card" in updates:
             id_card = updates.pop("id_card")
             patient.id_card_enc = crypto.encrypt(id_card) if id_card else None
+            patient.id_card_hash = crypto.blind_index("id_card", id_card)
+        tags: list[str] | None = None
         if "symptom_tags" in updates:
-            patient.symptom_tags = join_tags(updates.pop("symptom_tags") or [])
+            # The client sends the tag set the patient should have, not a patch of
+            # one tag, so the old rows are dropped in the same transaction. An
+            # empty list therefore clears the tags, which is what "replaced as a
+            # whole" means in the contract.
+            tags = updates.pop("symptom_tags") or []
+            db.execute(delete(PatientTag).where(PatientTag.patient_id == patient.id))
+            db.add_all(PatientTag(patient_id=patient.id, tag=tag) for tag in tags)
         for field, value in updates.items():
             setattr(patient, field, value)
+        # Flush before reading the tags back, so the rows just added are visible.
+        db.flush()
+        if tags is None:
+            tags = _tags_by_patient(db, [patient.id]).get(patient.id, [])
         _audit(db, "patient.update", patient.id)
         db.commit()
         db.refresh(patient)
         allergies = get_patient_allergens(db, patient_no)
-        return _ok(_detail(patient, allergies, *_severity_summary(allergies)))
+        return _ok(_detail(db, patient, tags, allergies))
 
     @app.delete(
         "/api/patients/{patient_no}",

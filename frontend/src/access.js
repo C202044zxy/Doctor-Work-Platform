@@ -13,6 +13,19 @@ export const MODULE_ROLES = {
   audit: ['admin'],
 }
 
+// The service answers 403 for two different things, and only one of them is about
+// the screen. `require_permission` refuses a permission the role does not carry and
+// names it; every other 403 refuses one action inside a screen the caller may open
+// — writing a patient into another department, answering a consultation they were
+// not invited to, revising somebody else's assessment. Only the first replaces the
+// page with the 403 explainer; the second has to be read on the form that asked,
+// because losing the screen over it hides the sentence that says what was wrong.
+const MISSING_PERMISSION = /^Missing permission:/i
+
+export function isScreenRefusal(status, message) {
+  return status === 403 && MISSING_PERMISSION.test(message ?? '')
+}
+
 // Absent means "everyone signed in", which is why this is not `roles.includes`
 // with a default of `[]` — that would hide every ungated screen from everyone.
 export function canOpen(roles, title) {

@@ -3,6 +3,7 @@
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 from app.models import Base
@@ -19,10 +20,13 @@ def test_upgrade_from_either_module_head(tmp_path, monkeypatch, previous_head):
         connection.execute(text("INSERT INTO departments (name) VALUES ('Existing department')"))
     command.upgrade(config, "head")
     assert set(inspect(engine).get_table_names()) == set(Base.metadata.tables) | {"alembic_version"}
+    # The head is read from the script directory rather than written down here: a
+    # later revision must not be able to make this test lie about where head is.
+    head = ScriptDirectory.from_config(config).get_current_head()
     with engine.connect() as connection:
         assert connection.execute(
             text("SELECT version_num FROM alembic_version")
-        ).scalars().all() == ["b4c6d0192026"]
+        ).scalars().all() == [head]
         assert (
             connection.execute(text("SELECT name FROM departments")).scalar_one()
             == "Existing department"
