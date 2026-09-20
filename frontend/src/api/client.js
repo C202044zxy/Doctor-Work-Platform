@@ -1,3 +1,4 @@
+import { isScreenRefusal } from '../access.js'
 import { accessToken, signOut } from '../session.js'
 import { filenameFromDisposition } from './csv.js'
 import { sms as mockSms, face as mockFace } from './mock-auth.js'
@@ -27,6 +28,7 @@ const SESSION_LOST = [
   [/unavailable or disabled/i, 'This account is no longer active. Contact an administrator.'],
   [/missing access token/i, 'Sign in to continue.'],
 ]
+
 
 function sessionLostCopy(message) {
   for (const [pattern, copy] of SESSION_LOST) if (pattern.test(message)) return copy
@@ -68,9 +70,12 @@ async function request(path, options = {}) {
       signOut()
       sessionLostHandler?.({ kind: 'session-lost', message: sessionLostCopy(error.message) })
     }
-    // 403 is a permission refusal, not an identity one: keep the session and send
-    // the reader to the page that explains which permission is missing.
-    if (response.status === 403) {
+    // 403 is not an identity failure, so the session stays. Only the refusal that
+    // names a missing permission replaces the screen; any other 403 is thrown, and
+    // the caller shows it inline -- a senior who picks the wrong department has to
+    // read "you cannot write patients in another department" on the form, not lose
+    // the page they were working on.
+    if (isScreenRefusal(response.status, error.message)) {
       sessionLostHandler?.({ kind: 'forbidden' })
     }
     throw error
@@ -294,8 +299,16 @@ export const patients = {
     patientNo = '',
     symptomTags = [],
     department = '',
+    gender = '',
     admittedFrom = '',
     admittedTo = '',
+    birthFrom = '',
+    birthTo = '',
+    allergenCodes = [],
+    allergySeverity = [],
+    phone = '',
+    idCard = '',
+    groupId = null,
     page = 1,
     size = 20,
   } = {}) {
@@ -311,7 +324,25 @@ export const patients = {
     if (department) params.set('department', department)
     if (admittedFrom) params.set('admitted_from', admittedFrom)
     if (admittedTo) params.set('admitted_to', admittedTo)
+    // A blank `gender` would be a 422 rather than "no filter": the server tells the
+    // two apart by the parameter being absent, which is why none of these are sent
+    // empty.
+    if (gender) params.set('gender', gender)
+    if (birthFrom) params.set('birth_from', birthFrom)
+    if (birthTo) params.set('birth_to', birthTo)
     symptomTags.forEach((tag) => params.append('symptom_tags', tag))
+    // Repeatable, so any of several codes matches. The local names are plural for
+    // that reason; `allergen` and `allergy_severity` are the names on the wire.
+    allergenCodes.forEach((code) => params.append('allergen', code))
+    allergySeverity.forEach((severity) => params.append('allergy_severity', severity))
+    // Exact matches against the blind index kept beside the ciphertext, so the whole
+    // number is what finds a patient and a prefix is not a hit.
+    if (phone) params.set('phone', phone)
+    if (idCard) params.set('id_card', idCard)
+    // 0 is a legal id, so this one is compared against null instead of truthiness.
+    if (groupId !== null && groupId !== undefined && groupId !== '') {
+      params.set('group_id', String(groupId))
+    }
     return request(`/patients?${params}`)
   },
 
@@ -343,6 +374,16 @@ export const patients = {
     async remove(id) {
       return request(`/allergies/${id}`, { method: 'DELETE' })
     },
+  },
+}
+
+// T17's group filter needs the groups to filter by. The management screen (create,
+// rename, members) is not built, so this is the one read the list uses; the server
+// answers with the caller's own department only, which is why the options and the
+// filter agree without the client checking anything.
+export const patientGroups = {
+  async list() {
+    return request('/patient-groups')
   },
 }
 

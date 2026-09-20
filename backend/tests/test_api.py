@@ -11,7 +11,7 @@ from sqlalchemy import DateTime, TypeDecorator, func, select
 from app.allergies import get_patient_allergens
 from app.auth import current_user
 from app.config import Settings
-from app.crypto import decrypt
+from app.crypto import blind_index, decrypt
 from app.main import create_app
 from app.models import Allergy, AuditLog, Department, Patient, Role, User
 from app.seed import seed
@@ -68,6 +68,12 @@ def add_allergy(client, patient_no, **overrides):
     response = client.post(f"/api/patients/{patient_no}/allergies", json=body)
     assert response.status_code == 200, response.text
     return response.json()["data"]
+
+
+def names(client, params):
+    """The names a search returns, in the endpoint's own order."""
+    body = client.get("/api/patients", params=params).json()["data"]
+    return [row["name"] for row in body["items"]]
 
 
 def test_envelope_shape_on_success_and_error(client):
@@ -238,6 +244,162 @@ def test_department_filter_stacks_with_the_other_conditions(client):
     assert unknown.json()["data"]["total"] == 0
 
 
+def test_the_field_filters_narrow_by_gender_birth_date_and_allergy(client):
+    """Gender, the birth-date range and the allergy filters, added with M2-03.
+
+    Each one is an AND-ed narrowing of the same scope, so what can go wrong is
+    matching too much (a range that ignores one of its bounds) or refusing the
+    wrong input (a bad enum is a 422, an empty result is not).
+    """
+    create_patient(client, name="Young Man", gender="male", birth_date="1995-06-01")
+    create_patient(
+        client,
+        name="Older Woman",
+        gender="female",
+        birth_date="1960-01-15",
+        allergies=[
+            {
+                "allergen": "PENICILLIN",
+                "allergy_type": "drug",
+                "severity": "severe",
+                "recorded_at": "2026-08-01",
+            }
+        ],
+    )
+    create_patient(
+        client,
+        name="Mild Case",
+        gender="female",
+        birth_date="1992-02-29",
+        allergies=[
+            {
+                "allergen": "LATEX",
+                "allergy_type": "other",
+                "severity": "mild",
+                "recorded_at": "2026-08-02",
+            }
+        ],
+    )
+
+    assert names(client, {"gender": "male"}) == ["Young Man"]
+    invalid = client.get("/api/patients", params={"gender": "?"})
+    assert invalid.status_code == 422
+    assert "gender" in invalid.json()["message"]
+
+    # A closed interval on both ends, and it stacks with the other conditions.
+    window = {"birth_from": "1990-01-01", "birth_to": "1999-12-31"}
+    assert names(client, window) == ["Mild Case", "Young Man"]
+    assert names(client, {**window, "gender": "male"}) == ["Young Man"]
+    assert names(client, {**window, "gender": "female"}) == ["Mild Case"]
+    reversed_range = client.get(
+        "/api/patients", params={"birth_from": "1999-01-01", "birth_to": "1990-01-01"}
+    )
+    assert reversed_range.status_code == 422
+    assert "birth_from" in reversed_range.json()["message"]
+
+    # The allergen code is compared uppercase, so the lowercase spelling a caller
+    # copies out of the UI still matches.
+    assert names(client, {"allergen": "PENICILLIN"}) == ["Older Woman"]
+    assert names(client, {"allergen": "penicillin"}) == ["Older Woman"]
+    assert names(client, {"allergen": ["PENICILLIN", "LATEX"]}) == ["Mild Case", "Older Woman"]
+    assert names(client, {"allergy_severity": "severe"}) == ["Older Woman"]
+    assert names(client, {"allergy_severity": "SEVERE"}) == ["Older Woman"]
+    # The two allergy filters are separate conditions over the same records, not one
+    # condition over the same row: a patient with a severe penicillin allergy does
+    # not match "penicillin AND mild".
+    assert names(client, {"allergen": "PENICILLIN", "allergy_severity": "mild"}) == []
+    bad_severity = client.get("/api/patients", params={"allergy_severity": "fatal"})
+    assert bad_severity.status_code == 422
+    assert "allergy_severity" in bad_severity.json()["message"]
+    # An allergen nobody recorded is an empty page, not a 404.
+    assert names(client, {"allergen": "ASPIRIN"}) == []
+
+
+def test_a_patient_is_created_with_the_whole_record_in_one_call(client):
+    """The answer to "new patients is too weak": one POST, one transaction.
+
+    Tags, allergies, both identifiers and the notes all belong to the same
+    request, so a form that collected them does not have to make four round trips
+    and leave a half-built patient behind when the third one fails.
+    """
+    created = create_patient(
+        client,
+        name="全套患者",
+        gender="female",
+        birth_date="1988-07-19",
+        department="Cardiology",
+        phone="138-0000-1234",
+        id_card="110101198807191234",
+        symptom_tags=["胸痛", "发热", "胸痛"],
+        admitted_at="2026-08-15",
+        notes="Full record",
+        allergies=[
+            {
+                "allergen": "PENICILLIN",
+                "allergy_type": "drug",
+                "severity": "severe",
+                "recorded_at": "2026-08-01",
+                "reaction": "Anaphylaxis",
+            },
+            {
+                "allergen": "LATEX",
+                "allergy_type": "other",
+                "severity": "mild",
+                "recorded_at": "2026-08-02",
+            },
+        ],
+    )
+    number = created["patient_no"]
+    assert created["department"] == "Cardiology"
+    assert created["birth_date"] == "1988-07-19"
+    assert created["admitted_at"] == "2026-08-15"
+    assert created["notes"] == "Full record"
+    assert created["symptom_tags"] == ["胸痛", "发热"], "the repeat is dropped, not stored twice"
+    assert created["allergy_count"] == 2
+    assert created["has_severe_allergy"] is True
+    assert [item["allergen"] for item in created["allergies"]] == ["PENICILLIN", "LATEX"]
+    assert created["allergies"][0]["reaction"] == "Anaphylaxis"
+    # The number was typed with separators and comes back masked in its canonical
+    # form, which is the form the blind index compares.
+    assert created["phone_masked"] == "138****1234"
+    assert created["id_card_masked"] == "110101********1234"
+
+    # What the create echoed is what the next read returns, and the rows that live
+    # in the other tables are there too.
+    assert client.get(f"/api/patients/{number}").json()["data"] == created
+    assert client.get(f"/api/patients/{number}/allergies").json()["data"] == created["allergies"]
+
+    # The new patient is findable by every part of the record straight away.
+    assert names(client, {"symptom_tags": "发热"}) == ["全套患者"]
+    assert names(client, {"allergen": "PENICILLIN"}) == ["全套患者"]
+    assert names(client, {"phone": "13800001234"}) == ["全套患者"]
+    assert names(client, {"id_card": "110101198807191234"}) == ["全套患者"]
+
+    # A bad nested allergy fails the whole create: no patient, no tag rows. Half a
+    # record is worse than none, because nothing tells the caller which half.
+    refused = client.post(
+        "/api/patients",
+        json={
+            "name": "Half Record",
+            "gender": "male",
+            "department": "Cardiology",
+            "symptom_tags": ["胸痛"],
+            "allergies": [
+                {
+                    "allergen": "PENICILLIN",
+                    "allergy_type": "drug",
+                    "severity": "fatal",
+                    "recorded_at": "2026-08-01",
+                }
+            ],
+        },
+    )
+    assert refused.status_code == 422
+    assert "severity" in refused.json()["message"]
+    assert names(client, {"name": "Half Record"}) == []
+    assert names(client, {"symptom_tags": "胸痛"}) == ["全套患者"]
+
+
 def test_admission_range_validation(client):
     response = client.get(
         "/api/patients", params={"admitted_from": "2026-09-01", "admitted_to": "2026-08-01"}
@@ -279,6 +441,56 @@ def test_identifiers_are_encrypted_at_rest_and_masked_in_the_api(client):
     assert "13800001234" not in stored.phone_enc
     assert decrypt(stored.phone_enc) == "13800001234"
     assert decrypt(stored.id_card_enc) == "110101199003071234"
+
+
+def test_identifier_search_is_exact_against_the_blind_index(client):
+    """T16: `phone` / `id_card` match a keyed digest kept beside the ciphertext.
+
+    Three things have to hold at once: the same number typed with spaces or
+    hyphens hits, a prefix or a near miss does not, and the plaintext is never what
+    the query compares -- which is why rewriting the phone has to move the digest
+    with it, and why clearing it makes the patient unfindable again.
+    """
+    patient = create_patient(
+        client, name="Identity", phone="13800001234", id_card="110101199003071234"
+    )
+    number = patient["patient_no"]
+    for spelling in ("13800001234", "138 0000 1234", "138-0000-1234"):
+        found = client.get("/api/patients", params={"phone": spelling}).json()["data"]
+        assert found["total"] == 1, spelling
+        assert found["items"][0]["patient_no"] == number
+    assert client.get("/api/patients", params={"phone": "1380000123"}).json()["data"]["total"] == 0
+    assert client.get("/api/patients", params={"phone": "13900001234"}).json()["data"]["total"] == 0
+    id_card_hits = client.get("/api/patients", params={"id_card": "110101199003071234"}).json()[
+        "data"
+    ]
+    assert id_card_hits["total"] == 1
+    assert (
+        client.get("/api/patients", params={"id_card": "1101011990030712"}).json()["data"]["total"]
+        == 0
+    )
+
+    stored = stored_patient(client, number)
+    assert stored.phone_hash == blind_index("phone", "13800001234")
+    assert stored.id_card_hash == blind_index("id_card", "110101199003071234")
+    # The digest is not the ciphertext and not the plaintext, and the API never
+    # returns it: a hash column in a response would be a searchable identifier
+    # handed back to the caller.
+    assert stored.phone_hash not in (stored.phone_enc, "13800001234")
+    assert "phone_hash" not in patient
+    assert "phone_hash" not in client.get(f"/api/patients/{number}").json()["data"]
+
+    # The mask is built from the normalised number, so the spelling is not
+    # visible in the masked form either.
+    formatted = create_patient(client, name="Formatted", phone="137 0000 5678")
+    assert formatted["phone_masked"] == "137****5678"
+    assert client.get("/api/patients", params={"phone": "13700005678"}).json()["data"]["total"] == 1
+
+    client.patch(f"/api/patients/{number}", json={"phone": "13900001234"})
+    assert client.get("/api/patients", params={"phone": "13800001234"}).json()["data"]["total"] == 0
+    assert client.get("/api/patients", params={"phone": "13900001234"}).json()["data"]["total"] == 1
+    client.patch(f"/api/patients/{number}", json={"phone": None})
+    assert client.get("/api/patients", params={"phone": "13900001234"}).json()["data"]["total"] == 0
 
 
 def test_validation_error_names_the_missing_field(client):
@@ -458,17 +670,25 @@ def test_swagger_documents_every_patient_field(client):
         parameter["name"]: parameter
         for parameter in schema["paths"]["/api/patients"]["get"]["parameters"]
     }
-    # The contract's own parameter list, in full. `group_id` is the one member
-    # missing, and it is missing on purpose: groups are T17, `PatientDetail.groups`
-    # is still a placeholder, and a filter over a table that does not exist would
-    # be a silent no-op of exactly the kind `symptom_tag`/`symptom_tags` warns about.
+    # Every filter the endpoint accepts, `group_id` included now that T17's table
+    # exists. Pinning the whole set is what catches a filter added under a name
+    # nobody can guess -- the contract already warns that the singular
+    # `symptom_tag` filters nothing and is not an error either.
     assert set(list_parameters) == {
         "name",
         "patient_no",
         "symptom_tags",
         "department",
+        "gender",
         "admitted_from",
         "admitted_to",
+        "birth_from",
+        "birth_to",
+        "allergen",
+        "allergy_severity",
+        "phone",
+        "id_card",
+        "group_id",
         "page",
         "size",
     }

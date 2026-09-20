@@ -12,6 +12,7 @@ phone number never produces the same ciphertext twice.
 
 import base64
 import hashlib
+import hmac
 import os
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -49,6 +50,39 @@ def decrypt(token: str) -> str:
     return plaintext.decode("utf-8")
 
 
+def normalise(value: str) -> str:
+    """`138 0000 1234` and `138-0000-1234` are one identifier.
+
+    Shared by the blind index and the masks so the two cannot disagree about what
+    a phone number is: the index has to compare the normalised form, and a mask
+    built from the raw string would show `138******1234` for the same number whose
+    stored form reads `138****1234`.
+    """
+    return "".join(ch for ch in value if not ch.isspace() and ch != "-").upper()
+
+
+def blind_index(kind: str, value: str | None) -> str | None:
+    """A deterministic, keyed digest of an identifier, for equality search.
+
+    `phone_enc` and `id_card_enc` cannot be searched: GCM draws a fresh nonce per
+    write, so the same number is a different token every time and the only way to
+    find one would be to decrypt the whole table on every query. This is the
+    usual answer -- store a keyed HMAC next to the ciphertext and compare that.
+    The key is derived from `PATIENT_DATA_KEY` with a label per column, so a
+    phone digest can never be compared against an ID-card digest, and a database
+    dump without the key yields nothing but 64 hex characters per row.
+
+    Normalisation is part of the contract: `138 0000 1234`, `138-0000-1234` and
+    `13800001234` are one number, so the same patient is found whichever way the
+    caller types it. `kind` names the column ("phone" / "id_card").
+    """
+    normalised = normalise(value) if value else ""
+    if not normalised:
+        return None
+    key = hmac.new(_key(), f"blind-index:{kind}".encode(), hashlib.sha256).digest()
+    return hmac.new(key, normalised.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def _mask(value: str, head: int, tail: int) -> str:
     if len(value) <= head + tail:
         return "*" * len(value)
@@ -57,9 +91,9 @@ def _mask(value: str, head: int, tail: int) -> str:
 
 def mask_phone(phone: str | None) -> str | None:
     """13800001234 -> 138****1234. Shorter values degrade to all stars."""
-    return _mask(phone, 3, 4) if phone else None
+    return _mask(normalise(phone), 3, 4) if phone else None
 
 
 def mask_id_card(id_card: str | None) -> str | None:
     """110101199003071234 -> 110101********1234."""
-    return _mask(id_card, 6, 4) if id_card else None
+    return _mask(normalise(id_card), 6, 4) if id_card else None

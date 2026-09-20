@@ -26,15 +26,6 @@ def clean_tags(tags: list[str] | None) -> list[str] | None:
     return cleaned
 
 
-def join_tags(tags: list[str]) -> str:
-    """Store tags as ",tag,tag," so a tag match cannot hit a longer tag by accident."""
-    return f",{','.join(tags)}," if tags else ""
-
-
-def split_tags(stored: str) -> list[str]:
-    return [tag for tag in stored.split(",") if tag]
-
-
 class AllergyRead(BaseModel):
     id: int = Field(description="主键 / Primary key", examples=[1])
     allergen: str = Field(
@@ -206,6 +197,24 @@ class PatientCreate(BaseModel):
         description="备注 / Free-text notes",
         examples=["Synthetic record for the demo"],
     )
+    allergies: list[AllergyCreate] = Field(
+        default_factory=list,
+        description=(
+            "同一次请求里建立过敏记录，与患者同一事务 / "
+            "Allergies to record in the same transaction as the patient"
+        ),
+        examples=[
+            [
+                {
+                    "allergen": "PENICILLIN",
+                    "allergy_type": "drug",
+                    "severity": "severe",
+                    "recorded_at": "2026-08-01",
+                    "reaction": "Anaphylaxis",
+                }
+            ]
+        ],
+    )
     model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 
     @field_validator("gender")
@@ -281,6 +290,71 @@ class PatientUpdate(BaseModel):
         return clean_tags(tags)
 
 
+class PatientGroupRead(BaseModel):
+    id: int = Field(description="主键 / Primary key", examples=[1])
+    name: str = Field(description="分组名称 / Group name", examples=["Chronic follow-up"])
+    description: str = Field(
+        default="", description="分组说明 / Group description", examples=["Monthly review"]
+    )
+    member_count: int = Field(
+        default=0,
+        description="组内在册患者数（不含已删除患者）/ Members, excluding soft-deleted patients",
+        examples=[2],
+    )
+
+
+class PatientGroupCreate(BaseModel):
+    name: str = Field(
+        min_length=1,
+        max_length=100,
+        description="分组名称，同一科室内唯一 / Group name, unique within a department",
+        examples=["Chronic follow-up"],
+    )
+    description: str = Field(
+        default="",
+        max_length=255,
+        description="分组说明 / Group description",
+        examples=["Monthly review"],
+    )
+    department: str | None = Field(
+        default=None,
+        max_length=100,
+        description=(
+            "所属科室名，缺省为调用者本科室；指定其它科室需要 data.all / "
+            "Owning department; defaults to the caller's, another one needs data.all"
+        ),
+        examples=["Cardiology"],
+    )
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+
+
+class PatientGroupUpdate(BaseModel):
+    """Partial edit: only the fields present in the body change."""
+
+    name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        description="分组名称 / Group name",
+        examples=["Chronic follow-up"],
+    )
+    description: str | None = Field(
+        default=None,
+        max_length=255,
+        description="分组说明 / Group description",
+        examples=["Monthly review"],
+    )
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+
+
+class GroupMembersRequest(BaseModel):
+    patient_nos: list[str] = Field(
+        min_length=1,
+        description="患者编号列表 / Patient numbers",
+        examples=[["P20260001", "P20260002"]],
+    )
+
+
 class PatientSummary(BaseModel):
     patient_no: str = Field(
         description="系统生成的患者编号 / Server-generated patient number",
@@ -354,9 +428,9 @@ class PatientDetail(PatientSummary):
         default_factory=list,
         description="既往史条目，由 T16 填充 / Medical history entries, filled in by T16",
     )
-    groups: list[dict] = Field(
+    groups: list[PatientGroupRead] = Field(
         default_factory=list,
-        description="患者分组，由 T17 填充 / Patient groups, filled in by T17",
+        description="患者所在分组 / The groups this patient belongs to",
     )
 
 
@@ -378,6 +452,14 @@ class PatientListData(BaseModel):
 
 class PatientListResponse(SuccessBase):
     data: PatientListData
+
+
+class PatientGroupListResponse(SuccessBase):
+    data: list[PatientGroupRead] = Field(description="分组列表 / Patient groups")
+
+
+class PatientGroupResponse(SuccessBase):
+    data: PatientGroupRead
 
 
 class AuditLogRead(BaseModel):

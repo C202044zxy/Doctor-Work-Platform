@@ -34,8 +34,7 @@ from app import crypto
 from app.auth import hash_password, verify_password
 from app.config import Settings
 from app.database import make_engine, session_factory
-from app.models import Allergy, Department, Patient, Role, User
-from app.schemas import join_tags
+from app.models import Allergy, Department, Patient, PatientTag, Role, User
 
 DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "Demo@2026")
 
@@ -308,7 +307,8 @@ def seed_demo(*, repair: bool = False) -> list[str]:
                         notes="Presentation baseline record",
                         phone_enc=crypto.encrypt(phone) if phone else None,
                         id_card_enc=crypto.encrypt(id_card) if id_card else None,
-                        symptom_tags=join_tags(list(tags)),
+                        phone_hash=crypto.blind_index("phone", phone),
+                        id_card_hash=crypto.blind_index("id_card", id_card),
                         admitted_at=date.fromisoformat(admitted_at),
                     )
                     db.add(patient)
@@ -318,6 +318,16 @@ def seed_demo(*, repair: bool = False) -> list[str]:
                     reset = _restore_patient(patient, name, gender, birth_date, department_id)
                     if reset:
                         repaired.append(f"patient {patient_no}: " + "/".join(reset))
+                # Symptom tags are not pinned by §4, so a missing one is filled in
+                # and an extra one is left alone -- the same rule allergies follow.
+                for tag in tags:
+                    recorded_tag = db.scalar(
+                        select(PatientTag).where(
+                            PatientTag.patient_id == patient.id, PatientTag.tag == tag
+                        )
+                    )
+                    if recorded_tag is None:
+                        db.add(PatientTag(patient_id=patient.id, tag=tag))
                 # A missing allergy is filled in either way: §4.2 makes the
                 # 青霉素(严重) record the star of the allergy demo, and adding a
                 # row is what "only inserts what is missing" means.

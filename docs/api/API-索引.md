@@ -333,14 +333,24 @@
 |---|---|---|
 | `name` | string | 姓名**模糊**匹配 |
 | `patient_no` | string | 患者号**精确**匹配（不是模糊） |
-| `symptom_tags` | string[] | 症状标签匹配 |
+| `symptom_tags` | string[] | 症状标签**精确**匹配，可重复传参命中任意一个（存一行一个标签，不再是字符串子串匹配） |
 | `admitted_from` / `admitted_to` | date | 入院日期区间 |
+| `birth_from` / `birth_to` | date | 出生日期区间（含端点） |
 | `department` | string | 科室筛选（非 admin 时强制为本人科室） |
+| `gender` | string | 性别精确匹配：`male` / `female` / `unknown` |
+| `allergen` | string[] | 过敏原编码匹配，可重复传参；比较前转大写，`penicillin` 能命中 `PENICILLIN` |
+| `allergy_severity` | string[] | 过敏严重程度匹配：`mild` / `moderate` / `severe`。与 `allergen` 是**两个独立条件**（同一位患者的两条过敏记录可以分别满足） |
+| `phone` / `id_card` | string | 精确匹配，比对的是加密列旁的**盲索引**（HMAC 摘要），空格与短横线被忽略：`138-0000-1234` 与 `13800001234` 是同一个号；明文不参与比较，该列也不返回 |
 | `group_id` | int | 按分组筛选 |
 | `page` / `size` | int | 分页 |
 
-> **四个搜索条件必须可任意 AND 组合**（M2-01）：姓名模糊、`patient_no` 精确、`symptom_tags` 匹配、入院日期区间。四条件全空 → 返回全量分页（场景 M2-T1）。
+> **所有搜索条件必须可任意 AND 组合**（M2-01）：姓名模糊、`patient_no` 精确、`symptom_tags` 匹配、入院日期区间等。全部留空 → 返回全量分页（场景 M2-T1）。
 > 默认按 `created_at` 倒序（M2-01）。
+> 筛不到东西不是错误：未登记的科室、不存在的分组、没人有的标签都返回空列表；但 `gender` / `allergy_severity` 的非法枚举值、以及起止日倒置返回 422——那是拼写错误。
+
+**`POST /api/patients` 请求体**（M2-01 / M2-02）
+
+一次请求即可建立**全套信息**：基础字段（`name`、`gender`、`birth_date`、`department`、`notes`、`admitted_at`、`phone`、`id_card`）+ `symptom_tags`（去重后一行一个标签）+ `allergies`（与患者**同一事务**写入；任一条不合法则整单 422，不会留下半个患者）。`allergen` 允许自定义值，字典随后自动列出它（字典从"已记录的过敏"长出，不需要单独注册接口）。
 
 **`GET /api/patients` 单条 `items[]` 结构**
 

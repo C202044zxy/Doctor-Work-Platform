@@ -562,13 +562,18 @@ paths:
       tags: [Patients]
       summary: Search patients
       description: |
-        Task T13. The four search conditions — fuzzy name, exact patient number,
-        symptom tag, and admission-date range — combine freely with AND, and all four
-        may be sent at once. With none set, the full page for the caller's department is
-        returned. Results default to `created_at` descending.
+        Task T13. Every condition below combines freely with AND and all of them may be
+        sent at once: fuzzy name, exact patient number, symptom tag, department, gender,
+        the admission-date and birth-date ranges, the allergy code and severity, the two
+        identifier matches, and the T17 group filter. With none set, the full page for
+        the caller's department is returned. Results default to `created_at` descending.
 
-        A non-admin caller is silently restricted to their own department (T09); passing
-        another department does not widen the result set.
+        A caller without `data.all` is silently restricted to their own department
+        (T09); naming another department, or another department's group, narrows the
+        result rather than widening it. A filter that matches nothing — an unknown
+        department, an unknown group, a tag nobody carries — is an empty page, while a
+        value that is not a legal enum (`gender`, `allergy_severity`) or a reversed
+        date range is a 422.
       parameters:
         - name: name
           in: query
@@ -596,6 +601,60 @@ paths:
             example: [胸痛, 高血压]
         - name: department
           in: query
+          description: |
+            Exact department name. It **stacks with** the other conditions instead of
+            replacing them, so a caller without `data.all` who names another department
+            narrows their own scope to nothing rather than widening it.
+          schema: { type: string }
+        - name: gender
+          in: query
+          description: |
+            Exact gender. Any value outside the enum is a 422 naming the parameter,
+            because it is a typo rather than a filter that matches nothing.
+          schema: { type: string, enum: [male, female, unknown] }
+        - name: birth_from
+          in: query
+          description: Start of the birth-date range, inclusive.
+          schema: { type: string, format: date }
+        - name: birth_to
+          in: query
+          description: End of the birth-date range, inclusive.
+          schema: { type: string, format: date }
+        - name: allergen
+          in: query
+          description: |
+            Allergen dictionary code recorded on the patient, compared uppercase, so
+            `penicillin` finds `PENICILLIN`. Repeat the parameter to match any of
+            several codes.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+            example: [PENICILLIN, SULFONAMIDE]
+        - name: allergy_severity
+          in: query
+          description: |
+            Allergy severity. Repeatable, and a value outside the enum is a 422. This is
+            a separate condition over the patient's allergy rows, not a second test on
+            the row `allergen` matched: `allergen=PENICILLIN&allergy_severity=mild` means
+            "has a penicillin allergy and has a mild allergy".
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string, enum: [mild, moderate, severe] }
+        - name: phone
+          in: query
+          description: |
+            Exact mobile number, compared against a blind index — a keyed HMAC of the
+            normalised value kept beside the ciphertext. Spacing and hyphens are ignored,
+            so `138-0000-1234` and `13800001234` are one number; a prefix does not match.
+            The plaintext is never compared and the indexed column is never returned.
+          schema: { type: string }
+        - name: id_card
+          in: query
+          description: Exact national ID, matched the same way as `phone`.
           schema: { type: string }
         - name: group_id
           in: query
@@ -3577,6 +3636,25 @@ components:
         symptom_tags:
           type: array
           items: { type: string }
+          description: |
+            Stored one row per tag, so a tag search is an equality rather than a
+            substring match. A repeat within one request is dropped, not stored twice.
+        allergies:
+          type: array
+          description: |
+            Allergies recorded in the same transaction as the patient: if one of them is
+            invalid the whole create is a 422 and no patient, tag or allergy row is
+            written. A custom allergen code is accepted, and the dictionary lists it from
+            then on because the dictionary grows from what has been recorded.
+          items:
+            type: object
+            required: [allergen, allergy_type, severity, recorded_at]
+            properties:
+              allergen: { type: string, example: PENICILLIN }
+              allergy_type: { type: string, enum: [drug, food, other] }
+              severity: { type: string, enum: [mild, moderate, severe] }
+              recorded_at: { type: string, format: date }
+              reaction: { type: string, example: Anaphylaxis }
 
     PatientUpdateRequest:
       type: object

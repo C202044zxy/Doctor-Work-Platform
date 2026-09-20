@@ -63,8 +63,15 @@ class Patient(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     phone_enc: Mapped[str | None] = mapped_column(String(255))
     id_card_enc: Mapped[str | None] = mapped_column(String(255))
-    # Canonical ",tag,tag," form, so a tag match cannot hit a substring.
-    symptom_tags: Mapped[str] = mapped_column(String(500), default="")
+    # Blind indexes for the two encrypted identifiers. AES-GCM draws a fresh
+    # nonce per write, so a ciphertext can never be compared: the same phone
+    # number produces a different token every time. These columns hold a keyed
+    # HMAC-SHA256 of the normalised value instead (app.crypto.blind_index): stable
+    # for equal values, useless without PATIENT_DATA_KEY, and the reason "find the
+    # patient who called from this number" is an indexed lookup rather than a
+    # decrypt-every-row scan. The API never returns either column.
+    phone_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    id_card_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     admitted_at: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
@@ -88,6 +95,70 @@ class Allergy(Base):
     severity: Mapped[str] = mapped_column(String(20), default="moderate")
     reaction: Mapped[str | None] = mapped_column(String(255))
     recorded_at: Mapped[date] = mapped_column(Date)
+
+
+class PatientTag(Base):
+    """One symptom tag on one patient.
+
+    This replaced a `String(500)` column holding ",tag,tag,": the contract and
+    the task list both call the tags structured "to support search", and a
+    substring match against a joined string is not that. Here a tag search is an
+    equality against an indexed column, so "胸痛" cannot be found by "胸", a tag
+    can never bleed into a longer one, and the list is trivially ordered.
+    """
+
+    __tablename__ = "patient_symptom_tags"
+    __table_args__ = (UniqueConstraint("patient_id", "tag", name="uq_patient_tag"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(
+        ForeignKey("patients.id", ondelete="CASCADE"), index=True
+    )
+    tag: Mapped[str] = mapped_column(String(50), index=True)
+
+
+class PatientGroup(Base):
+    """T17's manual grouping: by condition, by management status, or by hand.
+
+    A group belongs to the department that created it, which is what keeps T17
+    scenario S2 honest -- a caller never sees a group from another department, so
+    no group can be used to widen the T09 scope. Deleting a group deletes the
+    grouping only; membership rows go with it, the patients do not.
+    """
+
+    __tablename__ = "patient_groups"
+    __table_args__ = (UniqueConstraint("department_id", "name", name="uq_group_name"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), index=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+    department: Mapped[Department] = relationship(lazy="joined")
+
+
+class PatientGroupMember(Base):
+    """One patient in one group. `(group_id, patient_id)` is unique, not a rule.
+
+    The unique constraint is what turns "add these two patients to the group"
+    into a 409 naming the one already there, rather than a duplicate row that
+    makes the member count lie.
+    """
+
+    __tablename__ = "patient_group_members"
+    __table_args__ = (UniqueConstraint("group_id", "patient_id", name="uq_group_member"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_groups.id", ondelete="CASCADE"), index=True
+    )
+    patient_id: Mapped[int] = mapped_column(
+        ForeignKey("patients.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
 
 
 class AuditLog(Base):
