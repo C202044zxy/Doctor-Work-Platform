@@ -337,3 +337,38 @@ def test_the_directory_query_shape_is_the_contract(client):
         "page",
         "size",
     }
+
+
+def test_pending_junior_can_be_listed_edited_and_activated(client):
+    add_user(client, "new_junior", "junior", "Cardiology", status="pending")
+    all_users = directory(client)
+    pending = next(row for row in all_users["items"] if row["username"] == "new_junior")
+    assert pending["status"] == "pending"
+    assert set(pending) == FULL_FIELDS
+    filtered = directory(client, title="junior", status="pending")
+    assert filtered["total"] == 1
+    assert filtered["items"] == [pending]
+    assert "new_junior" not in names(directory(client, 3, status="active"))
+    limited = directory(client, 3, status="pending")["items"][0]
+    assert set(limited) == DIRECTORY_FIELDS
+
+    user_id = pending["id"]
+    path = f"/api/users/{user_id}"
+    admin = headers(client)
+    assert client.get(path, headers=admin).json()["data"]["status"] == "pending"
+    credentials = {"username": "new_junior", "password": "test-password"}
+    assert client.post("/api/auth/login", json=credentials).status_code == 401
+    assert client.get("/api/me", headers=headers(client, user_id)).status_code == 401
+    assert (
+        client.patch(path, json={"status": "active"}, headers=headers(client, 3)).status_code == 403
+    )
+    edited = client.patch(path, json={"name": "Pending Doctor"}, headers=admin)
+    assert edited.status_code == 200
+    assert edited.json()["data"]["status"] == "pending"
+
+    activated = client.patch(path, json={"status": "active"}, headers=admin)
+    assert activated.status_code == 200
+    assert activated.json()["data"]["status"] == "active"
+    assert directory(client, status="pending")["total"] == 0
+    assert client.post("/api/auth/login", json=credentials).status_code == 200
+    assert client.patch(path, json={"status": "pending"}, headers=admin).status_code == 422

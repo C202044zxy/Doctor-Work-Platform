@@ -536,7 +536,7 @@ paths:
             guarantee the retired `/api/meetings/doctors` used to make.
             / 按账号状态精确筛选。邀请选择框传 `active`——这是被删除的
             `/api/meetings/doctors` 原先在服务端作出的保证。
-          schema: { type: string, enum: [active, disabled] }
+          schema: { $ref: '#/components/schemas/AccountStatus' }
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/Size'
       responses:
@@ -3615,6 +3615,11 @@ components:
 
     # ---------- Users ----------
 
+    AccountStatus:
+      type: string
+      enum: [pending, active, disabled]
+      description: Pending accounts await administrator activation and cannot sign in.
+
     User:
       description: |
         A hospital account. The three contact fields are administrator-only: they are present
@@ -3641,8 +3646,7 @@ components:
               description: |
                 Administrator-only. / 仅管理员可见。
             status:
-              type: string
-              enum: [active, disabled]
+              $ref: '#/components/schemas/AccountStatus'
               description: |
                 Administrator-only. A `disabled` account is refused even while holding a
                 valid token. / 仅管理员可见；`disabled` 的账号即使持有有效 token 也会被拒。

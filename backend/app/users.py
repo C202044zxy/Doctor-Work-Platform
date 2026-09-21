@@ -111,7 +111,7 @@ def list_users(
         Query(description="按科室名精确筛选 / Exact department name"),
     ] = None,
     status: Annotated[
-        contract.Status | None,
+        contract.AccountStatus | None,
         Query(description="按账号状态精确筛选 / Exact account status"),
     ] = None,
 ):

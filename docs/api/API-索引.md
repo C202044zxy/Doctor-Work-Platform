@@ -34,6 +34,8 @@
 
 ---
 
+M1-07：账户列表和详情支持 `pending`、`active`、`disabled`，列表可按 `status=pending` 筛选。新注册 junior 待管理员激活；管理员通过 `PATCH /api/users/{id}` 设置 `status=active` 激活。更新接口仍仅接受 `active` / `disabled`，不允许把已激活账户改回待审核。
+
 ## 1. 全局约定
 
 ### 1.1 前缀

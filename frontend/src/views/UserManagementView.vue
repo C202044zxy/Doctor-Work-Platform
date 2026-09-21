@@ -248,7 +248,7 @@ async function toggleStatus(row) {
   try {
     await usersApi.update(row.id, { status: next })
     await load()
-    ElMessage.success(next === 'active' ? 'Account enabled.' : 'Account disabled.')
+    ElMessage.success(row.status === 'pending' ? 'Account activated.' : next === 'active' ? 'Account enabled.' : 'Account disabled.')
   } catch (error) {
     ElMessage.error(error.message)
   }
@@ -326,6 +326,7 @@ onMounted(async () => {
           @change="search"
         >
           <el-option label="Any status" value="" />
+          <el-option label="Pending" value="pending" />
           <el-option label="Active" value="active" />
           <el-option label="Disabled" value="disabled" />
         </el-select>
@@ -376,7 +377,7 @@ onMounted(async () => {
         <el-table-column label="Status" width="120">
           <template #default="{ row }">
             <span class="chip" :data-severity="row.status === 'active' ? 'ok' : 'alert'">
-              {{ row.status === 'active' ? 'Active' : 'Disabled' }}
+              {{ { pending: 'Pending', active: 'Active', disabled: 'Disabled' }[row.status] ?? row.status }}
             </span>
           </template>
         </el-table-column>
@@ -399,7 +400,7 @@ onMounted(async () => {
               :title="row.id === currentUserId ? 'You cannot disable your own account.' : ''"
               @click="toggleStatus(row)"
             >
-              {{ row.status === 'active' ? 'Disable' : 'Enable' }}
+              {{ row.status === 'pending' ? 'Activate' : row.status === 'active' ? 'Disable' : 'Enable' }}
             </el-button>
           </template>
         </el-table-column>
@@ -505,6 +506,7 @@ onMounted(async () => {
       <label v-if="isEditing" class="field">
         <span class="field-label">Status</span>
         <el-select v-model="form.status" class="full">
+          <el-option v-if="original?.status === 'pending'" label="Pending" value="pending" disabled />
           <el-option label="Active" value="active" />
           <el-option label="Disabled" value="disabled" />
         </el-select>
