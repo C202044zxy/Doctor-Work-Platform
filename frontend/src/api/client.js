@@ -401,15 +401,66 @@ export const patients = {
       return request(`/allergies/${id}`, { method: 'DELETE' })
     },
   },
+
+  // M2-06. The timeline. `list` answers with a plain array, not the paginated
+  // envelope the patient list uses: the contract makes this a complete collection
+  // bounded by one parent, the same shape as the allergies above it.
+  //
+  // `onset_date` is nullable and `null` is a value here, not an omission — PATCH
+  // sends it to take a wrong date back off an entry. So the payload is passed
+  // through as given rather than filtered of its nulls.
+  histories: {
+    async list(patientNo) {
+      return request(`/patients/${encodeURIComponent(patientNo)}/histories`)
+    },
+
+    async create(patientNo, payload) {
+      return request(`/patients/${encodeURIComponent(patientNo)}/histories`, json(payload))
+    },
+
+    async update(id, payload) {
+      return request(`/histories/${id}`, send('PATCH', payload))
+    },
+
+    async remove(id) {
+      return request(`/histories/${id}`, { method: 'DELETE' })
+    },
+  },
 }
 
-// T17's group filter needs the groups to filter by. The management screen (create,
-// rename, members) is not built, so this is the one read the list uses; the server
-// answers with the caller's own department only, which is why the options and the
-// filter agree without the client checking anything.
+// M2-05. The group list is what T17's filter filters by, and the rest is the
+// management screen. The server answers with the caller's own department only, so
+// the options and the filter agree without the client checking anything.
+//
+// Both member routes take their patients in the request body, including the
+// delete: `send('DELETE', …)` and not `{ method: 'DELETE' }`, which would drop the
+// body and 422 on a missing `patient_nos`. The client never decides who is in a
+// group — a duplicate add is the server's 409 and a removal of someone who is not
+// there is its 404, both naming the patient, and both belong on screen rather than
+// being pre-empted here.
 export const patientGroups = {
   async list() {
     return request('/patient-groups')
+  },
+
+  async create(payload) {
+    return request('/patient-groups', json(payload))
+  },
+
+  async update(id, payload) {
+    return request(`/patient-groups/${id}`, send('PATCH', payload))
+  },
+
+  async remove(id) {
+    return request(`/patient-groups/${id}`, { method: 'DELETE' })
+  },
+
+  async addMembers(id, patientNos) {
+    return request(`/patient-groups/${id}/members`, json({ patient_nos: patientNos }))
+  },
+
+  async removeMembers(id, patientNos) {
+    return request(`/patient-groups/${id}/members`, send('DELETE', { patient_nos: patientNos }))
   },
 }
 
@@ -444,6 +495,24 @@ function auditParams(filters, { paged }) {
 export const audit = {
   async list(filters = {}) {
     return request(`/audit-logs?${auditParams(filters, { paged: true })}`)
+  },
+
+  // The action strings the service can write, as `audit.MARKED` in `backend/app/audit.py`
+  // -- schemas.py is generated from the contract by scripts/generate_auth_schemas.py,
+  // which reads schemas and paths and not module constants, so these have no place
+  // there.
+  //
+  // The filter's dropdown used to carry a hand-copied list, and it had already drifted:
+  // T17's five `patient_group.*` actions and T11's `temp_grant.expire` were all missing,
+  // so entries this very screen exists to review could not be filtered for. Reading the
+  // set at runtime makes that impossible to repeat, and it means a later task adds its
+  // action in one place.
+  //
+  // On failure the dropdown degrades to typeable rather than empty: `action` is an
+  // exact-match string with no enumeration endpoint on the contract, so a typed value
+  // was always the fallback.
+  async actions() {
+    return request('/audit-logs/actions')
   },
 
   // The same conditions without pagination: the file covers everything the filter

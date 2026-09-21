@@ -964,7 +964,12 @@ paths:
       operationId: listPatientHistories
       tags: [Patients]
       summary: List a patient's medical history
-      description: Task T14. Ordered by `onset_date` descending for the timeline view.
+      description: |
+        M2-06. Ordered by `onset_date` descending for the timeline view. `onset_date`
+        is optional, and an entry recorded without one sorts **last** rather than
+        first; entries sharing a date keep a stable order. Not paginated: the
+        timeline renders the whole history, the same way the sibling allergies call
+        renders all of a patient's allergies.
       responses:
         '200':
           description: History entries.
@@ -976,7 +981,9 @@ paths:
       operationId: createPatientHistory
       tags: [Patients]
       summary: Add a history entry
-      description: Task T14.
+      description: |
+        M2-06. Only `diagnosis` is required. Writes a `history.create` audit entry
+        carrying the diagnosis and the onset date.
       requestBody:
         required: true
         content:
@@ -998,12 +1005,14 @@ paths:
       operationId: updatePatientHistory
       tags: [Patients]
       summary: Update a history entry
-      description: Task T14.
+      description: |
+        M2-06. Partial update: only the fields present in the body change. Writes a
+        `history.update` audit entry.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/HistoryCreateRequest' }
+            schema: { $ref: '#/components/schemas/HistoryUpdateRequest' }
       responses:
         '200':
           description: Updated.
@@ -1011,11 +1020,14 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/HistoryResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     delete:
       operationId: deletePatientHistory
       tags: [Patients]
       summary: Delete a history entry
-      description: Task T14.
+      description: |
+        M2-06. Writes a `history.delete` audit entry whose `detail` keeps the removed
+        entry's diagnosis and onset date, so the trail still names what went.
       responses:
         '200':
           description: Deleted.
@@ -3103,6 +3115,34 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
+  /api/audit-logs/actions:
+    get:
+      operationId: listAuditActions
+      tags: [Audit]
+      summary: List the audit action names
+      description: |
+        Task T12. Administrator only. Every action string the service can write — the
+        union of `audit.MARKED` (the strings marked by hand) and the values of
+        `audit.ACTIONS` — sorted, for the audit screen's filter dropdown.
+
+        It is **not** a precondition for searching: `action` on
+        `GET /api/audit-logs` is an exact-match string, so a caller who never calls this
+        can still filter. The route exists because the dropdown used to be a hand-copied
+        array in `AuditLogView.vue`, and it had drifted: T17's five `patient_group.*`
+        actions and `temp_grant.expire` were absent, so the entries those tasks wrote
+        could not be filtered for on the screen whose purpose is reviewing them.
+
+        Registered before the `/{id}` routes for the reason the export route states:
+        `actions` does not parse as an integer, so a path parameter declared ahead of
+        this one turns every call into an unexplained 422.
+      responses:
+        '200':
+          description: The action names, sorted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditActionListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
   /api/audit-logs/export:
     get:
       operationId: exportAuditLogs
@@ -3890,8 +3930,14 @@ components:
       required: [id, diagnosis]
       properties:
         id: { type: integer }
-        diagnosis: { type: string }
-        onset_date: { type: string, format: date }
+        diagnosis: { type: string, example: Type 2 diabetes }
+        onset_date:
+          type: string
+          format: date
+          nullable: true
+          description: |
+            Null when the history was recorded without a date. Such an entry is kept
+            and sorted last, not refused. / 发病日期；未知时为 null，该条目保留并排在最后。
         notes: { type: string }
         created_at: { type: string, format: date-time }
 
@@ -3900,7 +3946,30 @@ components:
       required: [diagnosis]
       properties:
         diagnosis: { type: string }
-        onset_date: { type: string, format: date }
+        onset_date:
+          type: string
+          format: date
+          nullable: true
+          description: |
+            Optional, and may be sent as null. / 可选，也可显式传 null。
+        notes: { type: string }
+
+    HistoryUpdateRequest:
+      type: object
+      description: |
+        Updating a history entry. **Every field is optional**, and only the ones
+        present are changed -- the same reason `ReminderRuleUpdateRequest` is a
+        separate schema from its create body rather than a reuse of it: correcting a
+        date must not require restating the diagnosis.
+
+        `onset_date: null` **clears** the date, which is the only way to take a wrong
+        one back off. `diagnosis: null` and `notes: null` are refused with a 422 --
+        the first because the column is NOT NULL, the second so that clearing free
+        text is spelled `""` and not two different ways.
+      minProperties: 1
+      properties:
+        diagnosis: { type: string }
+        onset_date: { type: string, format: date, nullable: true }
         notes: { type: string }
 
     HistoryListResponse:
@@ -5397,6 +5466,22 @@ components:
                     items:
                       type: array
                       items: { $ref: '#/components/schemas/AuditLog' }
+
+    AuditActionListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              description: |
+                审计操作名，字典序 / Audit action names, sorted. A bare string rather than
+                an object because an action has one field and the `action` filter matches
+                that value exactly.
+              items:
+                type: string
+                examples: [allergy.create, auth.login, patient.view]
 
     AuditLogResponse:
       allOf:

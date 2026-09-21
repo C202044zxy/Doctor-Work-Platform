@@ -15,34 +15,17 @@ import { audit as auditApi, users as usersApi } from '../api/client'
 
 const PAGE_SIZE = 20
 
-// The vocabulary the backend actually writes: `audit.ACTIONS` in `backend/app/audit.py`
-// plus the actions marked by hand (patient.view, patient.allergies.view,
-// temp_grant.expire, audit.export). `action` is an exact-match string with no
-// enumeration endpoint, so this list is a convenience rather than the truth — which is
-// why the select allows a typed value. An action added by a later task stays
-// searchable without a change here.
-const ACTION_VOCABULARY = [
-  'patient.view',
-  'patient.create',
-  'patient.update',
-  'patient.delete',
-  'patient.allergies.view',
-  'allergy.create',
-  'allergy.update',
-  'allergy.delete',
-  'auth.login',
-  'auth.send_code',
-  'auth.verify_code',
-  'auth.logout',
-  'temp_grant.create',
-  'temp_grant.revoke',
-  'temp_grant.expire',
-  'audit.export',
-  // M1-07's two writes. Without them the entries this very screen is used to
-  // review would print as their raw keys.
-  'user.create',
-  'user.update',
-]
+// The vocabulary the service can write, read from the service. This was a hand-copied
+// array, and it had drifted in the way hand-copied arrays do: T17's five
+// `patient_group.*` actions and T11's `temp_grant.expire` were never added, so the
+// entries those tasks wrote could not be filtered for on the screen whose whole purpose
+// is reviewing them. `GET /api/audit-logs/actions` publishes `audit.MARKED` now, and a
+// task that adds an action makes it filterable without a change here.
+//
+// It stays a convenience and not a precondition: `action` is an exact-match string on
+// the query, so the select still allows a typed value, and an empty list (the request
+// failed, or a deployment older than the route) costs the dropdown and nothing else.
+const actionVocabulary = ref([])
 
 // `''` is "no condition" for both selects, and it is a real option value rather than a
 // cleared select: `clearable` sets the model to `undefined`, which would leave the state
@@ -205,8 +188,19 @@ async function exportCsv() {
   }
 }
 
+async function loadActions() {
+  try {
+    actionVocabulary.value = await auditApi.actions()
+  } catch {
+    // The action filter stays typeable without it, which is how it worked before the
+    // route existed at all.
+    actionVocabulary.value = []
+  }
+}
+
 onMounted(() => {
   loadActors()
+  loadActions()
   load()
 })
 </script>
@@ -229,9 +223,16 @@ onMounted(() => {
     <section class="panel">
       <div class="toolbar">
         <div class="filters">
-          <el-select v-model="filters.action" class="filter-action" aria-label="Action">
+          <el-select
+            v-model="filters.action"
+            class="filter-action"
+            filterable
+            allow-create
+            default-first-option
+            aria-label="Action"
+          >
             <el-option label="All actions" value="" />
-            <el-option v-for="item in ACTION_VOCABULARY" :key="item" :label="item" :value="item" />
+            <el-option v-for="item in actionVocabulary" :key="item" :label="item" :value="item" />
           </el-select>
 
           <el-select

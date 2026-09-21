@@ -32,6 +32,29 @@ ACTIONS = {
 }
 
 
+# The action strings marked by hand, for the screens that publish a filter over
+# them: `frontend/src/views/AuditLogView.vue`'s dropdown and nothing else. The
+# middleware falls back to `<route name>.<method>`, so an action missing here is
+# still recorded -- it only prints as a raw key such as `list_patient_groups.get`.
+MARKED = {
+    "patient.view",
+    "patient.allergies.view",
+    "allergy.create",
+    "allergy.update",
+    "allergy.delete",
+    "temp_grant.expire",
+    "audit.export",
+    "patient_group.create",
+    "patient_group.update",
+    "patient_group.delete",
+    "patient_group.members.add",
+    "patient_group.members.remove",
+    "history.create",
+    "history.update",
+    "history.delete",
+}
+
+
 def mark_audit(request, action, object_type, object_id=None, *, patient_id=None, detail=None):
     request.state.audit = {
         "action": action,

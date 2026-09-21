@@ -318,7 +318,7 @@
 
 ### 2.3 M2 患者信息管理
 
-> 任务 M2-01 / M2-02 / M2-03 / M2-04 / M2-05。🟡 P1
+> 任务 M2-01 / M2-02 / M2-03 / M2-04 / M2-05 / M2-06。🟡 P1
 
 #### 患者
 
@@ -326,7 +326,7 @@
 |---|---|---|---|
 | GET | `/api/patients` | 列表 + 多条件搜索 + 分页，见下 | M2-01 |
 | POST | `/api/patients` | 新建。**`patient_no` 由系统生成且唯一，请求体不接受该字段** | M2-01 |
-| GET | `/api/patients/{patient_no}` | 详情（含过敏史、分组） | M2-02 |
+| GET | `/api/patients/{patient_no}` | 详情（含过敏史、分组、病史时间线） | M2-02 |
 | PATCH | `/api/patients/{patient_no}` | 编辑基础信息 | M2-01 |
 | DELETE | `/api/patients/{patient_no}` | 删除。**删除策略（软删/级联）须写进接口文档** | M2-01 |
 
@@ -400,6 +400,14 @@
 | PATCH | `/api/histories/{id}` | 修改 | M2-06 |
 | DELETE | `/api/histories/{id}` | 删除 | M2-06 |
 
+> **已实现（M2-06，2026-09-21）**：`backend/app/histories.py` + `patient_history` 表（迁移 `d5e8a3b71c04`）。列表**不分页**（返回扁平数组，与同响应里的 `allergies` 一致），详见 `docs/03-实现现状.md`。
+>
+> - **`onset_date` 可空，且这不是错误。** 契约只要求 `diagnosis` 必填；没有发病日期的记录**保留**并排在时间线**最末**（`onset_date IS NULL` 作为排序首项，SQLite 与 MySQL 8 语法一致——`NULLS LAST` 在 MySQL 上无法编译），同一天的多条按 `id` 稳定。种子数据里 `P20260001` 有一条无日期的记录就是为了演示这条。
+> - **PATCH 用独立的 `HistoryUpdateRequest`，全字段可选、无 `required`。** 与 M6-04 的提醒规则同一个理由（见下）：改一个日期不该被迫重述诊断。零值口径：`onset_date: null` **表示清除**（列可空，否则填错的日期没有别的办法改掉）；`diagnosis: null` 与 `notes: null` 一律 **422**（前者列 NOT NULL，后者与前者一致，清空正文用 `""`）。契约侧已拆出 `HistoryUpdateRequest`（`minProperties: 1`）。
+> - **审计**：`history.create` / `history.update` / `history.delete` 三条，均带 `patient_id`（这是患者子行的临床写入，必须归到患者名下，同 `allergy.delete`）。`detail` 只放 `diagnosis` 与 `onset_date`，**不放 `notes`**——`app/audit.py` 开宗明义不保留正文。
+> - **权限**：走既有的 `patient.read` / `patient.write`（未新造权限字符串）。`/api/histories/{id}` 不在 `/api/patients` 前缀下，已把 `"/api/histories"` 加进 `app/security.py` 的前缀元组；`backend/tests/test_histories.py` 有匿名 401 扫描钉住这条。
+> - **跨科室 404**：病史属于某个患者，四个动词对越界调用者一律 **404**，且父患者软删后其病史同样 404（行保留，随父过滤）。
+
 #### 过敏史
 
 | 方法 | 路径 | 说明 | 任务 |
@@ -426,6 +434,15 @@
 | DELETE | `/api/patient-groups/{id}` | 删除 | M2-05 |
 | POST | `/api/patient-groups/{id}/members` | 批量加入，体 `{"patient_nos": ["P20260001"]}` | M2-05 |
 | DELETE | `/api/patient-groups/{id}/members` | 批量移出，同上 | M2-05 |
+
+**交付说明（六条路由全部有界面）。** 入口是患者列表工具栏里分组筛选旁的 **Manage groups**，一个对话框切换两个视图：分组列表（新建 / 重命名 / 删除）与某分组的成员（批量加入 / 移出）。三条口径按场景 M2-T9 落：
+
+1. **成员不能跨科室**：422，且 message 点名患者号（`groups.py:_members_of`）。客户端**不预判**这条，服务端的原文直接落到表单内联显示。
+2. **重复加入**：409，同样点名（`groups.py:_already_in` 在插入前查，所以信息是具体的）。
+3. **移出不在组内的人**：404 且点名。静默回 200 会让界面显示一个数据库里没有的状态。
+4. **同科室重名**：409（`PatientGroupCreate` 与 PATCH 重命名两处都查，`IntegrityError` 兜并发）。
+5. **不在自己科室的分组**一律 **404**，不是 403——调用方不该知道它存在（`_visible_group`）。
+6. **契约没有成员名单接口**，只有 `member_count`。所以对话框**不列成员**，只显示人数，并写明"要查名单请用分组筛选"，避免留白被读成遗漏。
 
 ---
 
@@ -789,6 +806,9 @@
 | GET | `/api/audit-logs` | **仅 `admin`** | 用户/时间/操作类型三条件组合 + 分页，默认按时间倒序 | M8-02 |
 | GET | `/api/audit-logs/{id}` | **仅 `admin`** | 详情（含 `detail` 原文） | M8-02 |
 | GET | `/api/audit-logs/export` | **仅 `admin`** | 导出 CSV（`text/csv`，不是 JSON） | M8-02 |
+| GET | `/api/audit-logs/actions` | **仅 `admin`** | 服务可写入的全部 `action` 名，字典序，供筛选下拉 | M8-02 补充 |
+
+**`/api/audit-logs/actions` 的来历。** 它**不是**查询审计日志的前提——`action` 是精确匹配的字符串，手输同样有效。存在的理由是筛选下拉此前在前端被手工抄了一份（`AuditLogView.vue` 的 `ACTION_VOCABULARY`），而且已经漂移：T17 的五个 `patient_group.*` 与 `temp_grant.expire` 都不在其中，于是「按动作审阅」对这些条目失效，而这正是审计页的用途之一。现在该接口返回 `audit.MARKED` 与 `audit.ACTIONS` 的并集，新增动作只在一处登记即可被筛到。路由必须注册在任何 `/{id}` 之前，理由与 `/export` 相同（`actions` 不是整数，否则每次调用都变成无解释的 422）。
 
 **CSV 导出的三条硬要求**（M8-02，容易漏）：
 
@@ -839,14 +859,14 @@
 |---|---|---|---|
 | `/login` | `LoginView.vue` | `POST /api/auth/login` → `POST /api/auth/send-code` → `POST /api/auth/verify-code`；注册分支 `POST /api/auth/signup` → `POST /api/auth/signup/verify`；人脸分支 `POST /api/auth/face/login` | ✅ **真实接口** |
 | `/dashboard` | `DashboardView.vue` | `GET /api/me`（会话里已有，无独立请求）/ `/api/meetings`（邀请与本周会诊）/ `/api/patients`（本人范围内患者与姓名）/ `/api/reminders?unread_only=true`（未读项，非消费式）/ `/api/reminders/unread-count` | ✅ **真实接口**（2026-09-19） |
-| `/patients` | `PatientListView.vue` | `GET /api/patients`、`POST /api/patients`、`DELETE /api/patients/{patient_no}`、`GET /api/departments` | ✅ **真实接口** |
-| `/patients/:patientNo` | `PatientDetailView.vue` | `GET /api/patients/{patient_no}`、`GET /api/meetings?patient_no=…`、`GET /api/meetings/{id}/report`（`?version=` 读历史版本）、`GET /api/meetings/{id}/report/print`（仅参与人）；「Health data」Tab（`components/PatientHealth.vue`，M6）消费 `/api/patients/{no}/vitals`、`/vitals/trend`、`/api/health-plans`、`/api/reminder-rules`、`/api/reminders`、`/unread-count`、`/api/patients/{no}/assessments`、`/api/assessments/{id}` | ✅ **真实接口**（**「会诊记录」Tab** 属 M5、**「Health data」Tab** 属 M6，其余 Tab 属 M2-04） |
+| `/patients` | `PatientListView.vue` | `GET /api/patients`、`POST /api/patients`、`DELETE /api/patients/{patient_no}`、`GET /api/departments`、`GET /api/patient-groups`；**Manage groups 对话框**（M2-05）消费分组六条路由中的写那五条，外加 `GET /api/patients?size=100` 做成员的快捷选项 | ✅ **真实接口** |
+| `/patients/:patientNo` | `PatientDetailView.vue` | `GET /api/patients/{patient_no}`（警示条、分组、症状标签、病史时间线**全部来自这一个响应**）、`GET /api/meetings?patient_no=…`、`GET /api/meetings/{id}/report`（`?version=` 读历史版本）、`GET /api/meetings/{id}/report/print`（仅参与人）、`GET /api/allergens`（过敏编辑器的字典）、`POST/PATCH/DELETE /api/patients/{no}/allergies`、`/api/allergies/{id}`、`POST /api/patients/{no}/histories`、`PATCH/DELETE /api/histories/{id}`；「Health data」Tab（`components/PatientHealth.vue`，M6）消费 `/api/patients/{no}/vitals`、`/vitals/trend`、`/api/health-plans`、`/api/reminder-rules`、`/api/reminders`、`/unread-count`、`/api/patients/{no}/assessments`、`/api/assessments/{id}` | ✅ **真实接口**（**「Consultation records」Tab** 属 M5、**「Health data」Tab** 属 M6；身份头、警示条、`Medical history` Tab 与两个编辑器属 M2-04) |
 | `/records` | `MedicalRecordView.vue` | 消费 `/api/emr/templates`、`/api/emr/records`、`PATCH /api/emr/records/{id}`、`/api/drugs`、`POST /api/emr/orders/validate` | ✅ **真实接口** |
 | `/consultations` | `ConsultationsView.vue` | **两个 Tab**：「Patient consultation」（M3，**零代码**，当前是写明未做的空态，不消费任何接口，也没有假数据）；「Remote consultation」（M5，消费列在下一行的那组接口） | ⚠️ **一半真实、一半空态** |
 | `/consultations?tab=remote` | `RemoteConsultationView.vue`（作为子组件） | `GET/POST /api/meetings`、`/accept`、`/decline`、`/start`、`/complete`、**专家选择框 `GET /api/users?status=active&size=100`**（M1-07 前是契约外的 `/api/meetings/doctors`）、`/api/meetings/{id}/materials`、`/api/materials/{id}/download`、`/api/meetings/{id}/report`、`/report/print` | ✅ **真实接口** |
 | `/remote-consultation` | — | 无（重定向到 `/consultations?tab=remote`） | ➡️ **重定向** |
 | `/review`（senior）与 `/my-submissions`（本人） | `ReviewQueueView.vue` | 消费 `/api/emr/reviews`、`POST /api/emr/records/{id}/review`、`GET /api/emr/my-submissions` | ✅ **真实接口** |
-| `/audit` | `AuditLogView.vue` | `GET /api/audit-logs`（筛选 / 分页）、`GET /api/audit-logs/export`（服务端 CSV）、**账户筛选下拉 `GET /api/users?size=100`**（M1-07 前是从审计行里抠 id） | ✅ **真实接口**（T12） |
+| `/audit` | `AuditLogView.vue` | `GET /api/audit-logs`（筛选 / 分页）、`GET /api/audit-logs/export`（服务端 CSV）、`GET /api/audit-logs/actions`（动作下拉，此前是手工抄的数组）、**账户筛选下拉 `GET /api/users?size=100`**（M1-07 前是从审计行里抠 id） | ✅ **真实接口**（T12） |
 | `/users`（admin） | `UserManagementView.vue` | `GET /api/users`（`q`/`title`/`department`/`status` + 分页）、`POST /api/users`、`PATCH /api/users/{id}`、`GET /api/roles`、`GET /api/departments` | ✅ **真实接口**（M1-07） |
 
 **应用外壳（`frontend/src/App.vue` / `frontend/src/session.js`）**
@@ -862,7 +882,7 @@
 
 | 页面 | 对应任务 | 说明 |
 |---|---|---|
-| 患者详情页 | M2-04 | `PatientDetailView` 已随 M5 建出**身份头 + 「会诊记录」Tab**；病史 / 分组 / 过敏编辑仍属 M2-04 |
+| ~~患者详情页~~ | M2-04 | **已实现**：`PatientDetailView.vue` = 身份头 + 过敏警示条（`data-severity` 唯一合法红色）+ 症状标签 / 分组 + 「Consultation records」「Medical history」「Health data」三个 Tab；过敏与病史的增删改走真实接口 |
 | ~~用户管理页~~ | M1-07 | **已实现**：`/users` → `UserManagementView.vue`，admin 专属（`MODULE_ROLES.users`，菜单与路由守卫两处都写）；列表 / 新建 / 修改 / 启用停用接真实接口。见上表 |
 | 临时授权管理页 | M1-06 | 同上 |
 | 我的提交 | M4-07 | 已实现：`/my-submissions` 使用真实接口 |

@@ -34,7 +34,7 @@ from app import crypto
 from app.auth import hash_password, verify_password
 from app.config import Settings
 from app.database import make_engine, session_factory
-from app.models import Allergy, Department, Patient, PatientTag, Role, User
+from app.models import Allergy, Department, Patient, PatientHistory, PatientTag, Role, User
 
 DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "Demo@2026")
 
@@ -46,10 +46,16 @@ USERS: tuple[tuple[str, str, str, str, str], ...] = (
     ("dr_chen", "Dr Chen", "dr_chen@example.test", "senior", "Neurology"),
 )
 
-# patient_no, name, gender, birth_date, admitted_at, department, phone, id_card, tags, allergies
+# patient_no, name, gender, birth_date, admitted_at, department, phone, id_card,
+# tags, allergies, histories
 # Allergen codes come from app.allergies.DICTIONARY; names never go in that column.
 # The admission dates are spread across a month so the date-range search filter
 # has something to select.
+#
+# Histories are (diagnosis, onset_date, notes), and the onset date may be None.
+# `P20260001` carries one undated entry on purpose: docs/02-测试场景.md §3 flow 1
+# step 3 reads the timeline aloud, and an undated row is the only way to show on
+# stage that the timeline keeps one and sorts it last rather than dropping it.
 PATIENTS: tuple[tuple, ...] = (
     (
         "P20260001",
@@ -65,6 +71,16 @@ PATIENTS: tuple[tuple, ...] = (
             ("PENICILLIN", "drug", "severe", "Anaphylaxis"),
             ("SULFONAMIDE", "drug", "moderate", "Rash"),
         ),
+        (
+            ("Hypertension", "2015-06-18", "Stage 2 at diagnosis; on amlodipine since."),
+            ("Type 2 diabetes", "2019-11-04", "Diet-controlled, latest HbA1c 6.8%."),
+            ("Angina pectoris", "2024-02-27", "Exertional; relieved by rest."),
+            (
+                "Peptic ulcer disease",
+                None,
+                "Reported at first admission; the endoscopy report was not available.",
+            ),
+        ),
     ),
     (
         "P20260002",
@@ -77,6 +93,10 @@ PATIENTS: tuple[tuple, ...] = (
         "110101195511021234",
         ("arrhythmia",),
         (),
+        (
+            ("Osteoporosis", "2016-04-12", "On calcium and vitamin D."),
+            ("Atrial fibrillation", "2018-09-30", "Paroxysmal at first, permanent since 2021."),
+        ),
     ),
     (
         "P20260003",
@@ -89,6 +109,10 @@ PATIENTS: tuple[tuple, ...] = (
         "110101197207301234",
         ("headache", "dizziness"),
         (("ASPIRIN", "drug", "moderate", "Gastric bleeding"),),
+        (
+            ("Migraine without aura", "2005-03-16", "Two to three episodes a month."),
+            ("Hyperlipidaemia", "2020-07-21", "On atorvastatin."),
+        ),
     ),
 )
 
@@ -194,6 +218,7 @@ def baseline_drift(db) -> list[str]:
         _id_card,
         _tags,
         allergies,
+        histories,
     ) in PATIENTS:
         patient = db.scalar(select(Patient).where(Patient.patient_no == patient_no))
         if patient is None:
@@ -230,6 +255,21 @@ def baseline_drift(db) -> list[str]:
                 drift.append(
                     f"patient {patient_no}: {allergen} severity is {recorded.severity!r}, "
                     f"baseline is {severity!r}"
+                )
+        for diagnosis, onset_date, _notes in histories:
+            recorded_history = db.scalar(
+                select(PatientHistory).where(
+                    PatientHistory.patient_id == patient.id,
+                    PatientHistory.diagnosis == diagnosis,
+                )
+            )
+            expected_onset = date.fromisoformat(onset_date) if onset_date else None
+            if recorded_history is None:
+                drift.append(f"patient {patient_no}: the {diagnosis!r} history entry is missing")
+            elif recorded_history.onset_date != expected_onset:
+                drift.append(
+                    f"patient {patient_no}: {diagnosis!r} onset date is "
+                    f"{recorded_history.onset_date}, baseline is {expected_onset}"
                 )
     return drift
 
@@ -292,6 +332,7 @@ def seed_demo(*, repair: bool = False) -> list[str]:
                 id_card,
                 tags,
                 allergies,
+                histories,
             ) in PATIENTS:
                 patient = db.scalar(select(Patient).where(Patient.patient_no == patient_no))
                 department_id = departments[department].id
@@ -355,6 +396,34 @@ def seed_demo(*, repair: bool = False) -> list[str]:
                         recorded.severity = severity
                         recorded.allergy_type = allergy_type
                         repaired.append(f"patient {patient_no}: {allergen} restored to {severity}")
+                # Histories follow the allergy rule: a missing entry is filled in,
+                # because §3 flow 1 step 3 reads the timeline aloud. Notes are not
+                # pinned -- they are free text a demo may edit -- so only the
+                # diagnosis and its onset date are checked for drift.
+                for diagnosis, onset_date, notes in histories:
+                    recorded_history = db.scalar(
+                        select(PatientHistory).where(
+                            PatientHistory.patient_id == patient.id,
+                            PatientHistory.diagnosis == diagnosis,
+                        )
+                    )
+                    expected_onset = date.fromisoformat(onset_date) if onset_date else None
+                    if recorded_history is None:
+                        db.add(
+                            PatientHistory(
+                                patient_id=patient.id,
+                                diagnosis=diagnosis,
+                                onset_date=expected_onset,
+                                notes=notes,
+                            )
+                        )
+                        repaired.append(f"patient {patient_no}: added the {diagnosis!r} history")
+                    elif repair and recorded_history.onset_date != expected_onset:
+                        recorded_history.onset_date = expected_onset
+                        repaired.append(
+                            f"patient {patient_no}: {diagnosis!r} onset date restored to "
+                            f"{expected_onset}"
+                        )
             db.commit()
             drift = baseline_drift(db)
     finally:

@@ -86,6 +86,41 @@ def test_export_is_admin_only(client):
     assert client.get("/api/audit-logs/export").status_code == 401
 
 
+def test_the_action_list_is_the_vocabulary_the_service_writes(client):
+    """The filter dropdown reads this, so it has to name what is actually written.
+
+    It was a hand-copied array in the screen before this route existed, and it had
+    drifted: T17's five `patient_group.*` actions and `temp_grant.expire` were never
+    added, so the entries those tasks wrote could not be filtered for on the screen
+    whose purpose is reviewing them. Asserting the whole set is what keeps the next
+    task's addition from going missing the same way.
+
+    The registry is the assertion, not a second copy of it: `audit.ACTIONS` is what
+    the middleware falls back to and `audit.MARKED` is what the hand-marked paths
+    write, and both are imported here rather than restated.
+    """
+    from app.audit import ACTIONS, MARKED
+
+    response = client.get("/api/audit-logs/actions", headers=headers(client, 1))
+    assert response.status_code == 200
+    names = response.json()["data"]
+
+    assert names == sorted(MARKED | set(ACTIONS.values()))
+    # Sorted and free of duplicates: two callers rendering the same dropdown have to
+    # agree, and a set has no order of its own to give them.
+    assert names == sorted(set(names))
+    # The two that had gone missing, named here because their absence is the reason
+    # the route exists.
+    assert "temp_grant.expire" in names
+    assert "patient_group.members.add" in names
+    assert "history.delete" in names
+
+
+def test_the_action_list_is_admin_only(client):
+    assert client.get("/api/audit-logs/actions", headers=headers(client, 2)).status_code == 403
+    assert client.get("/api/audit-logs/actions").status_code == 401
+
+
 def test_rows_match_the_contract_and_carry_detail(client):
     """Criterion 5, plus the response model standing in for the contract's fields."""
     make_rows(client)
