@@ -14,12 +14,13 @@ from sqlalchemy import exists, or_, select
 
 from app.audit import mark_audit
 from app.audit_export import content_disposition
-from app.chat import Paging, consultation_scope, room_data, room_for
+from app.chat import Paging, room_data
 from app.models import Patient
+from app.rooms import consultation_key, consultation_room, consultation_scope
 from app.security import require_permission
-from app.work_common import DB, fields, ok, page, utc
+from app.work_common import DB, call_data, ok, page, utc
 from app.work_models import CallLog, Consultation, ConsultMessage
-from app.work_schemas import Envelope, Input, PageData, RoomRead
+from app.work_schemas import CallRead, Envelope, Input, PageData, RoomRead
 
 router = APIRouter(
     tags=["Consultations"], dependencies=[Depends(require_permission("consult.write"))]
@@ -146,28 +147,15 @@ class CallCreate(Input):
         return self
 
 
-class CallRead(Input):
-    id: int
-    consultation_id: int
-    call_id: str
-    started_at: datetime
-    connected_at: datetime | None
-    ended_at: datetime
-    duration_seconds: int
-    end_reason: str
-
-
-def call_data(row):
-    return fields(row, *CallRead.model_fields)
-
-
 @router.get("/api/consultations/{id}/calls", response_model=Envelope[PageData[CallRead]])
 def calls(id: int, db: DB, pagination: Paging):
-    room_for(db, id)
+    consultation_room(db, id)
     return ok(
         page(
             db,
-            select(CallLog).where(CallLog.consultation_id == id).order_by(CallLog.id.desc()),
+            select(CallLog)
+            .where(CallLog.room_key == consultation_key(id))
+            .order_by(CallLog.id.desc()),
             pagination,
             call_data,
         )
@@ -176,7 +164,7 @@ def calls(id: int, db: DB, pagination: Paging):
 
 @router.post("/api/consultations/{id}/calls", response_model=Envelope[CallRead])
 def record_call(id: int, body: CallCreate, db: DB):
-    room_for(db, id, participant=True)
+    consultation_room(db, id, participant=True)
     call_id = body.call_id or uuid.uuid4().hex
     if any(
         state["call_id"] == call_id for state in db.info["request"].app.state.chat.calls.values()
@@ -185,7 +173,7 @@ def record_call(id: int, body: CallCreate, db: DB):
     with db.info["request"].app.state.chat.write_lock:
         existing = db.scalar(select(CallLog).where(CallLog.call_id == call_id))
         if existing:
-            if existing.consultation_id != id:
+            if existing.room_key != consultation_key(id):
                 raise HTTPException(409, "Call identifier already used")
             if any(
                 utc(getattr(existing, key)) != value
@@ -195,6 +183,7 @@ def record_call(id: int, body: CallCreate, db: DB):
                 raise HTTPException(409, "Call retry differs from the saved record")
             return ok(call_data(existing))
         row = CallLog(
+            room_key=consultation_key(id),
             consultation_id=id,
             **body.model_dump(exclude={"call_id"}),
             call_id=call_id,

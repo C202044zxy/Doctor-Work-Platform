@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.auth import CurrentUser
 from app.models import Patient
 from app.patients import patient_scope, visible_patient
+from app.work_schemas import CallRead
 
 
 def get_db(request: Request, user: CurrentUser):
@@ -51,6 +52,11 @@ def scoped(model, db):
         .join(Patient, model.patient_id == Patient.id)
         .where(Patient.deleted_at.is_(None), patient_scope(db.info["user"]))
     )
+
+
+def call_data(row):
+    """Render a finished call through the shared schema, for either kind of room."""
+    return fields(row, *CallRead.model_fields)
 
 
 def page(db, stmt, pagination, render):

@@ -2012,8 +2012,8 @@ paths:
       description: |
         Task M3-02. The HTTP fallback for when the WebSocket is unavailable; the normal
         path is the chat socket, `WS /ws/chat/{room_id}` with `room_id` set to the
-        consultation id. Both write the same row, so a client that reconnects loses
-        nothing.
+        consultation's own room key, which is its bare integer id. Both write the same
+        row, so a client that reconnects loses nothing.
 
         Sending to an `ended` consultation is refused — the room is read-only once
         closed (M3-03 criterion 4).
@@ -2469,6 +2469,107 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MeetingParticipantListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/meetings/{id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: listMeetingMessages
+      tags: [Meetings]
+      summary: Read a meeting's message history
+      description: |
+        The meeting's half of the one chat room: the same rows, the same cursor paging
+        and the same read rules as `GET /api/consultations/{id}/messages`, reached
+        through the meeting's own path because its subject is a meeting. The socket that
+        carries them is shared -- `WS /ws/chat/{room_id}` with `room_id` set to `m<id>`.
+
+        Authorization is the invitation list: the initiator plus every invited expert,
+        which is the same set `/api/meetings/{id}/materials` uses. A colleague who was
+        never invited is refused with 403 rather than 404, because the meeting's own
+        detail route is what hides its existence.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: before_id
+          in: query
+          description: Stable older-history cursor; excludes this message and later IDs.
+          schema: { type: integer, minimum: 1 }
+        - name: after_id
+          in: query
+          description: Reconnect cursor; returns newer messages in ascending ID order. Mutually exclusive with before_id.
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: A page of messages.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: createMeetingMessage
+      tags: [Meetings]
+      summary: Send a message over HTTP
+      description: |
+        The HTTP fallback for the meeting room, and the same write as the socket:
+        `client_id` is the retry key, unique per room and sender, so a resend replays the
+        saved row instead of duplicating it.
+
+        The room is writable only while the meeting is `in_progress`. Before the
+        initiator starts it, and after it is completed, the answer is 409 -- the history
+        itself stays readable in both states.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageCreateRequest' }
+      responses:
+        '200':
+          description: Stored.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The meeting is not in progress, so its room is read-only.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/meetings/{id}/calls:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: listMeetingCallLogs
+      tags: [Meetings]
+      summary: Read a meeting's call history
+      description: |
+        The meeting's call log, newest first, over the same `call_log` rows the
+        consultation reads -- one table, one renderer, two paths. This is what the room
+        shows as its call history, and a meeting with no calls returns an empty page
+        rather than a 404.
+
+        There is deliberately no `POST` here, unlike `/api/consultations/{id}/calls`: the
+        consultation's POST is the fallback for a client whose socket is down, and a call
+        cannot happen at all without the signalling socket. The server writes the row
+        when the call ends, which is what keeps "no state left stuck on in call" true.
+
+        Calls are one-to-one and bind two connections. A meeting's room holds every
+        invited expert, so an offer is refused while more than one other participant is
+        connected; the caller is told to run a two-party call.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of calls.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CallLogListResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/meetings/{id}/materials:
@@ -3246,8 +3347,11 @@ paths:
         on each event and heartbeat. `client_id` supports idempotent message retries.
         Server control events also include `status`, `ping` and `error`; clients answer
         `ping` with `pong`. Older/reconnect history uses the HTTP cursor parameters.
-        This increment resolves consultation IDs. D's meeting model and A's video
-        signalling handlers remain integration dependencies, not implemented features.
+        `room_id` is a room key, and it is a string because the two id sequences
+        overlap: `/api/consultations/{id}`'s bare integer names a consultation, and
+        `m<id>` names a meeting. `backend/app/rooms.py` is the one place that decides
+        which kind a key is, so both reach this one socket implementation. A key that
+        parses as neither is a 404 rather than a guess.
 
         `type` is one of `message`, `typing`, `joined`, `left`, `call_offer`,
         `call_accept`, `call_answer`, `ice_candidate`. The call events carry the WebRTC signalling,
@@ -3274,16 +3378,20 @@ paths:
         specific WebSocket connections, ring out after 25 seconds, and finish
         when either connection closes. No media or SDP is stored.
         `ping` requires `pong`; after 20 seconds without inbound activity the
-        connection closes. `status` carries the updated consultation;
+        connection closes. `status` carries the room's new state: the whole consultation
+        row for a consultation, and the room's status with its `ready` marker for a
+        meeting, because a meeting is started from another session and every connection
+        has to see the room become writable without reloading.
         `error` carries message, client_id, call_id and event_type when available.
         Readers with patient data scope can use HTTP history, but only room
-        participants may upgrade this socket. M5 room resolution is not yet installed.
+        participants may upgrade this socket -- for a consultation the creator and the
+        accepting doctor, for a meeting the initiator and every invited expert.
       parameters:
         - name: room_id
           in: path
           required: true
-          description: Currently a consultation integer id. Meeting room resolution requires M5 integration; never mix integer IDs from different tables.
-          schema: { type: integer }
+          description: "The room key. Bare digits name a consultation (`12`), and `m<id>` names a meeting (`m12`), so the fifth consultation and the fifth meeting are `5` and `m5` rather than the same room."
+          schema: { type: string, pattern: '^(m)?[0-9]+$', example: m12 }
       responses:
         '101':
           description: Switching protocols. The caller is authenticated and is on the session.
@@ -4636,11 +4744,16 @@ components:
 
     ConsultationMessage:
       type: object
-      required: [id, consultation_id, sender_type, content, sent_at]
+      description: |
+        One message, in whichever room it was sent. `room_key` names that room: bare
+        digits for a consultation, `m<id>` for a meeting. `consultation_id` is null for
+        the meeting rooms, which is why it is no longer required.
+      required: [id, room_key, sender_type, content, sent_at]
       properties:
         client_id: { type: [string, 'null'], maxLength: 64 }
         id: { type: integer }
-        consultation_id: { type: integer }
+        room_key: { type: string, description: "The room this message belongs to: digits name a consultation, `m<id>` a meeting." }
+        consultation_id: { type: [integer, 'null'], description: Null for a meeting room; the meeting is named by room_key there. }
         sender_type:
           type: string
           enum: [doctor, patient_assist]
@@ -4722,12 +4835,13 @@ components:
         `started_at` is always present. `connected_at` stays null when the callee never
         picked up; `ended_at` and `duration_seconds` are the numbers T29 scenario S1
         reads back, so a call that ran to completion carries both.
-      required: [id, consultation_id, started_at]
+      required: [id, room_key, started_at]
       properties:
         call_id: { type: string, maxLength: 64, description: Optional client retry key on POST; always present in stored responses. }
-        end_reason: { type: string, enum: [hangup, rejected, disconnected, timeout, consultation_ended, server_restart, reported] }
+        end_reason: { type: string, enum: [hangup, rejected, disconnected, timeout, consultation_ended, meeting_ended, server_restart, reported] }
         id: { type: integer }
-        consultation_id: { type: integer }
+        room_key: { type: string, description: "The room this call belongs to: digits name a consultation, `m<id>` a meeting." }
+        consultation_id: { type: [integer, 'null'], description: Null for a meeting room; the meeting is named by room_key there. }
         started_at: { type: string, format: date-time }
         connected_at: { type: [string, 'null'], format: date-time }
         ended_at: { type: [string, 'null'], format: date-time }

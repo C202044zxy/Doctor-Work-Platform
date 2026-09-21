@@ -1,4 +1,9 @@
-"""M3 chat: single worker, durable history and bounded live queues."""
+"""M3 chat: single worker, durable history and bounded live queues.
+
+One socket serves both kinds of conversation, so M5's remote consultation reuses this
+module rather than opening a second chat of its own. The room key is the spelling
+`app.rooms` defines: digits for a patient consultation, `m<id>` for a meeting.
+"""
 
 import asyncio
 import contextlib
@@ -27,20 +32,21 @@ from fastapi.security import HTTPAuthorizationCredentials
 from PIL import Image, UnidentifiedImageError
 from pydantic import ValidationError
 from redis.exceptions import RedisError
-from sqlalchemy import or_, select, update
+from sqlalchemy import select, update
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 
-from app import calls
+from app import calls, rooms
 from app.audit import mark_audit, persist_audit
 from app.auth import current_user
 from app.dependencies import Pagination
 from app.models import Patient, User
 from app.patients import visible_patient
 from app.security import allows, require_permission
-from app.work_common import DB, fields, ok, page, scoped
-from app.work_models import Consultation, ConsultMessage, ImageUpload
+from app.work_common import DB, call_data, fields, ok, page
+from app.work_models import CallLog, Consultation, ConsultMessage, ImageUpload
 from app.work_schemas import (
+    CallRead,
     ConsultationCreate,
     Envelope,
     MessageCreate,
@@ -54,6 +60,13 @@ router = APIRouter(
     tags=["Consultations"], dependencies=[Depends(require_permission("consult.write"))]
 )
 socket_router = APIRouter()
+# M5's room: the same machinery on an `m<id>` key. The paths are M5's because their
+# subject is a meeting, but the code is this one chat implementation, deliberately not
+# a second one -- `docs/api/API-索引.md` requires consultations and meetings to share
+# the route rather than each opening their own.
+meeting_router = APIRouter(
+    tags=["Meetings"], dependencies=[Depends(require_permission("consult.write"))]
+)
 Paging = Annotated[Pagination, Depends()]
 
 
@@ -85,27 +98,6 @@ class ChatHub:
                 queue.put_nowait(encoded)
 
 
-def consultation_scope(db):
-    """The waiting queue is shared; accepted conversations belong to their participants."""
-    user_id = db.info["user"].id
-    return scoped(Consultation, db).where(
-        or_(
-            Consultation.status == "waiting",
-            Consultation.created_by == user_id,
-            Consultation.doctor_id == user_id,
-        )
-    )
-
-
-def room_for(db, room_id, *, participant=False):
-    row = db.scalar(consultation_scope(db).where(Consultation.id == room_id))
-    if row is None:
-        raise HTTPException(404, "Consultation not found")
-    if participant and db.info["user"].id not in (row.created_by, row.doctor_id):
-        raise HTTPException(403, "Only session participants may enter the room")
-    return row
-
-
 def room_data(db, row):
     doctor = db.get(User, row.doctor_id) if row.doctor_id else None
     patient = db.get(Patient, row.patient_id)
@@ -132,6 +124,7 @@ def message_data(row):
     return fields(
         row,
         "id",
+        "room_key",
         "consultation_id",
         "sender_type",
         "sender_name",
@@ -149,7 +142,7 @@ def list_rooms(
     status: Literal["waiting", "active", "ended"] | None = None,
     patient_no: str | None = None,
 ):
-    stmt = consultation_scope(db)
+    stmt = rooms.consultation_scope(db)
     if status:
         stmt = stmt.where(Consultation.status == status)
     if patient_no:
@@ -179,17 +172,21 @@ def create_room(body: ConsultationCreate, db: DB):
 
 @router.get("/api/consultations/{id}", response_model=Envelope[RoomRead])
 def read_room(id: int, db: DB):
-    row = room_for(db, id)
+    room = rooms.consultation_room(db, id)
     mark_audit(
-        db.info["request"], "consultation.view", "consultation", id, patient_id=row.patient_id
+        db.info["request"],
+        "consultation.view",
+        "consultation",
+        id,
+        patient_id=room.patient_id,
     )
-    return ok(room_data(db, row))
+    return ok(room_data(db, room.row))
 
 
 def transition(app, user, room_id, target):
     with app.state.chat.write_lock, app.state.sessions() as db:
         db.info["user"] = user
-        row = room_for(db, room_id, participant=target == "ended")
+        row = rooms.consultation_room(db, room_id, participant=target == "ended").row
         expected = "waiting" if target == "active" else "active"
         if row.status != expected:
             raise HTTPException(400, f"Consultation must be {expected}")
@@ -214,14 +211,16 @@ async def change_room(db, id, target):
     request = db.info["request"]
     result = await run_in_threadpool(transition, request.app, db.info["user"], id, target)
     if target == "ended":
-        await calls.finish(request.app, id, "consultation_ended")
+        await calls.finish(request.app, rooms.consultation_key(id), "consultation_ended")
     mark_audit(
         request,
         "consultation.accept" if target == "active" else "consultation.end",
         "consultation",
         id,
     )
-    await request.app.state.chat.publish(id, {"type": "status", "data": result})
+    await request.app.state.chat.publish(
+        rooms.consultation_key(id), {"type": "status", "data": result}
+    )
     return ok(result)
 
 
@@ -235,29 +234,15 @@ async def end_room(id: int, db: DB):
     return await change_room(db, id, "ended")
 
 
-@router.get("/api/consultations/{id}/messages", response_model=Envelope[PageData[MessageRead]])
-def history(
-    id: int,
-    db: DB,
-    pagination: Paging,
-    before_id: int | None = Query(None, gt=0),
-    after_id: int | None = Query(None, ge=0),
-):
-    row = room_for(db, id)
+def room_history(db, room, pagination, before_id, after_id):
+    """The one history reader: cursor paging on the room, not on the room's kind."""
     if before_id is not None and after_id is not None:
         raise HTTPException(422, "Use before_id or after_id, not both")
-    stmt = select(ConsultMessage).where(ConsultMessage.consultation_id == id)
+    stmt = select(ConsultMessage).where(ConsultMessage.room_key == room.key)
     if before_id is not None:
         stmt = stmt.where(ConsultMessage.id < before_id)
     if after_id is not None:
         stmt = stmt.where(ConsultMessage.id > after_id)
-    mark_audit(
-        db.info["request"],
-        "consultation.messages.view",
-        "consultation",
-        id,
-        patient_id=row.patient_id,
-    )
     return ok(
         page(
             db,
@@ -270,14 +255,55 @@ def history(
     )
 
 
-def store_message(app, user, room_id, body):
+@router.get("/api/consultations/{id}/messages", response_model=Envelope[PageData[MessageRead]])
+def history(
+    id: int,
+    db: DB,
+    pagination: Paging,
+    before_id: int | None = Query(None, gt=0),
+    after_id: int | None = Query(None, ge=0),
+):
+    room = rooms.consultation_room(db, id)
+    mark_audit(
+        db.info["request"],
+        "consultation.messages.view",
+        "consultation",
+        id,
+        patient_id=room.patient_id,
+    )
+    return room_history(db, room, pagination, before_id, after_id)
+
+
+@meeting_router.get("/api/meetings/{id}/messages", response_model=Envelope[PageData[MessageRead]])
+def meeting_history(
+    id: int,
+    db: DB,
+    pagination: Paging,
+    before_id: int | None = Query(None, gt=0),
+    after_id: int | None = Query(None, ge=0),
+):
+    """会诊聊天室历史 / The meeting room's history, read by the same cursor rules.
+
+    Participants only, and the same `before_id`/`after_id` cursors as the patient
+    consultation: M5's room is this module's chat on another room key, which is what
+    `docs/api/API-索引.md` asks for instead of a second chat implementation.
+    """
+    room = rooms.meeting_room(db, id, participant=True)
+    mark_audit(
+        db.info["request"], "meeting.messages.view", "meeting", id, patient_id=room.patient_id
+    )
+    return room_history(db, room, pagination, before_id, after_id)
+
+
+def store_message(app, user, key, body):
+    """Persist one message in either kind of room and hand back its stored id."""
     with app.state.chat.write_lock, app.state.sessions() as db:
         db.info["user"] = user
-        room = room_for(db, room_id, participant=True)
+        room = rooms.room(db, key, participant=True)
         if body.client_id:
             previous = db.scalar(
                 select(ConsultMessage).where(
-                    ConsultMessage.consultation_id == room_id,
+                    ConsultMessage.room_key == room.key,
                     ConsultMessage.sender_id == user.id,
                     ConsultMessage.client_id == body.client_id,
                 )
@@ -286,8 +312,10 @@ def store_message(app, user, room_id, body):
                 if (previous.content, previous.image_url) != (body.content, body.image_url):
                     raise HTTPException(409, "client_id was used for a different message")
                 return message_data(previous)
-        if room.status != "active":
-            raise HTTPException(409, "Only active consultations accept messages")
+        if not room.writable:
+            raise HTTPException(
+                409, f"Messages are only accepted while the {room.label} is {room.ready}"
+            )
         if body.image_url:
             filename = body.image_url.removeprefix("/uploads/")
             if body.image_url != f"/uploads/{Path(filename).name}":
@@ -299,28 +327,32 @@ def store_message(app, user, room_id, body):
             )
             if (
                 upload is None
-                or upload.consultation_id not in (None, room_id)
+                or upload.room_key not in (None, room.key)
                 or not (Path(app.state.settings.upload_dir) / filename).is_file()
             ):
                 raise HTTPException(422, "Upload your image before sending it")
-            upload.consultation_id = room_id
+            upload.room_key = room.key
         row = ConsultMessage(
-            consultation_id=room_id,
+            room_key=room.key,
+            consultation_id=rooms.consultation_id_of(room.key),
             sender_id=user.id,
-            sender_type="doctor" if user.id == room.doctor_id else "patient_assist",
+            sender_type=room.sender_type_for(user),
             sender_name=user.name,
             **body.model_dump(),
         )
         db.add(row)
         db.flush()
-        room.last_message = (body.content or "[Image]")[:200]
-        room.last_message_at = row.sent_at
+        # Only a consultation carries a list preview; a meeting has no queue to show one in.
+        if room.kind == rooms.CONSULTATION:
+            consultation = db.get(Consultation, room.id)
+            consultation.last_message = (body.content or "[Image]")[:200]
+            consultation.last_message_at = row.sent_at
         db.commit()
         result = message_data(row)
     persist_audit(
         app.state.sessions,
         {
-            "action": "consultation.message",
+            "action": "meeting.message" if room.kind == rooms.MEETING else "consultation.message",
             "object_type": "consult_message",
             "object_id": str(result["id"]),
             "patient_id": room.patient_id,
@@ -335,9 +367,43 @@ def store_message(app, user, room_id, body):
 @router.post("/api/consultations/{id}/messages", response_model=Envelope[MessageRead])
 async def send_message(id: int, body: MessageCreate, db: DB):
     app = db.info["request"].app
-    data = await run_in_threadpool(store_message, app, db.info["user"], id, body)
-    await app.state.chat.publish(id, {"type": "message", "data": data})
+    key = rooms.consultation_key(id)
+    data = await run_in_threadpool(store_message, app, db.info["user"], key, body)
+    await app.state.chat.publish(key, {"type": "message", "data": data})
     return ok(data)
+
+
+@meeting_router.post("/api/meetings/{id}/messages", response_model=Envelope[MessageRead])
+async def send_meeting_message(id: int, body: MessageCreate, db: DB):
+    """会诊聊天室 HTTP 兜底 / The meeting room's HTTP fallback, exactly as M3's.
+
+    The socket is the normal path; this exists for the same reason the consultation one
+    does, so a client whose socket is down can still send, and it is the same
+    `store_message` either way.
+    """
+    app = db.info["request"].app
+    key = rooms.meeting_key(id)
+    data = await run_in_threadpool(store_message, app, db.info["user"], key, body)
+    await app.state.chat.publish(key, {"type": "message", "data": data})
+    return ok(data)
+
+
+@meeting_router.get("/api/meetings/{id}/calls", response_model=Envelope[PageData[CallRead]])
+def meeting_calls(id: int, db: DB, pagination: Paging):
+    """会诊通话记录 / Finished calls in the meeting room.
+
+    Read through the same `CallRead` renderer as M3's call history: a call is a call
+    whichever kind of room it happened in.
+    """
+    room = rooms.meeting_room(db, id, participant=True)
+    return ok(
+        page(
+            db,
+            select(CallLog).where(CallLog.room_key == room.key).order_by(CallLog.id.desc()),
+            pagination,
+            call_data,
+        )
+    )
 
 
 def checked_image(content):
@@ -382,8 +448,8 @@ async def read_image(filename: str, db: DB):
     row = db.scalar(select(ImageUpload).where(ImageUpload.filename == filename))
     if row is None:
         raise HTTPException(404, "Image not found")
-    if row.consultation_id:
-        room_for(db, row.consultation_id)
+    if row.room_key:
+        rooms.room(db, row.room_key)
     elif row.owner_id != db.info["user"].id:
         raise HTTPException(404, "Image not found")
     request = db.info["request"]
@@ -406,12 +472,15 @@ def socket_identity(ws, token, room_id):
         db.info["user"] = user
         # One scoped join instead of loading the room, patient, and patient again
         # for every outbound frame. Authorization still runs on every event.
-        room_for(db, room_id, participant=True)
+        rooms.room(db, room_id, participant=True)
     return user
 
 
 @socket_router.websocket("/ws/chat/{room_id}")
-async def chat_socket(ws: WebSocket, room_id: int, token: str = ""):
+async def chat_socket(ws: WebSocket, room_id: str, token: str = ""):
+    """The one room socket. `room_id` is a room key rather than a consultation id:
+    bare digits name a consultation and `m<id>` names a meeting, which is why it is a
+    string here and why both kinds reach the same handlers below."""
     try:
         user = await run_in_threadpool(socket_identity, ws, token, room_id)
     except (HTTPException, RedisError):

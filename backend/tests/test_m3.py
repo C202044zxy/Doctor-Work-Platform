@@ -185,7 +185,7 @@ def test_call_peer_disconnect_and_timeout_are_finalized(client):
                 {"type": "call_offer", "data": {"call_id": "timeout-call", "sdp": "v=0\r\n"}}
             )
             receive(b, "call_offer")
-            client.app.state.chat.calls[room]["deadline"] = 0
+            client.app.state.chat.calls[str(room)]["deadline"] = 0
             assert receive(a, "call_end")["reason"] == "timeout"
     assert (
         data(client.get(f"/api/consultations/{room}/calls", headers=headers(client)))["total"] == 2
@@ -273,7 +273,7 @@ def test_accept_and_answer_have_separate_deadlines_and_cannot_be_replayed(client
             payload = {"call_id": "slow-permission", "sdp": "v=0\r\n"}
             a.send_json({"type": "call_offer", "data": payload})
             receive(b, "call_offer")
-            state = client.app.state.chat.calls[room]
+            state = client.app.state.chat.calls[str(room)]
             assert state["deadline"] == 1060
             a.send_json({"type": "call_accept", "data": {"call_id": "slow-permission"}})
             receive(a, "error")

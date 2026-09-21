@@ -601,13 +601,13 @@
 | POST | `/api/uploads/images` | 🔒 | 上传图片，`multipart/form-data`，返回 `{"url":"/uploads/…"}` | M3-02 |
 | GET | `/api/consultations/{id}/calls` | 患者数据范围 | 通话记录列表（分页、倒序）；**"可在问诊记录中查看"就靠这条**（M3-05） | M3-05 |
 | POST | `/api/consultations/{id}/calls` | 参与人 | 记录一次通话的元数据（发起/接通/结束时间、时长）。**通话结束后才写**，非参与人 403 | M3-05 |
-| WS | **`/ws/chat/{room_id}`** | 🔒 | 实时图文消息（房间 = `consultation_id` 或 `meeting_id`） | M3-01 |
+| WS | **`/ws/chat/{room_id}`** | 🔒 | 实时图文消息（**房间键**：裸数字 = 问诊，`m<id>` = 会诊） | M3-01 |
 
 **2026-09-18 M3 实现补充**：records/export 增加 `patient`（患者姓名包含或患者号精确），其余 `patient_no/q/from/to` 保留且 AND 组合；日期按 Asia/Shanghai 创建日期，CSV 导出全部匹配结果，行数对应 total。`Consultation` 增加 `is_participant`；只读历史/图片/通话记录跟随患者数据范围，发消息和 WS 则额外限制为参与者。图片下载 `GET /uploads/{filename}` 需要 Bearer，不是匿名 StaticFiles。上传超限 413，伪装或无效图片 422。
 
 通话 GET 返回 `call_id/end_reason`；POST 支持可选 call_id 重试键并验证时间顺序与时长。浏览器正常通话由 WS 服务自动结束落库。信令为 `call_offer/call_answer`（call_id+sdp）、`ice_candidate`（call_id+candidate）、`call_connected/call_end/call_reject`（call_id）；服务端结束事件增加 reason。完整细则见 YAML 与 M3 架构文档。
 
-**M5 边界**：下面“复用同一路由”是跨模块目标；当前整数 room_id 仅解析问诊。M5 没有模型和参与者服务，不能把 meeting_id 当 consultation_id 使用。联调时需明确命名空间或全局房间注册。
+**M5 边界（2026-09-21 定下命名空间）**：`room_id` 现在是**字符串房间键**——裸数字是问诊（M3 的 URL、脚本、测试原样有效），`m<id>` 是会诊。这不是偏好而是必需：`consultations.id` 与 `meetings.id` 各自自增，`5` 同时是第 5 次问诊和第 5 场会诊，整数键无法区分，服务端会开错表的历史。解析只有一处 `backend/app/rooms.py`，`chat.py` 与 `calls.py` 都问它「这个键是谁、能不能发言」。未采用「全局 chat_room 注册表」：它要给 M3 已有数据回填房间行，换不来任何额外能力。非参与人：会诊在握手期即 403，问诊仍是 404（患者范围先隐藏房间）。
 
 **上传图片的四条硬约束**（M3-02，安全项，容易被跳过）：
 
@@ -660,6 +660,9 @@
 | GET | `/api/meetings/{id}/report` | 参与人 **或**能触达该患者的同科室医生 | 会诊报告（归档后从患者档案可读） | M5-03 |
 | POST | `/api/meetings/{id}/report` | **参与人** | 生成/保存报告（场景 M5-T5 要让非参与医生拿 403） | M5-03 |
 | GET | `/api/meetings/{id}/report/print` | 参与人 | 返回可打印的 HTML（Jinja2 渲染） | M5-03 |
+| GET | `/api/meetings/{id}/messages` | 参与人 | 会诊消息历史（游标分页，与问诊同一张表） | M5-01 |
+| POST | `/api/meetings/{id}/messages` | 参与人 | 发消息（HTTP 兜底；**仅 `in_progress` 可写**，其余 409） | M5-01 |
+| GET | `/api/meetings/{id}/calls` | 参与人 | 会诊通话记录（只读；会诊通话由服务端在 WS 结束时落库，因此没有 POST） | M5-01 |
 
 - **实现状态（2026-09-17，契约外的专家目录已于 2026-09-21 删除）**：上表 **11 条契约路径**已全部落地于 `backend/app/meetings.py`，`backend/tests/test_meetings.py` 用例通过；前端 `/remote-consultation` 与患者详情「会诊记录」Tab 已接真实接口。该页自 2026-09-18 起作为 `ConsultationsView.vue` 的子组件挂在 `/consultations?tab=remote` 上；旧路径 `/remote-consultation` 保留为重定向。
 - **~~`GET /api/meetings/doctors`~~ 已于 2026-09-21 随 M1-07 删除。** 它原先存在的唯一理由是「契约里 `/api/users` 是管理员专属，喂不了 `junior` 发起的专家选择框」。M1-07 放开列表读之后这个理由消失，路由与它的 `Doctor*` schema 一并删除，两端都不再出现。**专家选择框现在打的是 `GET /api/users?status=active&size=100`**（`RemoteConsultationView.vue` 的 `loadDoctors`）；被删路由原来硬过滤的「只给启用账号」由服务端 `status` 参数复现，`q` 仍是服务端筛选。**跨科室可见性由搬进 `backend/tests/test_users.py` 的用例继续钉住**（Cardiology 的 junior 必须看得见 Neurology 的专家）。
@@ -667,6 +670,7 @@
 - **状态机非法跳转返回 409**（如 `requested` 直接跳 `completed`；场景 M5-T3）。
 - 非受邀人访问该会诊 → 403/404，不泄露存在性。
 - 会诊发起/接受/状态变更均写审计。
+- **会诊的聊天与视频复用 M3 的房间（2026-09-21）**：**不新开路由**，仍是同一个 `WS /ws/chat/{room_id}`，键为 `m<id>`；历史与通话记录各有自己的 HTTP 路径（`/api/meetings/{id}/messages`、`/api/meetings/{id}/calls`），因为它们的对象是会诊。会诊房间**只在 `in_progress` 可写**，`requested`/`accepted`/`completed` 发消息返回 409（历史仍可读）；`start`/`complete` 之后服务端向房间广播 `status` 帧（带房间键、`ready`、`writable`），所以发起人在另一处开始会诊时，已经打开页面的受邀专家不用刷新就能发言。视频保持**一对一**：房间可能同时有多位专家在线，服务端在「除自己外还有多于一个连接」时**拒绝 offer**，而不是静默挑一个对端（`backend/app/calls.py`）。
 - **`scheduled_at` 不是必填。** M5-01 列的入参只有"患者 + 专家 + 目的"，所以前端不传时间也必须能发起；不传时后端按当前时刻落库。它唯一的额外作用是为每位受邀专家算 `temp_grant` 的有效期（该时刻 + 24h）。
 - **"目的"是必填的 `purpose`，不是可选的 `description`。** M5-01 把目的列为三个入参之一，又要求详情把它显示出来——所以它必须既**必填**又**能读回**（场景 M5-T3 验缺 `purpose` → 422 且指明字段）。早期草稿把它写成可选的 `description` 且响应体里根本没有这个字段，结果是"照着三项入参发文会 422、不填目的反而建得成、建完还读不出来"。`Meeting` 响应体已加 `purpose` 并列入 `required`。
 - **`patient_no` 筛选会放宽可见范围。** 不带筛选时只返回"我发起的 + 邀请我的"；带 `patient_no` 时返回该患者的会诊（受 M1-05 科室范围约束，跨科室返回空页）。这是必须的：M5-03 把报告**归档到患者档案**，同科室但没参与会诊的同事要能在"会诊记录"Tab 里读回来——如果按参与人过滤，这个 Tab 对**它服务的人**恰好是空的（场景 M5-T7）。
