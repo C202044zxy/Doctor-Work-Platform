@@ -1,5 +1,6 @@
 <script setup>
-import { nextTick, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onUnmounted, ref } from 'vue'
+import { connectLoopback } from '../call-loopback.js'
 import { acquireCallMedia, callMediaError, stopCallMedia } from '../call-media.js'
 
 const props = defineProps({ sendSignal: { type: Function, required: true }, enabled: Boolean })
@@ -7,7 +8,13 @@ const emit = defineEmits(['finished'])
 const state = ref('idle'), error = ref(''), caller = ref('')
 const localVideo = ref(null), remoteVideo = ref(null)
 const mediaMode = ref('camera')
-let pc, stream, callId, offer, timer, version = 0, candidates = [], localCandidates = [], described = false
+let pc, loop, stream, callId, offer, timer, version = 0, candidates = [], localCandidates = [], described = false
+
+const statusText = computed(() => {
+  if (state.value === 'incoming') return `${caller.value} is calling`
+  if (state.value === 'loopback') return 'Loopback on this computer — your camera is connected to you. No call was placed and nothing was recorded.'
+  return `Video: ${state.value}`
+})
 
 function signal(type, data = {}) {
   props.sendSignal(type, { call_id: callId, ...data })
@@ -22,6 +29,10 @@ function reset(message = '') {
     pc.onconnectionstatechange = null
     pc.close()
     pc = null
+  }
+  if (loop) {
+    loop.close()
+    loop = null
   }
   stopCallMedia(stream)
   stream = null
@@ -53,13 +64,20 @@ function callTimeout(phase) {
   timer = setTimeout(() => { finish(); error.value = message }, phase === 'ringing' ? 62000 : 47000)
 }
 
-async function prepare(expected) {
+async function acquire(expected) {
   const acquired = await acquireCallMedia(mediaMode.value)
   if (expected !== version) {
     stopCallMedia(acquired)
     return false
   }
   stream = acquired
+  await nextTick()
+  if (localVideo.value) localVideo.value.srcObject = stream
+  return true
+}
+
+async function prepare(expected) {
+  if (!await acquire(expected)) return false
   // Same-machine/LAN baseline. No third-party STUN/TURN account is silently used.
   pc = new RTCPeerConnection({ iceServers: [] })
   const tracks = stream?.getTracks() || []
@@ -93,9 +111,36 @@ async function prepare(expected) {
       timer = setTimeout(() => finish(), 10000)
     }
   }
-  await nextTick()
-  if (localVideo.value) localVideo.value.srcObject = stream
   return true
+}
+
+// A same-page loopback, for showing a connected video pane on one computer. It is
+// deliberately outside the signaling path: the server refuses an offer whenever no
+// other connection is in the room (`backend/app/calls.py`), and satisfying that check
+// with nobody there would mean the server pretending to have a peer. So this sends no
+// offer and no `call_id` is set, which is also why nothing lands in the call history
+// or the audit trail -- no call happened, only a real local media path.
+async function startLoopback() {
+  if (!props.enabled || state.value !== 'idle' || mediaMode.value === 'receive') return
+  error.value = ''
+  state.value = 'preparing'
+  const expected = ++version
+  callTimeout('preparing')
+  try {
+    if (!await acquire(expected)) return
+    const established = await connectLoopback(stream)
+    if (expected !== version) {
+      established.close()
+      return
+    }
+    loop = established
+    state.value = 'loopback'
+    clearTimeout(timer)
+    await nextTick()
+    if (remoteVideo.value) remoteVideo.value.srcObject = loop.remote
+  } catch (err) {
+    if (expected === version) { finish(); error.value = callMediaError(err) }
+  }
 }
 
 async function start() {
@@ -211,13 +256,19 @@ onUnmounted(() => finish())
     <p v-if="mediaMode === 'receive'">Receive only: your camera and microphone stay off. You can watch and hear the other participant.</p>
     <p v-else>Testing on one computer? Choose Receive only on the other side to avoid competing for the same camera.</p>
     <el-button v-if="state === 'idle'" :disabled="!enabled" @click="start">Start video call</el-button>
-    <template v-else>
-      <p>{{ state === 'incoming' ? `${caller} is calling` : `Video: ${state}` }}</p>
+    <el-button v-if="state === 'idle'" class="loopback" :disabled="!enabled || mediaMode === 'receive'" @click="startLoopback">Test on this computer (loopback)</el-button>
+    <p v-if="state === 'idle' && mediaMode !== 'receive'" class="loopback-note">
+      Loopback skips the check that the other participant is online, and connects your own camera
+      back to you: the picture is real, the other party is not. It places no call and writes nothing
+      to the call history. Its audio stays muted on this page to avoid feedback.
+    </p>
+    <template v-if="state !== 'idle'">
+      <p>{{ statusText }}</p>
       <el-button v-if="state === 'incoming'" type="primary" @click="accept">Answer</el-button>
-      <el-button @click="finish(state === 'incoming' ? 'call_reject' : 'call_end')">{{ state === 'incoming' ? 'Decline' : 'Hang up' }}</el-button>
+      <el-button @click="finish(state === 'incoming' ? 'call_reject' : 'call_end')">{{ state === 'incoming' ? 'Decline' : state === 'loopback' ? 'Stop loopback' : 'Hang up' }}</el-button>
       <div class="videos">
         <div><small>{{ mediaMode === 'receive' ? 'Local camera and microphone off' : mediaMode === 'audio' ? 'Microphone only — camera off' : 'You (muted preview)' }}</small><video ref="localVideo" autoplay playsinline muted /></div>
-        <div><small>Other participant</small><video ref="remoteVideo" autoplay playsinline controls /></div>
+        <div><small>{{ state === 'loopback' ? 'Loopback — the same camera again' : 'Other participant' }}</small><video ref="remoteVideo" autoplay playsinline controls :muted="state === 'loopback'" /></div>
       </div>
     </template>
     <p v-if="error" role="status">{{ error }}</p>
@@ -227,4 +278,5 @@ onUnmounted(() => finish())
 <style scoped>
 .video-call{border-top:1px solid #dce6e3;padding:12px 0}.videos{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}video{display:block;width:100%;max-height:220px;background:#182724;border-radius:8px}.video-call p{font-size:13px}
 .media-mode{display:flex;align-items:center;gap:10px;font-size:13px;margin-bottom:8px}.media-mode select{max-width:100%;padding:6px;border:1px solid #dce6e3;border-radius:6px}
+.loopback{margin-left:8px}.loopback-note{color:#5b6b68;margin:6px 0 0;max-width:62ch}
 </style>
