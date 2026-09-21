@@ -154,6 +154,34 @@ def test_patient_numbers_are_generated_and_unique(client):
     assert len(set(numbers)) == 3
 
 
+def test_a_client_supplied_patient_number_is_ignored_rather_than_written(client):
+    """M2-T4. The number is the service's to mint; the request body gets no vote.
+
+    This is the only M2 scenario in docs/02-测试场景.md §2.3 without an automated
+    check, and it is pinned to what the code does. §2.3 words the expectation as a
+    422; `PatientCreate` instead **ignores** unknown fields, so the record is
+    created and the number the client sent never reaches the column. Both refusals
+    protect the same thing, and the quiet one is the one that ships, so that is
+    what is asserted here. The wording is raised in the pull request rather than
+    edited in the specification unilaterally.
+    """
+    response = client.post(
+        "/api/patients",
+        json={
+            "name": "Smuggler",
+            "gender": "male",
+            "department": "Information Technology",
+            "patient_no": "../evil.png",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["patient_no"] == f"P{current_year()}0001"
+
+    with client.app.state.sessions() as db:
+        assert db.scalar(select(Patient).where(Patient.patient_no == "../evil.png")) is None
+        assert db.scalar(select(func.count()).select_from(Patient)) == 1
+
+
 def test_combined_search_and_ands_every_filter(client):
     target = create_patient(client, name="赵雷", symptom_tags=["胸痛"], admitted_at="2026-08-15")
     create_patient(client, name="赵敏", symptom_tags=["发热"], admitted_at="2026-08-20")

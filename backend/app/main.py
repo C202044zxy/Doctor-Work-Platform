@@ -26,13 +26,14 @@ from app import (
     grants,
     groups,
     health_work,
+    histories,
     meetings,
     orders,
     signup,
     users,
 )
 from app.allergies import allergen_name, dictionary, get_patient_allergens
-from app.audit import audit_request, mark_audit
+from app.audit import ACTIONS, MARKED, audit_request, mark_audit
 from app.audit_export import audit_csv, content_disposition, filename_range
 from app.config import Settings
 from app.database import make_engine, session_factory
@@ -56,6 +57,7 @@ from app.schemas import (
     AllergyRead,
     AllergyResponse,
     AllergyUpdate,
+    AuditActionListResponse,
     AuditLogListData,
     AuditLogListResponse,
     AuditLogRead,
@@ -152,7 +154,7 @@ def _summary(
 def _detail(
     db: Session, patient: Patient, tags: list[str], allergies: list[Allergy]
 ) -> PatientDetail:
-    """One patient, with the tags, allergies and groups the detail screen reads."""
+    """One patient, with the tags, allergies, history and groups the detail screen reads."""
     allergy_count, has_severe = _severity_summary(allergies)
     _, id_card = _masked_identifiers(patient)
     return PatientDetail(
@@ -160,7 +162,9 @@ def _detail(
         id_card_masked=id_card,
         id_card=id_card,
         allergies=[AllergyRead.model_validate(item, from_attributes=True) for item in allergies],
-        histories=[],
+        # Same reader the timeline endpoint uses, so the embedded list and the
+        # stand-alone one cannot end up in two different orders.
+        histories=histories.histories_for_patient(db, patient),
         groups=groups.groups_for_patient(db, patient),
     )
 
@@ -342,6 +346,12 @@ def create_app(settings: Settings | None = None):
     # never widen the T09 patient scope -- see `app.groups` for why the membership
     # rule is a 422 rather than a silent skip.
     app.include_router(groups.router)
+    # M2-06. The medical-history timeline. The two `/api/patients/{patient_no}/histories`
+    # routes are covered by the existing `/api/patients` prefix rule, but
+    # `/api/histories/{id}` is not a child of it -- see the prefix tuple in
+    # `app.security`, which had to learn the new path or those two writes would
+    # have shipped with no permission check at all.
+    app.include_router(histories.router)
     # T30/T31/T32. Uploaded materials live under `uploads/meeting/` and are
     # served by `GET /api/materials/{id}/download` rather than by StaticFiles:
     # T31 scenario S2 requires a non-participant's downloaded URL to answer 403,
@@ -1005,6 +1015,31 @@ def create_app(settings: Settings | None = None):
                 size=size,
             )
         )
+
+    @app.get(
+        "/api/audit-logs/actions",
+        response_model=AuditActionListResponse,
+        summary="查询审计操作名 / List the audit action names",
+        description=(
+            "T12。**仅管理员**。返回服务能够写入的全部操作名，即 "
+            "`audit.MARKED` 与 `audit.ACTIONS` 的并集，按字典序排列，供审计页的筛选下拉使用。\n\n"
+            "它不是查询审计日志的前提：`action` 是精确匹配的字符串，手输同样有效。存在的"
+            "理由是这份名单此前在前端被手工抄了一份，而且已经漂移——T17 的五个 "
+            "`patient_group.*` 与 `temp_grant.expire` 都不在其中，于是「按动作审阅」对这些"
+            "条目失效，而这正是审计页的用途之一。\n\n"
+            "Administrator only. Every action string the service can write, sorted, for the "
+            "audit screen's filter dropdown. It is not a precondition for searching: `action` "
+            "is an exact-match string and a typed value works. It exists because the dropdown "
+            "carried a hand-copied list that had already drifted.\n\n"
+            "Registered before the `/{id}` routes for the reason the export route states."
+        ),
+        responses={403: {"model": ErrorResponse}},
+        dependencies=[Depends(require_permission("audit.read"))],
+    )
+    def audit_log_actions():
+        # Sorted, so two callers rendering the same dropdown agree on the order
+        # without either of them sorting a set that has no order of its own.
+        return _ok(sorted(MARKED | set(ACTIONS.values())))
 
     @app.get(
         "/api/audit-logs/export",

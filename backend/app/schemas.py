@@ -403,6 +403,80 @@ class PatientSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class HistoryRead(BaseModel):
+    id: int = Field(description="主键 / Primary key", examples=[1])
+    diagnosis: str = Field(description="诊断名称 / Diagnosis", examples=["Type 2 diabetes"])
+    onset_date: date | None = Field(
+        default=None,
+        description=(
+            "发病日期，可为空；空值在时间线上排在最后 / "
+            "Onset date, nullable; an entry without one sorts last on the timeline"
+        ),
+        examples=["2019-05-01"],
+    )
+    notes: str = Field(
+        default="", description="补充说明 / Free-text notes", examples=["Diet controlled"]
+    )
+    created_at: datetime = Field(
+        description="创建时间（UTC）/ Creation timestamp (UTC)",
+        examples=["2026-09-11T08:30:00Z"],
+    )
+    model_config = ConfigDict(from_attributes=True)
+
+
+class HistoryCreate(BaseModel):
+    diagnosis: str = Field(
+        min_length=1,
+        max_length=200,
+        description="诊断名称 / Diagnosis",
+        examples=["Type 2 diabetes"],
+    )
+    onset_date: date | None = Field(
+        default=None,
+        description="发病日期，可留空 / Onset date, may be omitted",
+        examples=["2019-05-01"],
+    )
+    notes: str = Field(
+        default="",
+        max_length=2000,
+        description="补充说明 / Free-text notes",
+        examples=["Diet controlled"],
+    )
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+
+
+class HistoryUpdate(BaseModel):
+    """Partial edit: only the fields present in the body change.
+
+    `diagnosis` is optional here even though a create requires it, so "fix the
+    date and leave the diagnosis alone" is one call. Reusing the create body
+    instead would make a date-only edit impossible to express, which is the
+    defect `ReminderRuleUpdate` was split out to fix. `onset_date: null` clears
+    the date, since a nullable column otherwise has no way to lose a wrong one;
+    `notes: null` is refused because a body that means "clear" can say `""`.
+    """
+
+    diagnosis: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="诊断名称 / Diagnosis",
+        examples=["Type 2 diabetes"],
+    )
+    onset_date: date | None = Field(
+        default=None,
+        description="发病日期，传 null 表示清除 / Onset date; null clears it",
+        examples=["2019-05-01"],
+    )
+    notes: str | None = Field(
+        default=None,
+        max_length=2000,
+        description="补充说明 / Free-text notes",
+        examples=["Diet controlled"],
+    )
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+
+
 class PatientDetail(PatientSummary):
     id_card_masked: str | None = Field(
         default=None,
@@ -424,9 +498,12 @@ class PatientDetail(PatientSummary):
             "Allergies, the shared list the detail banner and the T21 engine read"
         ),
     )
-    histories: list[dict] = Field(
+    histories: list[HistoryRead] = Field(
         default_factory=list,
-        description="既往史条目，由 T16 填充 / Medical history entries, filled in by T16",
+        description=(
+            "既往病史，按发病日期降序，详情页时间线的数据源 / "
+            "Medical history, newest onset first, the timeline view's data source"
+        ),
     )
     groups: list[PatientGroupRead] = Field(
         default_factory=list,
@@ -460,6 +537,16 @@ class PatientGroupListResponse(SuccessBase):
 
 class PatientGroupResponse(SuccessBase):
     data: PatientGroupRead
+
+
+class HistoryListResponse(SuccessBase):
+    data: list[HistoryRead] = Field(
+        description="病史条目，按发病日期降序 / History entries, newest onset date first"
+    )
+
+
+class HistoryResponse(SuccessBase):
+    data: HistoryRead
 
 
 class AuditLogRead(BaseModel):
@@ -530,6 +617,20 @@ class AuditLogListData(BaseModel):
 
 class AuditLogListResponse(SuccessBase):
     data: AuditLogListData
+
+
+class AuditActionListResponse(SuccessBase):
+    """The action strings the service can write, for the filter's dropdown.
+
+    A flat list of plain strings rather than objects: an action is a name and has
+    no other field, and one is already a value the `action` filter matches
+    exactly.
+    """
+
+    data: list[str] = Field(
+        description="审计操作名，字典序 / Audit action names, sorted",
+        examples=[["allergy.create", "auth.login"]],
+    )
 
 
 class PatientResponse(SuccessBase):

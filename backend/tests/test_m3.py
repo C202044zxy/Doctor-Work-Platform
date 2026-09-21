@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 from test_auth_grants import client as auth_client
 from test_auth_grants import headers, token
@@ -244,7 +245,12 @@ def test_upgrade_from_each_branch_preserves_data_and_can_downgrade(previous, tmp
             assert (
                 db.scalar(text("SELECT name FROM departments WHERE id=99")) == "Migration sentinel"
             )
-            assert db.scalar(text("SELECT version_num FROM alembic_version")) == "e6a31c29d408"
+            # Read from the script directory, not written down here: a later
+            # revision must not be able to make this test lie about where head
+            # is. `test_m4_m6_migration.py` does the same for the same reason.
+            assert db.scalar(text("SELECT version_num FROM alembic_version")) == (
+                ScriptDirectory.from_config(config).get_current_head()
+            )
         assert "call_log" in inspect(engine).get_table_names()
     finally:
         engine.dispose()

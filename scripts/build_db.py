@@ -73,6 +73,7 @@ EXPECTED_TABLES = frozenset(
         "passkeys",
         "patient_group_members",
         "patient_groups",
+        "patient_history",
         "patient_symptom_tags",
         "patients",
         "reminder_logs",

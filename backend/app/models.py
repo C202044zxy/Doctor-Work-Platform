@@ -130,6 +130,32 @@ class PatientTag(Base):
     tag: Mapped[str] = mapped_column(String(50), index=True)
 
 
+class PatientHistory(Base):
+    """One entry in a patient's medical history: the timeline's data source.
+
+    `onset_date` is nullable on purpose. A history recorded without one is a
+    real record -- the contract marks only `diagnosis` required -- so it is
+    kept and sorted to the bottom of the timeline rather than refused or
+    dropped. `notes` carries `server_default` as well as `default` because
+    SQLite applies the server default to rows written outside the ORM.
+    """
+
+    __tablename__ = "patient_history"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(
+        ForeignKey("patients.id", ondelete="CASCADE"), index=True
+    )
+    diagnosis: Mapped[str] = mapped_column(String(200))
+    onset_date: Mapped[date | None] = mapped_column(Date)
+    notes: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Unindexed on purpose: the timeline orders by `onset_date` and nothing
+    # filters by creation order, so an index here would be write cost with no
+    # reader. The contract names the field, so the column stays.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
 class PatientGroup(Base):
     """T17's manual grouping: by condition, by management status, or by hand.
 
