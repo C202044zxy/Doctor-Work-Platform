@@ -66,6 +66,12 @@ class CurrentUser(BaseModel):
     department: str = Field(..., examples=["Information Technology"])
 
 
+class AccountStatus(Enum):
+    pending = "pending"
+    active = "active"
+    disabled = "disabled"
+
+
 class Page(BaseModel):
     total: int = Field(..., examples=[42])
     page: int = Field(..., examples=[1])
@@ -109,7 +115,7 @@ class User(CurrentUser):
     email: constr(pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$", min_length=3, max_length=254) | None = (
         Field(None, description="Administrator-only. / 仅管理员可见。\n")
     )
-    status: Status | None = Field(
+    status: AccountStatus | None = Field(
         None,
         description="Administrator-only. A `disabled` account is refused even while holding a\nvalid token. / 仅管理员可见；`disabled` 的账号即使持有有效 token 也会被拒。\n",
     )
