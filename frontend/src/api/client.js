@@ -158,6 +158,45 @@ export const departments = {
   },
 }
 
+export const roles = {
+  async list() {
+    return request('/roles')
+  },
+}
+
+// M1-07. The staff directory and its administration.
+//
+// The read is open to any signed-in caller — the consultation invite picker is
+// one of them and its operator is a junior physician — while the detail read and
+// both writes carry `user.manage` and answer 403 without it. For everybody but an
+// administrator the rows are `{ id, username, name, title, department }`; the
+// three contact fields simply are not in the response, not null.
+export const users = {
+  async list({ q = '', title = '', department = '', status = '', page = 1, size = 20 } = {}) {
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    // Same rule as `patients.list`: an unused filter is left out rather than sent
+    // blank, because the server tells "absent" from "empty" by the parameter being
+    // there — and `status=` is not one of `active`/`disabled`, so it is a 422.
+    if (q) params.set('q', q)
+    if (title) params.set('title', title)
+    if (department) params.set('department', department)
+    if (status) params.set('status', status)
+    return request(`/users?${params}`)
+  },
+
+  async get(id) {
+    return request(`/users/${id}`)
+  },
+
+  async create(payload) {
+    return request('/users', json(payload))
+  },
+
+  async update(id, payload) {
+    return request(`/users/${id}`, send('PATCH', payload))
+  },
+}
+
 // M5. The consultation module: its state machine, the materials its participants
 // share, and the report that archives to the patient record.
 //
@@ -187,15 +226,10 @@ export const meetings = {
   async start(id) { return request(`/meetings/${id}/start`, json({})) },
   async complete(id) { return request(`/meetings/${id}/complete`, json({})) },
 
-  // The invite picker's directory. `/api/users` exists in the contract but is
-  // administrator-only, so it cannot feed a junior's picker (T30 S1 has a junior
-  // initiate the consultation). This returns identity and department only.
-  async doctors({ q = '', department = '', size = 50 } = {}) {
-    const params = new URLSearchParams({ size: String(size) })
-    if (q) params.set('q', q)
-    if (department) params.set('department', department)
-    return request(`/meetings/doctors?${params}`)
-  },
+  // The invite picker's directory used to live here as `GET /api/meetings/doctors`,
+  // a contract-external route that existed only because `/api/users` was
+  // administrator-only. M1-07 opened the list read, so the picker calls
+  // `users.list({ status: 'active' })` and that route is gone.
 
   async materials(id) {
     return request(`/meetings/${id}/materials`)

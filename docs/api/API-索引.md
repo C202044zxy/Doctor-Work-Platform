@@ -264,16 +264,21 @@
 }
 ```
 
-#### 用户管理（仅 `admin`）
+#### 用户管理（读：列表任意 / 详情与写：仅 `admin`）
 
 | 方法 | 路径 | 角色 | 说明 | 任务 |
 |---|---|---|---|---|
-| GET | `/api/users` | `admin` | 列表，支持 `q`（姓名/账号）、**`title`**、`department` 筛选 + 分页 | M1-07 |
+| GET | `/api/users` | 🔒 任意（联系字段仅 `admin`） | 列表，支持 `q`（姓名/账号）、**`title`**、`department`、**`status`** 筛选 + 分页 | M1-07 |
 | POST | `/api/users` | `admin` | 创建用户（`username`/`password`/`name`/`email`/`title`/`department` 均必填） | M1-07 |
 | GET | `/api/users/{id}` | `admin` | 详情 | M1-07 |
 | PATCH | `/api/users/{id}` | `admin` | 改 **`title`** / `department` / `status` / `name`（全选填） | M1-07 |
 | GET | `/api/roles` | 🔒 任意 | 角色字典（返回三个角色代码与显示名） | M1-07 |
 | GET | `/api/departments` | 🔒 任意 | 科室字典（**已有**）。**契约里唯一不挂任务 ID 的接口**——它先于任务表存在，也没有任何测试场景约束它，所以不编任务号，契约中直接写明这一点 | 已有 |
+
+> ⚠️ **只有列表是放开的，详情和写仍然是 `admin` 专属。** 放开的理由是 M5 的专家选择框：会诊发起人是 `junior`，读不了管理员专属接口，此前为它单开了一条契约外的 `/api/meetings/doctors`（该路由已在 M1-07 落地时删除）。
+> **放开不扩大暴露面**：被删的那条路由本来就对任意登录用户返回同样的 `{id, username, name, title, department}`；新接口对非管理员**投影完全相同**。
+> **`email` / `status` / `created_at` 三个键按权限投影**——非管理员的响应里**根本不出现**这三个键（不是 `null`）。OpenAPI 表达不了「随权限变化的字段」，这条规则只写在契约的字段描述里，实现见 `backend/app/users.py` 的 `user_payload(user, full=...)`。
+> **列表不做科室范围过滤。** 跨科室邀请专家正是 M5 与 `temp_grant` 机制存在的理由（Cardiology 的 `dr_wang` 必须看得见 Neurology 的 `dr_chen`）——**不要**把 M1-05 的科室范围套到用户目录上。
 
 > ℹ️ 这组 `/api/users` CRUD 与前端用户管理页归属 **M1-07**（`docs/01-任务安排.md` §3.2、§7.3）。
 > 注意 `department` 的取值只有 `Information Technology` / `Cardiology` / `Neurology` 三个，**顺序即 id 1 / 2 / 3，不得调换**（测试按下标取值）。
@@ -638,9 +643,9 @@
 | GET | `/api/meetings/{id}/report` | 参与人 **或**能触达该患者的同科室医生 | 会诊报告（归档后从患者档案可读） | M5-03 |
 | POST | `/api/meetings/{id}/report` | **参与人** | 生成/保存报告（场景 M5-T5 要让非参与医生拿 403） | M5-03 |
 | GET | `/api/meetings/{id}/report/print` | 参与人 | 返回可打印的 HTML（Jinja2 渲染） | M5-03 |
-| GET | `/api/meetings/doctors` | 🔒 | **契约之外**：专家候选目录（`id/username/name/title/department`，**不含邮箱**）。契约里 `/api/users` 是管理员专属，喂不了 `junior` 发起的专家选择框；M1-07 落地后删除 | M5-01 |
 
-- **实现状态（2026-09-17）**：上表 11 条契约路径 + 1 条契约外新增（`/api/meetings/doctors`）全部落地于 `backend/app/meetings.py`，`backend/tests/test_meetings.py` **17 个用例通过**；前端 `/remote-consultation` 与患者详情「会诊记录」Tab 已接真实接口。该页自 2026-09-18 起作为 `ConsultationsView.vue` 的子组件挂在 `/consultations?tab=remote` 上，`RemoteConsultationView.vue` 本身未改；旧路径 `/remote-consultation` 保留为重定向。
+- **实现状态（2026-09-17，契约外的专家目录已于 2026-09-21 删除）**：上表 **11 条契约路径**已全部落地于 `backend/app/meetings.py`，`backend/tests/test_meetings.py` 用例通过；前端 `/remote-consultation` 与患者详情「会诊记录」Tab 已接真实接口。该页自 2026-09-18 起作为 `ConsultationsView.vue` 的子组件挂在 `/consultations?tab=remote` 上；旧路径 `/remote-consultation` 保留为重定向。
+- **~~`GET /api/meetings/doctors`~~ 已于 2026-09-21 随 M1-07 删除。** 它原先存在的唯一理由是「契约里 `/api/users` 是管理员专属，喂不了 `junior` 发起的专家选择框」。M1-07 放开列表读之后这个理由消失，路由与它的 `Doctor*` schema 一并删除，两端都不再出现。**专家选择框现在打的是 `GET /api/users?status=active&size=100`**（`RemoteConsultationView.vue` 的 `loadDoctors`）；被删路由原来硬过滤的「只给启用账号」由服务端 `status` 参数复现，`q` 仍是服务端筛选。**跨科室可见性由搬进 `backend/tests/test_users.py` 的用例继续钉住**（Cardiology 的 junior 必须看得见 Neurology 的专家）。
 - **发起人可以是 `junior`。** 场景 M5-T1 的原文就是"**`dr_wang` 对 `P20260001` 发起会诊邀请 `dr_chen`**"，而 `dr_wang` 是 junior。早期草稿把发起限死为 `senior`，**会让流程 2 的演示跑不起来**。
 - **状态机非法跳转返回 409**（如 `requested` 直接跳 `completed`；场景 M5-T3）。
 - 非受邀人访问该会诊 → 403/404，不泄露存在性。
@@ -838,10 +843,11 @@
 | `/patients/:patientNo` | `PatientDetailView.vue` | `GET /api/patients/{patient_no}`、`GET /api/meetings?patient_no=…`、`GET /api/meetings/{id}/report`（`?version=` 读历史版本）、`GET /api/meetings/{id}/report/print`（仅参与人）；「Health data」Tab（`components/PatientHealth.vue`，M6）消费 `/api/patients/{no}/vitals`、`/vitals/trend`、`/api/health-plans`、`/api/reminder-rules`、`/api/reminders`、`/unread-count`、`/api/patients/{no}/assessments`、`/api/assessments/{id}` | ✅ **真实接口**（**「会诊记录」Tab** 属 M5、**「Health data」Tab** 属 M6，其余 Tab 属 M2-04） |
 | `/records` | `MedicalRecordView.vue` | 消费 `/api/emr/templates`、`/api/emr/records`、`PATCH /api/emr/records/{id}`、`/api/drugs`、`POST /api/emr/orders/validate` | ✅ **真实接口** |
 | `/consultations` | `ConsultationsView.vue` | **两个 Tab**：「Patient consultation」（M3，**零代码**，当前是写明未做的空态，不消费任何接口，也没有假数据）；「Remote consultation」（M5，消费列在下一行的那组接口） | ⚠️ **一半真实、一半空态** |
-| `/consultations?tab=remote` | `RemoteConsultationView.vue`（作为子组件） | `GET/POST /api/meetings`、`/accept`、`/decline`、`/start`、`/complete`、`/api/meetings/doctors`、`/api/meetings/{id}/materials`、`/api/materials/{id}/download`、`/api/meetings/{id}/report`、`/report/print` | ✅ **真实接口** |
+| `/consultations?tab=remote` | `RemoteConsultationView.vue`（作为子组件） | `GET/POST /api/meetings`、`/accept`、`/decline`、`/start`、`/complete`、**专家选择框 `GET /api/users?status=active&size=100`**（M1-07 前是契约外的 `/api/meetings/doctors`）、`/api/meetings/{id}/materials`、`/api/materials/{id}/download`、`/api/meetings/{id}/report`、`/report/print` | ✅ **真实接口** |
 | `/remote-consultation` | — | 无（重定向到 `/consultations?tab=remote`） | ➡️ **重定向** |
 | `/review`（senior）与 `/my-submissions`（本人） | `ReviewQueueView.vue` | 消费 `/api/emr/reviews`、`POST /api/emr/records/{id}/review`、`GET /api/emr/my-submissions` | ✅ **真实接口** |
-| `/audit` | `AuditLogView.vue` | `GET /api/audit-logs`（筛选 / 分页）、`GET /api/audit-logs/export`（服务端 CSV） | ✅ **真实接口**（T12） |
+| `/audit` | `AuditLogView.vue` | `GET /api/audit-logs`（筛选 / 分页）、`GET /api/audit-logs/export`（服务端 CSV）、**账户筛选下拉 `GET /api/users?size=100`**（M1-07 前是从审计行里抠 id） | ✅ **真实接口**（T12） |
+| `/users`（admin） | `UserManagementView.vue` | `GET /api/users`（`q`/`title`/`department`/`status` + 分页）、`POST /api/users`、`PATCH /api/users/{id}`、`GET /api/roles`、`GET /api/departments` | ✅ **真实接口**（M1-07） |
 
 **应用外壳（`frontend/src/App.vue` / `frontend/src/session.js`）**
 
@@ -857,7 +863,7 @@
 | 页面 | 对应任务 | 说明 |
 |---|---|---|
 | 患者详情页 | M2-04 | `PatientDetailView` 已随 M5 建出**身份头 + 「会诊记录」Tab**；病史 / 分组 / 过敏编辑仍属 M2-04 |
-| 用户管理页 | M1-07 | `frontend/src/views/` 下无对应文件 |
+| ~~用户管理页~~ | M1-07 | **已实现**：`/users` → `UserManagementView.vue`，admin 专属（`MODULE_ROLES.users`，菜单与路由守卫两处都写）；列表 / 新建 / 修改 / 启用停用接真实接口。见上表 |
 | 临时授权管理页 | M1-06 | 同上 |
 | 我的提交 | M4-07 | 已实现：`/my-submissions` 使用真实接口 |
 | 医嘱面板 | M4-06 | 已实现：`MedicalRecordView` 使用真实校验与医嘱接口 |

@@ -8,20 +8,25 @@ import assert from 'node:assert/strict'
 
 import { canOpen, isScreenRefusal, MODULE_ROLES } from '../src/access.js'
 
-test('a junior may not open the review queue or the audit log', () => {
+test('a junior may not open the review queue, the audit log or user management', () => {
   assert.equal(canOpen(MODULE_ROLES.review, 'junior'), false)
   assert.equal(canOpen(MODULE_ROLES.audit, 'junior'), false)
+  // M1-07. The list read is open to a junior — the consultation picker uses it — but
+  // the screen is not: every write behind it carries `user.manage`.
+  assert.equal(canOpen(MODULE_ROLES.users, 'junior'), false)
 })
 
-test('a senior reviews but does not read the audit log', () => {
+test('a senior reviews but does not read the audit log or manage accounts', () => {
   // T12 第 3 条 puts /audit behind admin only; a senior is refused as well.
   assert.equal(canOpen(MODULE_ROLES.review, 'senior'), true)
   assert.equal(canOpen(MODULE_ROLES.audit, 'senior'), false)
+  assert.equal(canOpen(MODULE_ROLES.users, 'senior'), false)
 })
 
-test('an admin may read audit but cannot review clinical records', () => {
+test('an admin may read audit and manage accounts but cannot review clinical records', () => {
   assert.equal(canOpen(MODULE_ROLES.review, 'admin'), false)
   assert.equal(canOpen(MODULE_ROLES.audit, 'admin'), true)
+  assert.equal(canOpen(MODULE_ROLES.users, 'admin'), true)
 })
 
 test('an ungated screen is open to anyone signed in, and to nobody else', () => {

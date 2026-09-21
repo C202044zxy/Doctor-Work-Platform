@@ -29,6 +29,7 @@ from app import (
     meetings,
     orders,
     signup,
+    users,
 )
 from app.allergies import allergen_name, dictionary, get_patient_allergens
 from app.audit import audit_request, mark_audit
@@ -326,6 +327,10 @@ def create_app(settings: Settings | None = None):
     app.include_router(signup.router)
     app.include_router(face_login.router)
     app.include_router(grants.router)
+    # M1-07. The directory read is open to any signed-in caller because M5's
+    # invite picker needs it and its operator is a junior physician; the writes
+    # and the detail read carry their own `user.manage` dependency in `app.users`.
+    app.include_router(users.router)
     # Static records/export paths must precede the integer /{id} route.
     app.include_router(consultation_records.router)
     app.include_router(chat.router)

@@ -497,18 +497,46 @@ paths:
       operationId: listUsers
       tags: [Users]
       summary: List users
-      description: Task T08. Administrator only.
+      description: |
+        Task T08. **Readable by any authenticated caller**; this is the staff directory the
+        consultation invite picker reads, and T30 S1 has a *junior* initiate a consultation.
+        The projection depends on the caller: an administrator receives `email`, `status` and
+        `created_at` on every row, everyone else receives neither key (see `User`). Writing
+        still needs `user.manage`, so this is the only relaxed route in the group.
+
+        Results cover **every department**, not the caller's. Cardiology inviting a Neurology
+        expert is the scenario the whole `temp_grant` mechanism exists for.
+
+        Task T08。**任意登录用户可读**——这是会诊邀请选择框读的员工目录，而 T30 S1 的发起人
+        是 `junior`。投影随调用者变化：管理员在每行上收到 `email`/`status`/`created_at`，
+        其他调用者**一个都不收到**。写入仍需 `user.manage`，故这是本组唯一放宽的路由。
+
+        结果覆盖**全部科室**，不限于调用者的科室。
       parameters:
         - name: q
           in: query
-          description: Matches name or username.
+          description: |
+            Matches name or username. / 模糊匹配姓名或账号。
           schema: { type: string }
         - name: title
           in: query
+          description: |
+            Exact role. / 按角色精确筛选。
           schema: { $ref: '#/components/schemas/Role' }
         - name: department
           in: query
+          description: |
+            Exact department name. An unregistered name yields an empty page, not a 404.
+            / 按科室名精确筛选；未登记的科室名返回空列表而不是 404。
           schema: { type: string }
+        - name: status
+          in: query
+          description: |
+            Exact account state. The invite picker sends `active`, which is the server-side
+            guarantee the retired `/api/meetings/doctors` used to make.
+            / 按账号状态精确筛选。邀请选择框传 `active`——这是被删除的
+            `/api/meetings/doctors` 原先在服务端作出的保证。
+          schema: { type: string, enum: [active, disabled] }
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/Size'
       responses:
@@ -518,12 +546,17 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/UserListResponse' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       operationId: createUser
       tags: [Users]
       summary: Create a user
-      description: Task T08. Administrator only.
+      description: |
+        Task T08. Administrator only. The account is created `active`; the request has no
+        `status` field, so there is no way to create a disabled account in one step.
+        The response is `200`, not `201` -- the contract has no `201` anywhere.
+
+        Task T08。仅管理员。新建账号直接是 `active`；请求里没有 `status` 字段。
+        成功码是 `200` 而不是 `201`。
       requestBody:
         required: true
         content:
@@ -537,7 +570,10 @@ paths:
               schema: { $ref: '#/components/schemas/UserResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409':
-          description: The username is taken.
+          description: |
+            The username **or** the email is already taken. Both are unique columns, and the
+            comparison is case-insensitive.
+            / 用户名**或**邮箱已被占用。两列都是唯一索引，比对不区分大小写。
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -550,7 +586,15 @@ paths:
       operationId: getUser
       tags: [Users]
       summary: Read a user
-      description: Task T08. Administrator only.
+      description: |
+        Task T08. Administrator only, unlike the list: no non-administrator consumer exists,
+        and the list already exposes the same five directory fields. Keeping this route
+        single-shape means only `listUsers` has to carry the projection rule. Every response
+        here therefore includes `email`, `status` and `created_at`.
+
+        Task T08。**仅管理员**，与列表不同：非管理员没有任何消费方，而列表已经暴露了
+        同样五个目录字段。让这条路由保持单一形态，投影规则就只压在 `listUsers` 一处。
+        故本路由的响应总是包含三个联系类字段。
       responses:
         '200':
           description: The user.
@@ -563,7 +607,18 @@ paths:
       operationId: updateUser
       tags: [Users]
       summary: Update a user
-      description: Task T08. Administrator only. Changes title, department, name, or status.
+      description: |
+        Task T08. Administrator only. Changes title, department, name, or status.
+
+        All four fields are optional: an **empty body is a no-op** and answers `200` with the
+        row unchanged, so a form's Save button stays harmless. Sending an explicit `null` for
+        any of them is a `422` naming that field -- all four map to non-nullable columns.
+        `department` and `title` take names/codes, not ids.
+
+        Task T08。仅管理员，可改 `title` / `department` / `status` / `name`。
+        四个字段都可选：**空 body 是 no-op**，返回 200 且行不变。
+        任一字段显式传 `null` 是 **422 并点名该字段**——四者对应的都是非空列。
+        `department` 与 `title` 收的是名字/代码，不是 id。
       requestBody:
         required: true
         content:
@@ -3508,14 +3563,42 @@ components:
     # ---------- Users ----------
 
     User:
+      description: |
+        A hospital account. The three contact fields are administrator-only: they are present
+        when the caller holds `user.manage` and absent otherwise. `GET /api/users` is the one
+        route both shapes reach, so the rule is written here rather than encoded -- OpenAPI
+        cannot say "present only for some callers", and a client generated from this file will
+        type them as optional.
+
+        医院账号。三个联系类字段仅管理员可见：调用者持有 `user.manage` 时出现，
+        否则**整个键都不出现**（不是 `null`）。`/api/users` 是唯一两种形态都能到达的路由，
+        所以规则只能写在这里。
       allOf:
         - $ref: '#/components/schemas/CurrentUser'
         - type: object
-          required: [email, status, created_at]
           properties:
-            email: { type: string, format: email }
-            status: { type: string, enum: [active, disabled] }
-            created_at: { type: string, format: date-time }
+            email:
+              type: string
+              minLength: 3
+              maxLength: 254
+              # Same shape as `SignupRequest.email`: a pattern rather than
+              # `format: email`, which no generator here can honour without
+              # pulling `email-validator` into the backend's dependency set.
+              pattern: '^[^\s@]+@[^\s@]+\.[^\s@]+$'
+              description: |
+                Administrator-only. / 仅管理员可见。
+            status:
+              type: string
+              enum: [active, disabled]
+              description: |
+                Administrator-only. A `disabled` account is refused even while holding a
+                valid token. / 仅管理员可见；`disabled` 的账号即使持有有效 token 也会被拒。
+            created_at:
+              type: string
+              format: date-time
+              description: |
+                Administrator-only, always UTC and always offset-aware.
+                / 仅管理员可见，UTC，且始终带时区偏移。
 
     UserListResponse:
       allOf:
@@ -3535,22 +3618,60 @@ components:
 
     UserCreateRequest:
       type: object
+      additionalProperties: false
       required: [username, password, name, email, title, department]
       properties:
-        username: { type: string }
-        password: { type: string, format: password, minLength: 8 }
-        name: { type: string }
-        email: { type: string, format: email }
+        username:
+          type: string
+          description: |
+            Unique, compared case-insensitively. / 唯一，比对不区分大小写。
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: |
+            At least 8 characters and at most 72 **UTF-8 bytes** -- that upper bound is bcrypt's,
+            not a policy choice, and a longer secret is refused rather than silently truncated.
+            / 至少 8 个字符，且不超过 72 个 **UTF-8 字节**——上限来自 bcrypt 本身，
+            超长密码会被拒而不是静默截断。
+        name:
+          type: string
+          description: |
+            Display name, must not be blank. / 显示名，不可为空白。
+        email:
+          type: string
+          minLength: 3
+          maxLength: 254
+          pattern: '^[^\s@]+@[^\s@]+\.[^\s@]+$'
+          description: |
+            Unique, compared case-insensitively. / 唯一，比对不区分大小写。
         title: { $ref: '#/components/schemas/Role' }
-        department: { type: string }
+        department:
+          type: string
+          description: |
+            Department **name**. An unregistered name is a 422. / 科室**名**；未登记则 422。
 
     UserUpdateRequest:
       type: object
+      additionalProperties: false
       properties:
-        name: { type: string }
+        name:
+          type: string
+          description: |
+            Display name, must not be blank. / 显示名，不可为空白。
         title: { $ref: '#/components/schemas/Role' }
-        department: { type: string }
-        status: { type: string, enum: [active, disabled] }
+        department:
+          type: string
+          description: |
+            Department **name**. An unregistered name is a 422. / 科室**名**；未登记则 422。
+        status:
+          type: string
+          enum: [active, disabled]
+          description: |
+            Setting `disabled` refuses that account's already-issued tokens from the next
+            request onwards -- no logout needed, no token blacklist involved.
+            / 置为 `disabled` 后，该账号已签发的 token 从下一个请求起即被拒，
+            无需注销、也不涉及 token 黑名单。
 
     UserResponse:
       allOf:

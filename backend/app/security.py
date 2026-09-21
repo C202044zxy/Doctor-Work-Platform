@@ -16,6 +16,15 @@ PERMISSIONS = {
     "admin": CLINICAL
     | {"audit.read", "audit.export", "user.manage", "template.manage", "data.all", "grant.write"},
 }
+# The three roles as the frontend shows them. They live next to `PERMISSIONS` because
+# that dict is the role registry -- `roles` in the database is only an id and a code, so
+# there is nothing there to read a display name from. `GET /api/roles` serves this, and
+# the contract's example (`label: Senior physician`) is what pinned the wording.
+ROLE_LABELS = {
+    "admin": "Administrator",
+    "senior": "Senior physician",
+    "junior": "Junior physician",
+}
 # Signup and face login are reachable without a token.
 #
 # WARNING: /api/auth/face/login is a SIMULATION. app.face_login.match_face()

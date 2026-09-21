@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Download, Refresh } from '@element-plus/icons-vue'
-import { audit as auditApi } from '../api/client'
+import { audit as auditApi, users as usersApi } from '../api/client'
 
 // M8. An append-only trail: every write and every sensitive read, recorded with who
 // did it, when, from where, on what, and how it turned out.
@@ -38,6 +38,10 @@ const ACTION_VOCABULARY = [
   'temp_grant.revoke',
   'temp_grant.expire',
   'audit.export',
+  // M1-07's two writes. Without them the entries this very screen is used to
+  // review would print as their raw keys.
+  'user.create',
+  'user.update',
 ]
 
 // `''` is "no condition" for both selects, and it is a real option value rather than a
@@ -53,12 +57,12 @@ const loading = ref(false)
 const exporting = ref(false)
 const loadError = ref('')
 
-// The user filter takes a `user_id`, so the dropdown needs ids. `GET /api/users` is in
-// the contract but not in the repository — user management has no owner yet — so the
-// options come out of the log itself: the newest page of entries, plus whatever is on
-// screen right now, which is what keeps a selected value visible after a search. That
-// is not only a workaround, it is the useful set: an account with no entries cannot be
-// filtered down to anything. Swapping in `/api/users` later changes this one computed.
+// The user filter takes a `user_id`, so the dropdown needs ids. The accounts come
+// from `loadActors()`; the rows on screen are merged in on top because a search
+// narrows the list, and a selected value that is no longer an option would leave the
+// filter saying "filtered by someone" with nothing to show which. The merge cannot
+// resurrect an account the directory no longer lists — it only keeps one visible
+// while its own entries are.
 const actorOptions = computed(() => {
   const merged = new Map(actors.value.map((item) => [item.id, item.label]))
   rows.value.forEach((row) => {
@@ -121,16 +125,14 @@ async function load() {
   }
 }
 
+// M1-07 landed `GET /api/users`, so the options come from the account table rather
+// than being scraped out of the log. That matters for the empty case: an account
+// with no entries yet is exactly the one an administrator may be looking for after
+// creating it, and the log-derived list could never show it.
 async function loadActors() {
   try {
-    const result = await auditApi.list({ size: 100 })
-    const seen = new Map()
-    result.items.forEach((row) => {
-      if (row.user_id !== null && row.user_id !== undefined) {
-        seen.set(row.user_id, row.username || `User #${row.user_id}`)
-      }
-    })
-    actors.value = [...seen].map(([id, label]) => ({ id, label }))
+    const result = await usersApi.list({ size: 100 })
+    actors.value = result.items.map((row) => ({ id: row.id, label: row.name || row.username }))
   } catch {
     // `load()` reports the failure. Without this list the table still renders and the
     // other two conditions still work.

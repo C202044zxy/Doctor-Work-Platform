@@ -29,7 +29,6 @@ from app.audit import mark_audit, persist_audit
 from app.auth import CurrentUser, ok
 from app.dependencies import Pagination
 from app.models import (
-    Department,
     Meeting,
     MeetingMaterial,
     MeetingParticipant,
@@ -219,62 +218,6 @@ def upload_directory(request: Request) -> Path:
 
 
 # --- M5-01: the state machine and the invitation inbox -----------------------
-
-
-@router.get("/api/meetings/doctors", response_model=contract.DoctorListResponse)
-def list_doctors(
-    request: Request,
-    user: CurrentUser,
-    pagination: Annotated[Pagination, Depends()],
-    q: str | None = None,
-    department: str | None = None,
-):
-    """受邀专家候选目录 / The invite picker's directory.
-
-    Declared before `/api/meetings/{id}` on purpose: `{id}` is an integer, so a
-    literal segment registered after it would be read as a malformed id and
-    answer 422 without ever reaching this function.
-
-    M1-07's `/api/users` is administrator-only and T30 S1's initiator is a
-    junior, so the picker reads this instead. It exposes identity and department
-    only, never email, and M1-07 supersedes it.
-    """
-    with request.app.state.sessions() as db:
-        conditions = [User.status == "active"]
-        if q and q.strip():
-            like = f"%{q.strip()}%"
-            conditions.append(or_(User.name.like(like), User.username.like(like)))
-        if department:
-            conditions.append(
-                User.department_id.in_(select(Department.id).where(Department.name == department))
-            )
-        total = db.scalar(select(func.count()).select_from(User).where(*conditions)) or 0
-        rows = list(
-            db.scalars(
-                select(User)
-                .where(*conditions)
-                .order_by(User.name, User.id)
-                .offset(pagination.offset)
-                .limit(pagination.size)
-            )
-        )
-        return ok(
-            {
-                "items": [
-                    {
-                        "id": row.id,
-                        "username": row.username,
-                        "name": row.name,
-                        "title": row.role.name,
-                        "department": row.department.name,
-                    }
-                    for row in rows
-                ],
-                "total": total,
-                "page": pagination.page,
-                "size": pagination.size,
-            }
-        )
 
 
 @router.get("/api/meetings", response_model=contract.MeetingListResponse)
