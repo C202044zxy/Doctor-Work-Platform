@@ -12,6 +12,7 @@ import {
   SwitchButton,
   Tickets,
   User,
+  UserFilled,
 } from '@element-plus/icons-vue'
 
 import { navigation } from './router'
@@ -29,6 +30,9 @@ const ICONS = {
   ChatDotRound,
   Checked,
   Tickets,
+  // `User` is the patient directory's entry, so user management gets the filled
+  // variant rather than a second identical glyph in the rail.
+  UserFilled,
 }
 
 const SERVICE_LABELS = {

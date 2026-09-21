@@ -158,6 +158,45 @@ export const departments = {
   },
 }
 
+export const roles = {
+  async list() {
+    return request('/roles')
+  },
+}
+
+// M1-07. The staff directory and its administration.
+//
+// The read is open to any signed-in caller — the consultation invite picker is
+// one of them and its operator is a junior physician — while the detail read and
+// both writes carry `user.manage` and answer 403 without it. For everybody but an
+// administrator the rows are `{ id, username, name, title, department }`; the
+// three contact fields simply are not in the response, not null.
+export const users = {
+  async list({ q = '', title = '', department = '', status = '', page = 1, size = 20 } = {}) {
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    // Same rule as `patients.list`: an unused filter is left out rather than sent
+    // blank, because the server tells "absent" from "empty" by the parameter being
+    // there — and `status=` is not one of `active`/`disabled`, so it is a 422.
+    if (q) params.set('q', q)
+    if (title) params.set('title', title)
+    if (department) params.set('department', department)
+    if (status) params.set('status', status)
+    return request(`/users?${params}`)
+  },
+
+  async get(id) {
+    return request(`/users/${id}`)
+  },
+
+  async create(payload) {
+    return request('/users', json(payload))
+  },
+
+  async update(id, payload) {
+    return request(`/users/${id}`, send('PATCH', payload))
+  },
+}
+
 // M5. The consultation module: its state machine, the materials its participants
 // share, and the report that archives to the patient record.
 //
@@ -187,15 +226,10 @@ export const meetings = {
   async start(id) { return request(`/meetings/${id}/start`, json({})) },
   async complete(id) { return request(`/meetings/${id}/complete`, json({})) },
 
-  // The invite picker's directory. `/api/users` exists in the contract but is
-  // administrator-only, so it cannot feed a junior's picker (T30 S1 has a junior
-  // initiate the consultation). This returns identity and department only.
-  async doctors({ q = '', department = '', size = 50 } = {}) {
-    const params = new URLSearchParams({ size: String(size) })
-    if (q) params.set('q', q)
-    if (department) params.set('department', department)
-    return request(`/meetings/doctors?${params}`)
-  },
+  // The invite picker's directory used to live here as `GET /api/meetings/doctors`,
+  // a contract-external route that existed only because `/api/users` was
+  // administrator-only. M1-07 opened the list read, so the picker calls
+  // `users.list({ status: 'active' })` and that route is gone.
 
   async materials(id) {
     return request(`/meetings/${id}/materials`)
@@ -367,15 +401,66 @@ export const patients = {
       return request(`/allergies/${id}`, { method: 'DELETE' })
     },
   },
+
+  // M2-06. The timeline. `list` answers with a plain array, not the paginated
+  // envelope the patient list uses: the contract makes this a complete collection
+  // bounded by one parent, the same shape as the allergies above it.
+  //
+  // `onset_date` is nullable and `null` is a value here, not an omission — PATCH
+  // sends it to take a wrong date back off an entry. So the payload is passed
+  // through as given rather than filtered of its nulls.
+  histories: {
+    async list(patientNo) {
+      return request(`/patients/${encodeURIComponent(patientNo)}/histories`)
+    },
+
+    async create(patientNo, payload) {
+      return request(`/patients/${encodeURIComponent(patientNo)}/histories`, json(payload))
+    },
+
+    async update(id, payload) {
+      return request(`/histories/${id}`, send('PATCH', payload))
+    },
+
+    async remove(id) {
+      return request(`/histories/${id}`, { method: 'DELETE' })
+    },
+  },
 }
 
-// T17's group filter needs the groups to filter by. The management screen (create,
-// rename, members) is not built, so this is the one read the list uses; the server
-// answers with the caller's own department only, which is why the options and the
-// filter agree without the client checking anything.
+// M2-05. The group list is what T17's filter filters by, and the rest is the
+// management screen. The server answers with the caller's own department only, so
+// the options and the filter agree without the client checking anything.
+//
+// Both member routes take their patients in the request body, including the
+// delete: `send('DELETE', …)` and not `{ method: 'DELETE' }`, which would drop the
+// body and 422 on a missing `patient_nos`. The client never decides who is in a
+// group — a duplicate add is the server's 409 and a removal of someone who is not
+// there is its 404, both naming the patient, and both belong on screen rather than
+// being pre-empted here.
 export const patientGroups = {
   async list() {
     return request('/patient-groups')
+  },
+
+  async create(payload) {
+    return request('/patient-groups', json(payload))
+  },
+
+  async update(id, payload) {
+    return request(`/patient-groups/${id}`, send('PATCH', payload))
+  },
+
+  async remove(id) {
+    return request(`/patient-groups/${id}`, { method: 'DELETE' })
+  },
+
+  async addMembers(id, patientNos) {
+    return request(`/patient-groups/${id}/members`, json({ patient_nos: patientNos }))
+  },
+
+  async removeMembers(id, patientNos) {
+    return request(`/patient-groups/${id}/members`, send('DELETE', { patient_nos: patientNos }))
   },
 }
 
@@ -410,6 +495,24 @@ function auditParams(filters, { paged }) {
 export const audit = {
   async list(filters = {}) {
     return request(`/audit-logs?${auditParams(filters, { paged: true })}`)
+  },
+
+  // The action strings the service can write, as `audit.MARKED` in `backend/app/audit.py`
+  // -- schemas.py is generated from the contract by scripts/generate_auth_schemas.py,
+  // which reads schemas and paths and not module constants, so these have no place
+  // there.
+  //
+  // The filter's dropdown used to carry a hand-copied list, and it had already drifted:
+  // T17's five `patient_group.*` actions and T11's `temp_grant.expire` were all missing,
+  // so entries this very screen exists to review could not be filtered for. Reading the
+  // set at runtime makes that impossible to repeat, and it means a later task adds its
+  // action in one place.
+  //
+  // On failure the dropdown degrades to typeable rather than empty: `action` is an
+  // exact-match string with no enumeration endpoint on the contract, so a typed value
+  // was always the fallback.
+  async actions() {
+    return request('/audit-logs/actions')
   },
 
   // The same conditions without pagination: the file covers everything the filter

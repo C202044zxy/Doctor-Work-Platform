@@ -58,6 +58,13 @@ def face_login(body: contract.FaceLoginRequest, request: Request):
             raise HTTPException(401, "User is unavailable or disabled")
         if not match_face(user, photo):
             raise HTTPException(401, "Face did not match")
+        # The audit middleware names the actor from `request.state.identity`. Every
+        # other sign-in route sets it (password: `auth.login`, email:
+        # `verify_code`, SMS: `sms.ticket_user`) -- this one is anonymous too, so
+        # nothing else would, and the row landed with a null `user_id` and
+        # `username`: the trail said a camera sign-in happened, but not who, which
+        # the audit screen printed as "User #null".
+        request.state.identity = user
         data = auth.user_data(user)
         token = auth.issue_token(user, request.app.state.settings.jwt_secret)
     return auth.ok(

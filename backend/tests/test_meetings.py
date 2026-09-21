@@ -503,17 +503,9 @@ def test_grant_expiry_makes_the_patient_404_again(client):
     assert client.get(f"/api/meetings/{mid}", headers=headers(client, 4)).status_code == 200
 
 
-def test_doctor_directory_feeds_the_invite_picker(client):
-    """The picker's directory: authenticated, identity only, no email."""
-    body = client.get("/api/meetings/doctors", headers=headers(client, 3)).json()["data"]
-    names = [row["name"] for row in body["items"]]
-    assert {"dr_chen", "dr_wang", "colleague"} <= set(names)
-    assert set(body["items"][0]) == {"id", "username", "name", "title", "department"}
-    filtered = client.get(
-        "/api/meetings/doctors", params={"q": "chen"}, headers=headers(client, 3)
-    ).json()["data"]
-    assert [row["name"] for row in filtered["items"]] == ["dr_chen"]
-    assert client.get("/api/meetings/doctors").status_code == 401
+# The invite picker's directory is no longer a meeting route: it reads
+# `GET /api/users?status=active`, and its acceptance test moved to
+# `test_users.py::test_the_directory_still_feeds_the_invite_picker` (M1-07).
 
 
 def db_patient_id(client):

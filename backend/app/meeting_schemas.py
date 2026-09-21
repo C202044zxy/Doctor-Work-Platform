@@ -115,38 +115,11 @@ class MeetingReport(BaseModel):
     created_at: datetime
 
 
-class Doctor(BaseModel):
-    """One row of the invite picker's directory. No contact details.
-
-    M1-07 ships `/api/users` for administrators only, and T30 S1 has `dr_wang`,
-    a *junior*, initiate the consultation -- so the picker cannot read that
-    endpoint. This authenticated, read-only directory is what M5 needs; M1-07
-    supersedes it and it can then be deleted.
-    """
-
-    id: int
-    username: str
-    name: str
-    title: str
-    department: str
-
-
-class DoctorListData(BaseModel):
-    items: list[Doctor]
-    total: int
-    page: int
-    size: int
-
-
 class MeetingListData(BaseModel):
     items: list[Meeting]
     total: int
     page: int
     size: int
-
-
-class DoctorListResponse(SuccessBase):
-    data: DoctorListData
 
 
 class MeetingListResponse(SuccessBase):

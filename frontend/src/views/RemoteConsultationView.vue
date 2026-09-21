@@ -7,6 +7,7 @@ import {
   meetings as meetingsApi,
   openReportSheet,
   patients as patientsApi,
+  users as usersApi,
 } from '../api/client'
 import { initials } from '../people'
 import { currentUserId } from '../session'
@@ -453,12 +454,16 @@ async function loadPatients(query) {
   }
 }
 
-// The picker reads `/api/meetings/doctors`, not `/api/users`: the contract's user
-// list is administrator-only, and the initiator may be a junior physician.
+// T30 S1 has a junior physician start the consultation, so the picker cannot be an
+// administrator-only read. M1-07 opened `GET /api/users` for exactly this: any
+// signed-in caller, every department, with the contact fields on the rows withheld
+// from everyone without `user.manage`. `status=active` moves the filter that used to
+// be the server's private promise onto the contract — and the server applies it, so
+// `total` stays honest while this list is narrowed by `q`.
 async function loadDoctors(query) {
   doctorLoading.value = true
   try {
-    const result = await meetingsApi.doctors({ q: query ?? '', size: 50 })
+    const result = await usersApi.list({ q: query ?? '', status: 'active', size: 100 })
     doctorOptions.value = result.items
   } catch (error) {
     ElMessage.error(error.message)

@@ -219,7 +219,9 @@ try {
         $env:REDIS_URL = $redisUrl
         if ($DockerRedis) { $env:APP_ENV = "dev" }
         if (-not $NoServe) {
-            & $pythonExe -m app.dev_runtime ports
+            # Stops only a leftover that is provably this project's own dev server;
+            # anything else is reported and left alone.
+            & $pythonExe -m app.dev_runtime reclaim
             Assert-LastExit "Development ports"
         }
     } finally {

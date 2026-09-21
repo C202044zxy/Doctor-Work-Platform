@@ -20,6 +20,7 @@ export const navigation = [
   { name: 'my-submissions', label: 'My submissions', icon: 'Document' },
   { name: 'review', label: 'Review Queue', icon: 'Checked', roles: MODULE_ROLES.review },
   { name: 'audit', label: 'Audit Log', icon: 'Tickets', roles: MODULE_ROLES.audit },
+  { name: 'users', label: 'User Management', icon: 'UserFilled', roles: MODULE_ROLES.users },
 ]
 
 const routes = [
@@ -122,6 +123,14 @@ const routes = [
     name: 'audit',
     component: () => import('../views/AuditLogView.vue'),
     meta: { title: 'Audit Log', roles: MODULE_ROLES.audit },
+  },
+  // M1-07. Both halves are stated: the sidebar entry above, and this guard, which
+  // is what closes the screen to a junior who types the path in.
+  {
+    path: '/users',
+    name: 'users',
+    component: () => import('../views/UserManagementView.vue'),
+    meta: { title: 'User Management', roles: MODULE_ROLES.users },
   },
 
   // T07 签收标准 3 / 场景 S1. Not `public`: nobody reaches this by being signed

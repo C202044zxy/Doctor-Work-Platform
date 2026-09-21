@@ -18,15 +18,41 @@ ACTIONS = {
     "login": "auth.login",
     "send_code": "auth.send_code",
     "verify_code": "auth.verify_code",
+    "face_login": "auth.face_login",
     "logout": "auth.logout",
     "create_grant": "temp_grant.create",
     "revoke_grant": "temp_grant.revoke",
+    "create_user": "user.create",
+    "update_user": "user.update",
     "create_meeting": "meeting.create",
     "accept_meeting": "meeting.accept",
     "decline_meeting": "meeting.decline",
     "start_meeting": "meeting.start",
     "complete_meeting": "meeting.complete",
     "upload_meeting_material": "meeting.material.upload",
+}
+
+
+# The action strings marked by hand, for the screens that publish a filter over
+# them: `frontend/src/views/AuditLogView.vue`'s dropdown and nothing else. The
+# middleware falls back to `<route name>.<method>`, so an action missing here is
+# still recorded -- it only prints as a raw key such as `list_patient_groups.get`.
+MARKED = {
+    "patient.view",
+    "patient.allergies.view",
+    "allergy.create",
+    "allergy.update",
+    "allergy.delete",
+    "temp_grant.expire",
+    "audit.export",
+    "patient_group.create",
+    "patient_group.update",
+    "patient_group.delete",
+    "patient_group.members.add",
+    "patient_group.members.remove",
+    "history.create",
+    "history.update",
+    "history.delete",
 }
 
 

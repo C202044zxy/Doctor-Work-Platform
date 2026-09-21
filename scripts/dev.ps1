@@ -48,5 +48,5 @@ if ($Mode -eq "docker") {
 }
 
 $start = Join-Path $root "backend\start.ps1"
-& $start -Reload -DockerRedis -NoServe:$NoServe -SkipInstall:$SkipInstall @ExtraArgs
+& $start -Reload -NoServe:$NoServe -SkipInstall:$SkipInstall @ExtraArgs
 exit $LASTEXITCODE

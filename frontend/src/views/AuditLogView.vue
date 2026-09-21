@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Download, Refresh } from '@element-plus/icons-vue'
-import { audit as auditApi } from '../api/client'
+import { audit as auditApi, users as usersApi } from '../api/client'
 
 // M8. An append-only trail: every write and every sensitive read, recorded with who
 // did it, when, from where, on what, and how it turned out.
@@ -15,30 +15,17 @@ import { audit as auditApi } from '../api/client'
 
 const PAGE_SIZE = 20
 
-// The vocabulary the backend actually writes: `audit.ACTIONS` in `backend/app/audit.py`
-// plus the actions marked by hand (patient.view, patient.allergies.view,
-// temp_grant.expire, audit.export). `action` is an exact-match string with no
-// enumeration endpoint, so this list is a convenience rather than the truth — which is
-// why the select allows a typed value. An action added by a later task stays
-// searchable without a change here.
-const ACTION_VOCABULARY = [
-  'patient.view',
-  'patient.create',
-  'patient.update',
-  'patient.delete',
-  'patient.allergies.view',
-  'allergy.create',
-  'allergy.update',
-  'allergy.delete',
-  'auth.login',
-  'auth.send_code',
-  'auth.verify_code',
-  'auth.logout',
-  'temp_grant.create',
-  'temp_grant.revoke',
-  'temp_grant.expire',
-  'audit.export',
-]
+// The vocabulary the service can write, read from the service. This was a hand-copied
+// array, and it had drifted in the way hand-copied arrays do: T17's five
+// `patient_group.*` actions and T11's `temp_grant.expire` were never added, so the
+// entries those tasks wrote could not be filtered for on the screen whose whole purpose
+// is reviewing them. `GET /api/audit-logs/actions` publishes `audit.MARKED` now, and a
+// task that adds an action makes it filterable without a change here.
+//
+// It stays a convenience and not a precondition: `action` is an exact-match string on
+// the query, so the select still allows a typed value, and an empty list (the request
+// failed, or a deployment older than the route) costs the dropdown and nothing else.
+const actionVocabulary = ref([])
 
 // `''` is "no condition" for both selects, and it is a real option value rather than a
 // cleared select: `clearable` sets the model to `undefined`, which would leave the state
@@ -53,12 +40,12 @@ const loading = ref(false)
 const exporting = ref(false)
 const loadError = ref('')
 
-// The user filter takes a `user_id`, so the dropdown needs ids. `GET /api/users` is in
-// the contract but not in the repository — user management has no owner yet — so the
-// options come out of the log itself: the newest page of entries, plus whatever is on
-// screen right now, which is what keeps a selected value visible after a search. That
-// is not only a workaround, it is the useful set: an account with no entries cannot be
-// filtered down to anything. Swapping in `/api/users` later changes this one computed.
+// The user filter takes a `user_id`, so the dropdown needs ids. The accounts come
+// from `loadActors()`; the rows on screen are merged in on top because a search
+// narrows the list, and a selected value that is no longer an option would leave the
+// filter saying "filtered by someone" with nothing to show which. The merge cannot
+// resurrect an account the directory no longer lists — it only keeps one visible
+// while its own entries are.
 const actorOptions = computed(() => {
   const merged = new Map(actors.value.map((item) => [item.id, item.label]))
   rows.value.forEach((row) => {
@@ -73,6 +60,16 @@ const actorOptions = computed(() => {
     .map(([id, label]) => ({ id, label }))
     .sort((left, right) => left.id - right.id)
 })
+
+// A row can have no account for two legitimate reasons, and neither is an error: the
+// request failed before an identity was resolved (a rejected login, a signup), or the
+// scheduler wrote it -- `temp_grant.expire` has no request behind it and tags itself
+// `method: 'SYSTEM'`. Both used to render as the literal string `User #null`.
+function actor(row) {
+  if (row.username) return row.username
+  if (row.user_id !== null && row.user_id !== undefined) return `User #${row.user_id}`
+  return row.method === 'SYSTEM' ? 'System' : 'Unauthenticated'
+}
 
 const isFiltered = computed(
   () => filters.action !== '' || filters.actor !== '' || filters.range !== null,
@@ -121,16 +118,14 @@ async function load() {
   }
 }
 
+// M1-07 landed `GET /api/users`, so the options come from the account table rather
+// than being scraped out of the log. That matters for the empty case: an account
+// with no entries yet is exactly the one an administrator may be looking for after
+// creating it, and the log-derived list could never show it.
 async function loadActors() {
   try {
-    const result = await auditApi.list({ size: 100 })
-    const seen = new Map()
-    result.items.forEach((row) => {
-      if (row.user_id !== null && row.user_id !== undefined) {
-        seen.set(row.user_id, row.username || `User #${row.user_id}`)
-      }
-    })
-    actors.value = [...seen].map(([id, label]) => ({ id, label }))
+    const result = await usersApi.list({ size: 100 })
+    actors.value = result.items.map((row) => ({ id: row.id, label: row.name || row.username }))
   } catch {
     // `load()` reports the failure. Without this list the table still renders and the
     // other two conditions still work.
@@ -203,8 +198,19 @@ async function exportCsv() {
   }
 }
 
+async function loadActions() {
+  try {
+    actionVocabulary.value = await auditApi.actions()
+  } catch {
+    // The action filter stays typeable without it, which is how it worked before the
+    // route existed at all.
+    actionVocabulary.value = []
+  }
+}
+
 onMounted(() => {
   loadActors()
+  loadActions()
   load()
 })
 </script>
@@ -227,9 +233,16 @@ onMounted(() => {
     <section class="panel">
       <div class="toolbar">
         <div class="filters">
-          <el-select v-model="filters.action" class="filter-action" aria-label="Action">
+          <el-select
+            v-model="filters.action"
+            class="filter-action"
+            filterable
+            allow-create
+            default-first-option
+            aria-label="Action"
+          >
             <el-option label="All actions" value="" />
-            <el-option v-for="item in ACTION_VOCABULARY" :key="item" :label="item" :value="item" />
+            <el-option v-for="item in actionVocabulary" :key="item" :label="item" :value="item" />
           </el-select>
 
           <el-select
@@ -287,7 +300,7 @@ onMounted(() => {
 
         <el-table-column label="Account" min-width="180">
           <template #default="{ row }">
-            <span>{{ row.username || `User #${row.user_id}` }}</span>
+            <span>{{ actor(row) }}</span>
           </template>
         </el-table-column>
 

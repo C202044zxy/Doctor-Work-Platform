@@ -154,7 +154,9 @@ else
 fi
 export REDIS_URL="$redis_url"
 
-if (( ! no_serve )); then (cd "$backend_dir" && uv run --no-sync python -m app.dev_runtime ports); fi
+# Stops only a leftover that is provably this project's own dev server; anything
+# else is reported and left alone.
+if (( ! no_serve )); then (cd "$backend_dir" && uv run --no-sync python -m app.dev_runtime reclaim); fi
 ensure_redis
 
 log "Applying database migrations and seeding ..."
@@ -185,7 +187,15 @@ fi
 
 log "Starting FastAPI and Vite. Ctrl+C stops both."
 pids=()
-cleanup() { for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done; }
+# $! is the subshell that execs into `uv run`, which may fork uvicorn rather than
+# replace itself. Killing only that parent would leave the server orphaned -- the
+# same class of bug the Windows sibling script is being fixed for. Walk the tree.
+kill_tree() {
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do kill_tree "$child"; done
+  kill "$pid" 2>/dev/null || true
+}
+cleanup() { for pid in "${pids[@]}"; do kill_tree "$pid"; done; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 api_args=(--host 127.0.0.1 --port 8000 --no-access-log --log-level warning)

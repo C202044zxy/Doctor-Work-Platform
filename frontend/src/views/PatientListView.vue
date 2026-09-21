@@ -279,6 +279,186 @@ async function remove(row) {
   }
 }
 
+// --- M2-05: groups ---------------------------------------------------------
+//
+// Six routes and no screen, until now: `app/groups.py` has had list, create,
+// rename, delete, add members and remove members since T17, and `client.js` only
+// published the read. This dialog is the missing half.
+//
+// Two things it deliberately does not do. It does not show who is in a group --
+// the contract publishes `member_count` and no roster route, so the count is what
+// there is to show, and the panel says so rather than leaving the gap to look
+// like an omission. And it does not pre-check anything the service already
+// refuses: a repeated add, a member from another department, a duplicate name and
+// a removal of someone who is not in the group all come back as 409/422/409/404
+// with the offending patient numbers in the message, and those messages are shown
+// as they arrive. Re-deriving those rules here would be a second copy that a
+// reviewer would have to keep true.
+
+const groupsOpen = ref(false)
+const groupSaving = ref(false)
+const groupError = ref('')
+const groupForm = reactive({ id: null, name: '', description: '', department: '' })
+
+// The groups panel has two views. `inGroup` is null while the list is showing and
+// holds the group being edited otherwise: one dialog that changes what it is about,
+// rather than a second dialog stacked on the first.
+const inGroup = ref(null)
+// '' | 'add' | 'remove'. Only the button that was pressed spins; the other one
+// is merely disabled, so the screen says which write is in flight.
+const membersMode = ref('')
+const membersError = ref('')
+const membersPicked = ref([])
+const memberOptions = ref([])
+
+function openGroups() {
+  groupForm.id = null
+  groupForm.name = ''
+  groupForm.description = ''
+  groupForm.department = ''
+  groupError.value = ''
+  inGroup.value = null
+  groupsOpen.value = true
+}
+
+function editGroup(group) {
+  groupForm.id = group.id
+  groupForm.name = group.name
+  groupForm.description = group.description ?? ''
+  // Renaming does not move a group between departments: `PatientGroupUpdate` has
+  // no `department`, so the picker is part of the create form only and the save
+  // sends the name and description.
+  groupForm.department = ''
+  groupError.value = ''
+}
+
+function cancelGroupEdit() {
+  groupForm.id = null
+  groupForm.name = ''
+  groupForm.description = ''
+  groupError.value = ''
+}
+
+async function refreshGroups() {
+  try {
+    groups.value = await patientGroupsApi.list()
+  } catch {
+    // The panel's own error line reports the failure; the filter keeps what it had.
+  }
+}
+
+async function saveGroup() {
+  groupError.value = ''
+  if (!groupForm.name.trim()) {
+    groupError.value = 'Enter a group name.'
+    return
+  }
+
+  groupSaving.value = true
+  try {
+    if (groupForm.id) {
+      await patientGroupsApi.update(groupForm.id, {
+        name: groupForm.name.trim(),
+        description: groupForm.description,
+      })
+    } else {
+      await patientGroupsApi.create({
+        name: groupForm.name.trim(),
+        description: groupForm.description,
+        // Left out rather than sent blank: the service defaults it to the caller's
+        // own department, and an empty string is not a department name.
+        ...(groupForm.department ? { department: groupForm.department } : {}),
+      })
+    }
+    const wasEdit = Boolean(groupForm.id)
+    cancelGroupEdit()
+    await refreshGroups()
+    ElMessage.success(wasEdit ? 'Group updated.' : 'Group created.')
+  } catch (error) {
+    // 409 for a name already used in this department, 403 for naming another one
+    // without `data.all`: the form keeps what was typed either way.
+    groupError.value = error.message
+  } finally {
+    groupSaving.value = false
+  }
+}
+
+async function removeGroup(group) {
+  try {
+    await ElMessageBox.confirm(
+      `Delete the group “${group.name}”? Its ${group.member_count} patients stay in the directory — only the grouping goes.`,
+      'Delete group',
+      { confirmButtonText: 'Delete', cancelButtonText: 'Cancel', type: 'warning' },
+    )
+  } catch {
+    return // dismissed
+  }
+
+  try {
+    await patientGroupsApi.remove(group.id)
+    await refreshGroups()
+    // Only then does the table need re-reading: deleting a group does not touch a
+    // single patient, but it does invalidate a filter that was matching by it, and
+    // clearing the filter without re-querying would leave the old rows on screen
+    // under an empty filter.
+    if (filters.groupId === group.id) {
+      filters.groupId = null
+      await load()
+    }
+    ElMessage.success('Group deleted.')
+  } catch (error) {
+    ElMessage.error(error.message)
+  }
+}
+
+// The picker offers the directory's first hundred live rows and accepts a number
+// typed by hand, the same arrangement the symptom-tag and allergen controls use:
+// a missing option list costs the convenience and not the ability to add anyone.
+// The list is read here rather than filtered from `rows`, which is a page of
+// whatever the current filters matched.
+async function openMembers(group) {
+  inGroup.value = group
+  membersError.value = ''
+  membersMode.value = ''
+  membersPicked.value = []
+  try {
+    const page = await patientsApi.list({ size: 100 })
+    memberOptions.value = page.items.map((row) => ({ patient_no: row.patient_no, name: row.name }))
+  } catch {
+    memberOptions.value = []
+  }
+}
+
+async function writeMembers(mode) {
+  membersError.value = ''
+  if (!membersPicked.value.length) {
+    membersError.value =
+      mode === 'add'
+        ? 'Choose at least one patient to add.'
+        : 'Choose at least one patient to remove.'
+    return
+  }
+
+  membersMode.value = mode
+  try {
+    if (mode === 'add') await patientGroupsApi.addMembers(inGroup.value.id, membersPicked.value)
+    else await patientGroupsApi.removeMembers(inGroup.value.id, membersPicked.value)
+    // The count on the group is what changed, so the list is re-read rather than
+    // adjusted here -- and the group being viewed is refreshed with it.
+    await refreshGroups()
+    inGroup.value = groups.value.find((group) => group.id === inGroup.value.id) ?? inGroup.value
+    if (filters.groupId === inGroup.value.id) await load()
+    membersPicked.value = []
+    ElMessage.success(mode === 'add' ? 'Patients added.' : 'Patients removed.')
+  } catch (error) {
+    // 409 already in the group, 422 from another department, 404 not in the group.
+    // Each message names the patients it is about.
+    membersError.value = error.message
+  } finally {
+    membersMode.value = ''
+  }
+}
+
 onMounted(async () => {
   try {
     departments.value = await departmentsApi.list()
@@ -424,6 +604,10 @@ onMounted(async () => {
             :value="group.id"
           />
         </el-select>
+
+        <!-- The filter reads groups; this is the only place that writes them. It
+             sits with the filter because the two are about the same rows. -->
+        <el-button link @click="openGroups">Manage groups</el-button>
 
         <!-- Both identifiers are exact matches. The input is the whole number: a
              prefix is not a hit, because the comparison is against the digest kept
@@ -723,6 +907,144 @@ onMounted(async () => {
         <el-button type="primary" :loading="saving" @click="save">Create record</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="groupsOpen"
+      :title="inGroup ? inGroup.name : 'Patient groups'"
+      width="640px"
+    >
+      <!-- The members view. One dialog with two faces, rather than a second dialog
+           stacked on the first: there is no roster route to fill a third. -->
+      <template v-if="inGroup">
+        <p class="dialog-note">
+          <span class="data">{{ inGroup.member_count }}</span> patients in this group.
+          The service publishes the count and not the names, so which patients are in it
+          is answered by filtering the directory by this group. Choose numbers below to
+          change the membership; a refusal names the patients it is about.
+        </p>
+
+        <label class="field">
+          <span class="field-label">Patients</span>
+          <el-select
+            v-model="membersPicked"
+            class="full"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            collapse-tags
+            placeholder="Type a patient number and press enter"
+          >
+            <el-option
+              v-for="person in memberOptions"
+              :key="person.patient_no"
+              :label="`${person.name} · ${person.patient_no}`"
+              :value="person.patient_no"
+            />
+          </el-select>
+          <span class="field-hint">
+            A member has to be in the group's own department; the service refuses one from
+            elsewhere with the patient number in the message.
+          </span>
+        </label>
+
+        <p v-if="membersError" class="form-error" role="alert">{{ membersError }}</p>
+
+        <div class="member-actions">
+          <el-button
+            type="primary"
+            :loading="membersMode === 'add'"
+            :disabled="membersMode !== ''"
+            @click="writeMembers('add')"
+          >
+            Add to group
+          </el-button>
+          <el-button
+            :loading="membersMode === 'remove'"
+            :disabled="membersMode !== ''"
+            @click="writeMembers('remove')"
+          >
+            Remove from group
+          </el-button>
+        </div>
+      </template>
+
+      <!-- The list view: every group in scope, and the form that writes one. -->
+      <template v-else>
+        <p class="dialog-note">
+          Groups belong to one department, and a member has to be in it. Deleting a group
+          deletes the grouping, never the patients.
+        </p>
+
+        <ul v-if="groups.length" class="group-list">
+          <li v-for="group in groups" :key="group.id" class="group-row">
+            <div class="group-text">
+              <span class="group-name">{{ group.name }}</span>
+              <span class="group-count data">{{ group.member_count }}</span>
+              <span v-if="group.description" class="group-description">
+                {{ group.description }}
+              </span>
+            </div>
+            <span class="group-actions">
+              <el-button link @click="openMembers(group)">Members</el-button>
+              <el-button link @click="editGroup(group)">Rename</el-button>
+              <el-button link @click="removeGroup(group)">Delete</el-button>
+            </span>
+          </li>
+        </ul>
+
+        <p v-else class="empty">
+          No groups in your scope yet. Create one below to start grouping patients.
+        </p>
+
+        <div class="group-form">
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">{{ groupForm.id ? 'New name' : 'Name' }}</span>
+              <el-input v-model="groupForm.name" maxlength="100" placeholder="Group name" />
+            </label>
+
+            <label class="field">
+              <span class="field-label">Description</span>
+              <el-input
+                v-model="groupForm.description"
+                maxlength="255"
+                placeholder="Optional"
+              />
+            </label>
+          </div>
+
+          <!-- Only on creation: `PatientGroupUpdate` carries no department, so a
+               group does not move between departments by renaming it. -->
+          <label v-if="!groupForm.id" class="field">
+            <span class="field-label">Department</span>
+            <el-select v-model="groupForm.department" class="full" clearable placeholder="Your own department">
+              <el-option
+                v-for="department in writableDepartments"
+                :key="department.id"
+                :label="department.name"
+                :value="department.name"
+              />
+            </el-select>
+          </label>
+
+          <p v-if="groupError" class="form-error" role="alert">{{ groupError }}</p>
+        </div>
+      </template>
+
+      <template #footer>
+        <template v-if="inGroup">
+          <el-button @click="inGroup = null">Back to groups</el-button>
+        </template>
+        <template v-else>
+          <el-button @click="groupsOpen = false">Close</el-button>
+          <el-button v-if="groupForm.id" link @click="cancelGroupEdit">Cancel rename</el-button>
+          <el-button type="primary" :loading="groupSaving" @click="saveGroup">
+            {{ groupForm.id ? 'Save changes' : 'Create group' }}
+          </el-button>
+        </template>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -799,6 +1121,67 @@ onMounted(async () => {
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--ink-3);
+}
+
+/* The groups panel. Rows rather than a table: a group has three short fields and
+   three actions, and a table's columns would be mostly empty. */
+.group-list {
+  padding: 0;
+  margin: 0 0 4px;
+  list-style: none;
+  border-top: 1px solid var(--line-2);
+}
+
+.group-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.group-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.group-name {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.group-count {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.group-description {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.group-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* The form sits under the list it writes, separated by a rule so the two are not
+   read as one column of the same thing. */
+.group-form {
+  padding-top: 18px;
+  margin-top: 18px;
+  border-top: 1px solid var(--line-2);
+}
+
+.member-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .allergy-row {

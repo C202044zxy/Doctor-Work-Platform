@@ -11,6 +11,11 @@
 export const MODULE_ROLES = {
   review: ['senior'],
   audit: ['admin'],
+  // M1-07. The account table is the one screen whose whole body is administrator
+  // work: the service refuses the writes with `user.manage` and returns the
+  // contact fields to nobody else, so a junior opening it would get a directory
+  // they can already reach from the consultation picker.
+  users: ['admin'],
 }
 
 // The service answers 403 for two different things, and only one of them is about
