@@ -46,10 +46,15 @@ class Consultation(Base):
 class ConsultMessage(Base):
     __tablename__ = "consult_message"
     __table_args__ = (
-        UniqueConstraint("consultation_id", "sender_id", "client_id", name="uq_message_retry"),
+        UniqueConstraint("room_key", "sender_id", "client_id", name="uq_message_retry"),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
-    consultation_id: Mapped[int] = mapped_column(ForeignKey("consultation.id"), index=True)
+    # The room this message belongs to, spelled the way `app.rooms` spells it: digits
+    # for a consultation, `m<id>` for a meeting. `consultation_id` is kept for the
+    # consultation case -- record search and the demo seeders read it -- and is NULL for
+    # a meeting, which is why it is no longer required.
+    room_key: Mapped[str] = mapped_column(String(32), index=True)
+    consultation_id: Mapped[int | None] = mapped_column(ForeignKey("consultation.id"), index=True)
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     client_id: Mapped[str | None] = mapped_column(String(64))
     sender_type: Mapped[str] = mapped_column(String(20))
@@ -65,6 +70,9 @@ class ImageUpload(Base):
     filename: Mapped[str] = mapped_column(String(100), unique=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     consultation_id: Mapped[int | None] = mapped_column(ForeignKey("consultation.id"))
+    # NULL until the upload is attached to a room. `room_key` is the binding, because
+    # an image sent in a meeting has no `consultation.id` to point at.
+    room_key: Mapped[str | None] = mapped_column(String(32), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -73,7 +81,8 @@ class CallLog(Base):
 
     __tablename__ = "call_log"
     id: Mapped[int] = mapped_column(primary_key=True)
-    consultation_id: Mapped[int] = mapped_column(ForeignKey("consultation.id"), index=True)
+    room_key: Mapped[str] = mapped_column(String(32), index=True)
+    consultation_id: Mapped[int | None] = mapped_column(ForeignKey("consultation.id"), index=True)
     call_id: Mapped[str] = mapped_column(String(64), unique=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

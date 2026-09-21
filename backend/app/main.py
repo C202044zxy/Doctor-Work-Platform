@@ -339,6 +339,7 @@ def create_app(settings: Settings | None = None):
     app.include_router(consultation_records.router)
     app.include_router(chat.router)
     app.include_router(chat.socket_router)
+    app.include_router(chat.meeting_router)
     app.include_router(health_work.router)
     app.include_router(orders.router)
     app.state.chat = chat.ChatHub()

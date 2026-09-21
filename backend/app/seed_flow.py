@@ -86,6 +86,7 @@ from app.models import (
     VitalSign,
     VitalThreshold,
 )
+from app.rooms import consultation_key
 from app.work_models import CallLog, Consultation, ConsultMessage, ImageUpload
 
 # The four accounts and three patients app.seed_demo writes. This module is a
@@ -504,6 +505,7 @@ def _consultations(db, users, patients, now, counts) -> None:
             sent = started + timedelta(minutes=2 * index)
             db.add(
                 ConsultMessage(
+                    room_key=consultation_key(row.id),
                     consultation_id=row.id,
                     sender_id=users[speaker].id,
                     sender_type="doctor" if users[speaker].id == doctor_id else "patient_assist",
@@ -530,11 +532,13 @@ def _consultations(db, users, patients, now, counts) -> None:
                 filename=IMAGE_FILENAME,
                 owner_id=users["dr_wang"].id,
                 consultation_id=ended.id,
+                room_key=consultation_key(ended.id),
                 created_at=sent,
             )
         )
         db.add(
             ConsultMessage(
+                room_key=consultation_key(ended.id),
                 consultation_id=ended.id,
                 sender_id=users["dr_wang"].id,
                 sender_type="patient_assist",
@@ -559,6 +563,7 @@ def _consultations(db, users, patients, now, counts) -> None:
         connected = finished - timedelta(seconds=60)
         db.add(
             CallLog(
+                room_key=consultation_key(ended.id),
                 consultation_id=ended.id,
                 call_id=f"seedflow-call-{ended.id}",
                 started_at=connected - timedelta(seconds=5),

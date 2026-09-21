@@ -53,6 +53,11 @@ MARKED = {
     "history.create",
     "history.update",
     "history.delete",
+    # M5's room, which reuses M3's chat: the socket read, the message write and the
+    # call it ends, named for the meeting rather than for a consultation.
+    "meeting.messages.view",
+    "meeting.message",
+    "meeting.call.end",
 }
 
 
