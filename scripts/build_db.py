@@ -12,6 +12,19 @@ one, otherwise `backend/doctor.db`. The script refuses to touch anything that is
 not a SQLite file. An existing database is snapshotted into `backups/` first,
 then rebuilt from scratch; if any step fails, the previous file is put back.
 
+The three seed layers, and why the third is here
+------------------------------------------------
+`app.seed` writes master data, `app.seed_demo` writes the demonstration accounts
+and patients, and `app.seed_flow` writes the clinical state the three flows in
+`docs/02-测试场景.md` §3 start from -- consultation rooms in all three states,
+records in all three review states, a completed meeting, a health plan with
+fired reminders. All three run here, because a database built by this script is
+the one the demonstrations and the screenshots are taken against: leaving the
+third out would produce a database that opens on empty workbenches.
+
+`--no-flow` (and `--no-demo`, which implies it) skips that layer for a build
+that only needs the schema and master data.
+
 Why a build script instead of a committed database
 --------------------------------------------------
 `backend/doctor.db` is an artifact, not a source file, and `.gitignore` keeps it
@@ -120,7 +133,12 @@ def parse_args():
     parser.add_argument(
         "--no-demo",
         action="store_true",
-        help="seed master data only; skip the demo accounts and patients",
+        help="seed master data only; skip the demo accounts, patients and flow data",
+    )
+    parser.add_argument(
+        "--no-flow",
+        action="store_true",
+        help="keep the accounts and patients, but skip the clinical flow baseline",
     )
     return parser.parse_args()
 
@@ -215,7 +233,7 @@ def run(*args):
     subprocess.run([sys.executable, *args], cwd=BACKEND, check=True)
 
 
-def verify(db_path, with_demo):
+def verify(db_path, with_demo, with_flow, upload_dir):
     """Check that the build produced the database this script promises."""
     connection = sqlite3.connect(db_path)
     try:
@@ -279,7 +297,46 @@ def verify(db_path, with_demo):
     elif usernames:
         raise BuildError("--no-demo was given, but the build created accounts anyway.")
 
+    if with_flow:
+        verify_flow(db_path, upload_dir)
+
     return revision[0] if revision else None
+
+
+def verify_flow(db_path, upload_dir):
+    """Check the full-flow baseline `app.seed_flow` writes.
+
+    The expected counts live in that module rather than here, so the seeder and
+    its contract cannot drift apart: adding a seeded row means changing one
+    constant. The attachments are checked too -- a material row pointing at a
+    file nobody wrote is a 404 the demonstration would find, not this script.
+    """
+    from app.seed_flow import EXPECTED_COUNTS, SEEDED_FILES
+
+    connection = sqlite3.connect(db_path)
+    try:
+        wrong = []
+        for model, expected in EXPECTED_COUNTS.items():
+            # The table name comes from the model, not from input.
+            count = connection.execute(f"select count(*) from {model.__tablename__}").fetchone()[0]
+            if count != expected:
+                wrong.append(f"{model.__tablename__} has {count} row(s), expected {expected}")
+    finally:
+        connection.close()
+
+    if wrong:
+        raise BuildError(
+            "The full-flow seed (app.seed_flow) did not produce the rows it promises "
+            f"({'; '.join(wrong)}).\n"
+            "That seed and EXPECTED_COUNTS are the contract; fix them together."
+        )
+
+    absent = [name for name in SEEDED_FILES if not (upload_dir / name).is_file()]
+    if absent:
+        raise BuildError(
+            f"The full-flow seed named {len(absent)} attachment(s) that are not on disk: "
+            f"{absent}.\nThey belong under {upload_dir}; check that the seeder could write there."
+        )
 
 
 def recover(db_path, restore_from, error):
@@ -338,7 +395,16 @@ def main():
         run("-m", "app.seed")
         if not args.no_demo:
             run("-m", "app.seed_demo")
-        revision = verify(db_path, with_demo=not args.no_demo)
+            # The clinical state the three flows start from. It builds on the
+            # accounts and patients above, so it never runs without them.
+            if not args.no_flow:
+                run("-m", "app.seed_flow")
+        revision = verify(
+            db_path,
+            with_demo=not args.no_demo,
+            with_flow=not (args.no_demo or args.no_flow),
+            upload_dir=Path(settings.upload_dir),
+        )
     except (subprocess.CalledProcessError, BuildError, OSError) as error:
         return recover(db_path, restore_from, error)
 
@@ -352,6 +418,10 @@ def main():
         print("  demo data   skipped (--no-demo)")
     else:
         print("  demo data   4 accounts, 3 patients")
+        if args.no_flow:
+            print("  flow data   skipped (--no-flow)")
+        else:
+            print("  flow data   3 consultations, 3 records, 1 meeting, 1 plan, 30 readings")
         print("Sign in as admin_zhang, dr_li, dr_wang or dr_chen with Demo@2026.")
     return 0
 

@@ -61,6 +61,16 @@ const actorOptions = computed(() => {
     .sort((left, right) => left.id - right.id)
 })
 
+// A row can have no account for two legitimate reasons, and neither is an error: the
+// request failed before an identity was resolved (a rejected login, a signup), or the
+// scheduler wrote it -- `temp_grant.expire` has no request behind it and tags itself
+// `method: 'SYSTEM'`. Both used to render as the literal string `User #null`.
+function actor(row) {
+  if (row.username) return row.username
+  if (row.user_id !== null && row.user_id !== undefined) return `User #${row.user_id}`
+  return row.method === 'SYSTEM' ? 'System' : 'Unauthenticated'
+}
+
 const isFiltered = computed(
   () => filters.action !== '' || filters.actor !== '' || filters.range !== null,
 )
@@ -290,7 +300,7 @@ onMounted(() => {
 
         <el-table-column label="Account" min-width="180">
           <template #default="{ row }">
-            <span>{{ row.username || `User #${row.user_id}` }}</span>
+            <span>{{ actor(row) }}</span>
           </template>
         </el-table-column>
 

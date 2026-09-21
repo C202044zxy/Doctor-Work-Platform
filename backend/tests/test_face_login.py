@@ -3,10 +3,11 @@ from io import BytesIO
 
 import pytest
 from PIL import Image
+from sqlalchemy import select
 from test_auth_grants import client as auth_client
 
 from app import face_login
-from app.models import User
+from app.models import AuditLog, User
 
 client = auth_client
 
@@ -26,6 +27,20 @@ def test_session_logout(client):
     assert client.get("/api/me", headers=headers).status_code == 200
     assert client.post("/api/auth/logout", headers=headers).status_code == 200
     assert client.get("/api/me", headers=headers).status_code == 401
+
+
+def test_the_trail_names_who_signed_in(client):
+    """The route is anonymous, so no token passes through `current_user` and
+    nothing but the handler itself can tell the audit middleware who the actor
+    was. Left unset the row said a camera sign-in happened but not who, and the
+    audit screen renders a null actor as "User #null"."""
+    response = client.post("/api/auth/face/login", json={"username": "admin", "photo": photo()})
+    assert response.status_code == 200
+    with client.app.state.sessions() as db:
+        row = db.scalar(select(AuditLog).where(AuditLog.action == "auth.face_login"))
+    assert row is not None
+    assert row.result == "success"
+    assert (row.user_id, row.username) == (1, "admin")
 
 
 def test_matcher_receives_photo(client, monkeypatch):

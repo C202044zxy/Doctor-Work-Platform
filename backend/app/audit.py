@@ -18,6 +18,7 @@ ACTIONS = {
     "login": "auth.login",
     "send_code": "auth.send_code",
     "verify_code": "auth.verify_code",
+    "face_login": "auth.face_login",
     "logout": "auth.logout",
     "create_grant": "temp_grant.create",
     "revoke_grant": "temp_grant.revoke",

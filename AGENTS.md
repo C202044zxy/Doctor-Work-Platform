@@ -27,11 +27,11 @@ Use the current `docs/01` task allocation.
 
 ## Project Structure & Module Organization
 
-- `backend/app/` -- FastAPI application. `main.py` builds the app, exception handlers, health endpoints, and the department, patient, and audit routes; `models.py` (SQLAlchemy), `schemas.py` (Pydantic), `crypto.py` (AES-256-GCM and masking helpers for patient identifiers), `config.py`, `database.py`, `seed.py` (master data: roles and departments), `seed_demo.py` (presentation baseline).
+- `backend/app/` -- FastAPI application. `main.py` builds the app, exception handlers, health endpoints, and the department, patient, and audit routes; `models.py` (SQLAlchemy), `schemas.py` (Pydantic), `crypto.py` (AES-256-GCM and masking helpers for patient identifiers), `config.py`, `database.py`, `seed.py` (master data: roles and departments), `seed_demo.py` (presentation baseline: accounts and patients), `seed_flow.py` (full-flow baseline: the clinical state the three scenarios in `docs/02` §3 start from).
 - `backend/migrations/` -- Alembic revisions. Schema changes reach a database only through a revision.
 - `backend/tests/` -- pytest suite; each test migrates a throwaway SQLite database.
 - `frontend/src/` -- Vue 3 single-page workspace and styles.
-- `backend/start.sh` / `backend/start.ps1` -- the real one-command deploy scripts (POSIX and Windows). `scripts/dev.sh` / `dev.ps1` / `dev.cmd` are thin forwarders to them that also accept a `docker` mode.
+- `backend/start.sh` / `backend/start.ps1` -- the real one-command deploy scripts (POSIX and Windows). `scripts/dev.sh` / `dev.ps1` / `dev.cmd` are thin forwarders to them that also accept a `docker` mode. Before serving, they stop any leftover dev server that is provably this project's own, and otherwise refuse with the holder's PID, process name and command line -- see `backend/app/dev_runtime.py`.
 - `scripts/smoke.py` -- checks a running stack.
 - `scripts/build_db.py` -- builds the local SQLite database from scratch: snapshot the previous file, apply every migration, run both seeders, then verify the result against its own schema contract. It is a developer tool; `backend/start.*` and the Compose image keep running alembic and the seeders directly, as §8.2 of `docs/01-任务安排.md` requires.
 - `compose.yaml` -- Redis 7, API, and frontend services. There is no database container: the database is a SQLite file on a volume. `.github/workflows/ci.yml` starts that stack through `scripts/dev.sh docker`, then runs the stack smoke test, pytest, Ruff, the frontend build, and the backup script.
@@ -58,10 +58,11 @@ From `backend/`:
 - `uv run alembic check` -- confirm models and migrations agree.
 - `uv run python -m app.seed` -- seed departments and roles.
 - `uv run python -m app.seed_demo` -- seed the presentation baseline (idempotent).
+- `uv run python -m app.seed_flow` -- seed the full-flow clinical baseline (idempotent; needs the two above); `--check` reports without writing.
 
 From `frontend/`: `npm ci`, `npm run dev`, `npm run build`.
 
-From the repository root: `./scripts/dev.sh` or `.\scripts\dev.ps1` prepares and starts the local stack; the `docker` argument starts the Compose stack; `-NoServe` prepares without starting servers. Arguments after `docker` are forwarded to `docker compose up`, so `--detach --wait` starts it in the background; use long-form flags on Windows, because `-d` binds to PowerShell's own `-Debug`. These commands work unchanged in PowerShell, Git Bash, and WSL.
+From the repository root: `./scripts/dev.sh` or `.\scripts\dev.ps1` prepares and starts the local stack; the `docker` argument starts the Compose stack; `-NoServe` prepares without starting servers. Arguments after `docker` are forwarded to `docker compose up`, so `--detach --wait` starts it in the background; use long-form flags on Windows, because `-d` binds to PowerShell's own `-Debug`. Before serving, they stop a leftover server on 8000/5173 only when it is provably this project's own dev server; otherwise they exit 1 naming the holder and stop nothing. These commands work unchanged in PowerShell, Git Bash, and WSL.
 
 To rebuild the local SQLite database from scratch -- the way to get a clean baseline, and the way to prove that a schema change still builds -- run this from the repository root:
 
@@ -69,7 +70,7 @@ To rebuild the local SQLite database from scratch -- the way to get a clean base
 uv run --project backend python scripts/build_db.py
 ```
 
-It snapshots any existing database into `backups/prebuild-<timestamp>.db` (pruned to `BACKUP_KEEP`, 7 by default), deletes it, applies every migration, runs `app.seed` and `app.seed_demo`, and verifies the result before reporting success. `--no-demo` stops after master data; `--db PATH` builds a different file. If any step fails it puts the previous database back and exits non-zero. It needs the stack stopped, because a running API holds the file open on Windows.
+It snapshots any existing database into `backups/prebuild-<timestamp>.db` (pruned to `BACKUP_KEEP`, 7 by default), deletes it, applies every migration, runs `app.seed`, `app.seed_demo` and `app.seed_flow`, and verifies the result before reporting success -- schema, master data, the pinned demo accounts and patients, the full-flow row counts, and that the seeded attachments are on disk. `--no-demo` stops after master data; `--no-flow` keeps the accounts and patients but skips the clinical baseline, which is the one to use when you want empty workbenches; `--db PATH` builds a different file. If any step fails it puts the previous database back and exits non-zero. It needs the stack stopped, because a running API holds the file open on Windows.
 
 ## Coding Style & Naming Conventions
 

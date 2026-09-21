@@ -21,7 +21,11 @@ Linux/macOS（Bash 4.3+）：`bash scripts/dev.sh`；再次启动可用 `bash sc
 - Redis：127.0.0.1:16379（仅本机）
 - 本地数据：`backend/doctor.db`、`backend/uploads/`；Windows 日志：`backend/runtime/`。
 
+5173 / 8000 上若有上次崩溃留下的服务，重跑启动脚本会自动回收**本项目自己的**那一个；其他占用者不会被停，脚本会打印它的 PID、进程名和命令行。
+
 **完整步骤、账号、双浏览器图文/视频验收、停止方式与排错：[开发模式启动与手测](docs/开发模式启动与手测.md)。**
+
+**彩排与现场演出的分步脚本（五套流程、四个窗口、哪一步要降级）：[端到端演示脚本](docs/演示脚本-端到端.md)。**
 
 首次启动仅在缺失时生成 `backend/.env` 随机密钥。已有配置不覆盖，已有数据库必须保留原加密密钥。Redis 是认证硬依赖。`/health` 与 `/api/health` 依赖异常仍返回 200；`/api/health/ready` 则会返回 503。
 
@@ -60,7 +64,7 @@ npm run build
 uv run --project backend python scripts/build_db.py --db backend/runtime/verification.db
 ```
 
-日常启动只迁移与幂等补种子，不重建数据库。建库工具会备份目标已有数据后重建，不要对运行中的业务库执行。数据库、.env、uploads、runtime 和依赖都不进 Git。
+建库工具会依次跑主数据、演示账号与患者、以及**全流程临床数据**（`backend/app/seed_flow.py`：三种问诊与病历状态、已完成会诊、健康方案与体征读数，并在 `backend/uploads/` 写出 2 个占位附件），因此重建出来的库打开即是可演示状态；`--no-flow` 可跳过最后这一层。日常启动只迁移与幂等补种子（不含全流程数据，开发模式需要时手动 `uv run python -m app.seed_flow`），不重建数据库。建库工具会备份目标已有数据后重建，不要对运行中的业务库执行。数据库、.env、uploads、runtime 和依赖都不进 Git。
 
 ## 发布与存储
 
