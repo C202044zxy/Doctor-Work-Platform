@@ -14,10 +14,10 @@ from sqlalchemy import exists, or_, select
 
 from app.audit import mark_audit
 from app.audit_export import content_disposition
-from app.chat import Paging, room_data, room_for
+from app.chat import Paging, consultation_scope, room_data, room_for
 from app.models import Patient
 from app.security import require_permission
-from app.work_common import DB, fields, ok, page, scoped, utc
+from app.work_common import DB, fields, ok, page, utc
 from app.work_models import CallLog, Consultation, ConsultMessage
 from app.work_schemas import Envelope, Input, PageData, RoomRead
 
@@ -41,7 +41,7 @@ class RecordFilters:
         self.start, self.end = from_, to
 
     def statement(self, db):
-        stmt = scoped(Consultation, db)
+        stmt = consultation_scope(db)
         if self.patient_no:
             stmt = stmt.where(Patient.patient_no == self.patient_no)
         if self.patient:

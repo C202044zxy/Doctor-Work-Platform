@@ -951,3 +951,10 @@
 ### main 与旧分支兼容接口（2026-09-20）
 
 标准 `/api/emr/orders`、`/api/health-plans`、`/api/reminder-rules`、`/api/reminders` 使用 main 的 M4/M6 契约。原分支接口加 `/api/legacy` 前缀，保留旧数据访问；字段见 `openapi.yaml` 引用的 `legacy.openapi.json`。例如标准未读响应为 `{unread}`，旧接口为 `{unread_count}`，前端不可混用。旧医嘱仍需要原适配器，缺失返回 503，正式开医嘱请用 M4 病历页面。
+
+## M3 权限与搜索调整（2026-09-21）
+
+- 工作台通过 `GET /api/patients?name=...` 按姓名子串搜索，候选项显示姓名与 `patient_no`；选中后使用现有 `patient_no` 参数筛选或发起问诊。候选项沿用患者接口科室范围。
+- 新问诊保持 `waiting`，可见范围内医生可接诊；接诊原子写入 `doctor_id`。`active` 与 `ended` 仅发起端（现有代患者角色）和接诊医生可访问。
+- 会话范围同时约束列表、记录、CSV、详情、消息、图片、通话及 WebSocket。非参与者列表为空/不含该会话，HTTP 单对象访问返回 404；管理员和临时授权也不绕过会话参与者限制。
+- 患者档案继续遵循原有科室范围；管理员及有效临时授权为已有例外。

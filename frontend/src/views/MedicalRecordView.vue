@@ -183,24 +183,35 @@ onMounted(() => run(async () => {
 
 <template>
   <section class="emr-workspace">
-    <h1>Medical records</h1>
+    <header class="records-header">
+      <div>
+        <h1>Medical records</h1>
+        <p class="subtitle">Find patient records or start a new draft.</p>
+      </div>
+      <button type="button" @click="router.push('/my-submissions')">My submissions</button>
+    </header>
     <p v-if="busy" role="status">Loading…</p>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
-    <div class="toolbar">
-      <label>Patient <select v-model="patientNo" aria-label="Patient"><option value="">All patients</option><option v-for="p in patients" :key="p.patient_no" :value="p.patient_no">{{ p.patient_no }} · {{ p.name }}</option></select></label>
-      <label>Patient number (exact)<input v-model="patientNo" placeholder="P20260001"></label>
-      <label>Status <select v-model="status" aria-label="Status"><option value="">All statuses</option><option v-for="s in ['draft', 'pending', 'rejected', 'archived']" :key="s">{{ s }}</option></select></label>
-      <button :disabled="busy" @click="run(async () => { page = 1; await list() })">Search</button>
-      <label>Template <select v-model="templateId" aria-label="Template"><option v-for="t in templates.filter(t => t.is_active)" :key="t.id" :value="t.id">{{ t.name }}</option></select></label>
-      <button :disabled="busy || !patientNo || !templateId" @click="run(create)">New draft</button>
-      <router-link to="/my-submissions">My submissions</router-link>
+    <div class="records-controls">
+      <div class="toolbar field-toolbar filter-toolbar">
+        <label>Patient <select v-model="patientNo" aria-label="Patient"><option value="">All patients</option><option v-for="p in patients" :key="p.patient_no" :value="p.patient_no">{{ p.patient_no }} · {{ p.name }}</option></select></label>
+        <label>Patient number (exact)<input v-model="patientNo" placeholder="P20260001"></label>
+        <label>Status <select v-model="status" aria-label="Status"><option value="">All statuses</option><option v-for="s in ['draft', 'pending', 'rejected', 'archived']" :key="s">{{ s }}</option></select></label>
+        <button :disabled="busy" @click="run(async () => { page = 1; await list() })">Search</button>
+      </div>
+      <div class="toolbar field-toolbar draft-toolbar">
+        <label>Template <select v-model="templateId" aria-label="Template"><option v-for="t in templates.filter(t => t.is_active)" :key="t.id" :value="t.id">{{ t.name }}</option></select></label>
+        <button class="primary-button" :disabled="busy || !patientNo || !templateId" @click="run(create)">New draft</button>
+      </div>
     </div>
-    <p v-if="!busy && !records.items.length">No records match these filters.</p>
-    <table v-else><thead><tr><th>Patient</th><th>Template</th><th>Status</th><th>Version</th><th>Author</th><th></th></tr></thead><tbody>
-      <tr v-for="r in records.items" :key="r.id"><td>{{ r.patient_no }} · {{ r.patient_name }}</td><td>{{ r.template_name }}</td><td>{{ r.status }}</td><td>{{ r.version }}</td><td>{{ r.author_name }}</td><td><button :disabled="busy" @click="run(() => open(r.id))">Open</button></td></tr>
-    </tbody></table>
-    <div class="toolbar"><button :disabled="busy || page <= 1" @click="run(async () => { page--; await list() })">Previous</button><span>Page {{ page }} · {{ records.total }} records</span><button :disabled="busy || page * 10 >= records.total" @click="run(async () => { page++; await list() })">Next</button></div>
+    <div class="records-results">
+      <p v-if="!busy && !records.items.length" class="empty-state">No records match these filters.</p>
+      <div v-else class="table-scroll"><table><thead><tr><th>Patient</th><th>Template</th><th>Status</th><th>Version</th><th>Author</th><th>Actions</th></tr></thead><tbody>
+        <tr v-for="r in records.items" :key="r.id"><td>{{ r.patient_no }} · {{ r.patient_name }}</td><td>{{ r.template_name }}</td><td>{{ r.status }}</td><td>{{ r.version }}</td><td>{{ r.author_name }}</td><td><button :disabled="busy" @click="run(() => open(r.id))">Open</button></td></tr>
+      </tbody></table></div>
+      <div class="toolbar pagination"><button :disabled="busy || page <= 1" @click="run(async () => { page--; await list() })">Previous</button><span>Page {{ page }} · {{ records.total }} records</span><button :disabled="busy || page * 10 >= records.total" @click="run(async () => { page++; await list() })">Next</button></div>
+    </div>
     <article v-if="selected">
       <h2>{{ selected.template_name }} · {{ selected.patient_name }}</h2>
       <p>{{ selected.status }} · Version {{ selected.version }} · Revision {{ selected.revision }}</p>
@@ -238,14 +249,65 @@ onMounted(() => run(async () => {
 </template>
 
 <style scoped>
-.emr-workspace { padding: 24px; max-width: 1200px; margin: auto; }
-.toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 16px 0; }
-label { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
-fieldset { border: 1px solid #d5dde4; border-radius: 8px; padding: 16px; }
-input, select, textarea, button { padding: 9px; border: 1px solid #aab8c4; border-radius: 5px; }
-button { cursor: pointer; margin: 4px; } button:disabled { cursor: default; opacity: .5; }
-table { width: 100%; border-collapse: collapse; } th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
-article, details { margin: 20px 0; } pre { white-space: pre-wrap; }
-.error, .blocked { color: #a4161a; } .warning { color: #805600; } .passed { color: #17643d; }
-dialog { position: fixed; top: 22%; max-width: 600px; border: 3px solid; border-radius: 12px; background: #fff; z-index: 100; box-shadow: 0 12px 80px #0005; }
+.emr-workspace { padding: 24px; max-width: 1200px; margin: auto; color: var(--ink); }
+.records-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+h1 { margin: 0; font-size: 26px; }
+h2 { font-size: 20px; margin: 24px 0 12px; }
+.subtitle { margin: 8px 0 0; color: var(--ink-2); }
+.records-controls, .records-results, article, .emr-workspace > details {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.records-controls { padding: 20px; margin-bottom: 20px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: end; justify-content: flex-start; gap: 12px; margin: 16px 0; padding: 0; border: 0; }
+.field-toolbar { margin: 0; }
+.filter-toolbar { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1fr) auto; }
+.draft-toolbar { border-top: 1px solid var(--line-2); padding-top: 16px; margin-top: 20px; }
+.draft-toolbar > label { flex: 0 1 360px; }
+label { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; min-width: 0; color: var(--ink-2); font-size: 13px; font-weight: 600; }
+.field-toolbar > label { margin: 0; }
+fieldset { min-width: 0; margin: 0; border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+input, select, textarea, button { font: inherit; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--ink); background: var(--surface); }
+input, select, button { min-height: 40px; }
+input, select, textarea { width: 100%; min-width: 0; font-weight: 400; }
+textarea { min-height: 100px; resize: vertical; }
+button { cursor: pointer; margin: 0; font-size: 14px; font-weight: 600; white-space: nowrap; }
+button:hover:not(:disabled) { border-color: var(--teal); color: var(--teal); background: var(--teal-soft); }
+button:disabled { cursor: default; opacity: .5; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.primary-button { background: var(--teal); border-color: var(--teal); color: white; }
+.primary-button:hover:not(:disabled) { background: var(--teal-dark); color: white; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--line-2); }
+th { background: var(--surface-2); color: var(--ink-2); font-size: 12px; font-weight: 600; }
+tbody tr:hover { background: var(--surface-2); }
+.empty-state { padding: 40px 20px; margin: 0; text-align: center; color: var(--ink-2); }
+.pagination { align-items: center; justify-content: flex-end; margin: 0; padding: 16px; }
+.pagination span { margin-right: auto; order: -1; color: var(--ink-2); font-size: 13px; }
+article, .emr-workspace > details { padding: 20px; margin-top: 24px; }
+article > h2:first-child { margin-top: 0; }
+details { margin: 20px 0; }
+summary { cursor: pointer; font-weight: 600; }
+details[open] > summary { margin-bottom: 16px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; background: var(--surface-2); border-radius: var(--radius); }
+ul { list-style: none; padding: 0; }
+li { padding: 16px 0; border-bottom: 1px solid var(--line-2); }
+li button + button, dialog button + button { margin-left: 8px; }
+.error, .blocked { color: var(--alert-dark); }
+.warning { color: var(--warn); }
+.passed { color: var(--ok); }
+dialog { position: fixed; top: 22%; width: calc(100% - 32px); max-width: 600px; padding: 24px; border: 3px solid; border-radius: var(--radius-lg); background: var(--surface); z-index: 100; box-shadow: 0 12px 80px #0005; }
+@media (max-width: 900px) {
+  .filter-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .emr-workspace { padding: 16px; }
+  .records-header { align-items: flex-start; flex-direction: column; }
+  .records-controls, article, .emr-workspace > details { padding: 16px; }
+  .filter-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .draft-toolbar > label { flex-basis: 100%; }
+  .pagination { gap: 8px; }
+}
 </style>
