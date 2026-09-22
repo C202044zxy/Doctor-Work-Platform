@@ -11,6 +11,8 @@ import {
 } from '../api/client'
 import { initials } from '../people'
 import { currentUserId } from '../session'
+import { MEETING, meetingParticipant, meetingState } from '../room.js'
+import RoomPanel from '../components/RoomPanel.vue'
 
 // T30/T31/T32. Four states, one branch, and the two things that leave the
 // module: the temporary grant every invitation creates, and the report that is
@@ -136,6 +138,11 @@ const invited = computed(
     ['requested', 'accepted'].includes(detail.value?.status),
 )
 const initiator = computed(() => detail.value?.initiator_id === me.value)
+// Who is in the room, in the server's sense: the initiator plus every invited expert,
+// a declined invitation included -- `meetingParticipant` is the same rule the meeting
+// module already uses for materials and reports. The room is mounted on it, so a
+// reader the meeting was not shared with never opens a socket at all.
+const isParticipant = computed(() => meetingParticipant(detail.value, me.value))
 const canStart = computed(() => initiator.value && detail.value?.status === 'accepted')
 const canComplete = computed(() => initiator.value && detail.value?.status === 'in_progress')
 const canWriteReport = computed(() => detail.value?.status === 'completed')
@@ -285,6 +292,24 @@ async function loadDetail() {
   // The detail answered, so the caller is a participant and both sub-resources
   // are theirs to read -- asking for them as a stranger would be a 403.
   await Promise.all([loadMaterials(), loadReport()])
+}
+
+// The room publishes a `status` frame whenever the meeting moves, and the move can be
+// someone else's -- an expert watching the initiator start the consultation. The record
+// is re-read without the loading state, because blanking the detail would unmount the
+// very room that just received the frame.
+async function refreshDetail() {
+  try {
+    detail.value = await meetingsApi.get(selectedId.value)
+  } catch {
+    // The frame already carried the new state, so a failed re-read is not worth
+    // replacing what the screen shows.
+  }
+}
+
+async function onRoomStatus() {
+  await refreshDetail()
+  await load()
 }
 
 function open(id) {
@@ -758,6 +783,31 @@ onMounted(load)
               Pick a consultation to see its participants, the material it shares and the
               report it archives.
             </p>
+          </div>
+        </section>
+
+        <!-- The room ---------------------------------------------------------- -->
+        <!-- M5's conversation is M3's room: one socket, one panel. It closes for
+             writing when the meeting completes, and its history outlives the call. -->
+        <section v-if="detail && isParticipant" class="panel">
+          <header class="panel-head">
+            <h3>Consultation room</h3>
+            <span class="panel-count data">{{ meetingState(detail.status) }}</span>
+            <span class="panel-tail">Text, images and a video call between the participants</span>
+          </header>
+
+          <!-- No note above the panel: the room says its own state, and a second
+               paragraph saying it again would only be able to disagree. -->
+          <div class="panel-body">
+            <RoomPanel
+              :kind="MEETING"
+              :room-id="detail.id"
+              :status="detail.status"
+              :participant="isParticipant"
+              @status="onRoomStatus"
+              @message="load"
+              @sync="refreshDetail"
+            />
           </div>
         </section>
 

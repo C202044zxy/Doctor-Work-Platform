@@ -130,7 +130,8 @@ class RoomRead(BaseModel):
 
 class MessageRead(BaseModel):
     id: int
-    consultation_id: int
+    room_key: str
+    consultation_id: int | None
     sender_type: Literal["doctor", "patient_assist"]
     sender_name: str
     content: str
@@ -141,6 +142,20 @@ class MessageRead(BaseModel):
 
 class UploadRead(BaseModel):
     url: str
+
+
+class CallRead(BaseModel):
+    """A finished call. `room_key` names the room, so one renderer serves both kinds."""
+
+    id: int
+    room_key: str
+    consultation_id: int | None
+    call_id: str
+    started_at: datetime
+    connected_at: datetime | None
+    ended_at: datetime
+    duration_seconds: int
+    end_reason: str
 
 
 class PlanRead(BaseModel):

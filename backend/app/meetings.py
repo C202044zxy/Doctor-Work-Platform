@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import func, or_, select
 
+from app import calls, rooms
 from app import meeting_schemas as contract
 from app.audit import mark_audit, persist_audit
 from app.auth import CurrentUser, ok
@@ -432,7 +433,13 @@ def apply_invitation(request, user, meeting_id: int, action: str):
         return ok(meeting_data(meeting))
 
 
-def apply_progress(request, user, meeting_id: int, action: str):
+async def apply_progress(request, user, meeting_id: int, action: str):
+    """Move the meeting and tell its room, which is a live chat while in progress.
+
+    Asynchronous, unlike the invitation transitions, because the room's participants
+    have to learn that the chat just became writable -- or read-only -- without a
+    reload. The event is the same `status` frame M3 publishes when a consultation moves.
+    """
     with request.app.state.sessions() as db:
         db.info["request"] = request
         meeting = meeting_or_404(db, meeting_id)
@@ -464,7 +471,15 @@ def apply_progress(request, user, meeting_id: int, action: str):
         )
         db.commit()
         db.refresh(meeting)
-        return ok(meeting_data(meeting))
+        status_event = rooms.meeting_room(db, meeting_id).data()
+        result = ok(meeting_data(meeting))
+    key = rooms.meeting_key(meeting_id)
+    if action == "complete":
+        # A call cannot outlive the meeting it belongs to, for the same reason it
+        # cannot outlive a consultation that ends.
+        await calls.finish(request.app, key, "meeting_ended")
+    await request.app.state.chat.publish(key, {"type": "status", "data": status_event})
+    return result
 
 
 @router.post("/api/meetings/{id}/accept", response_model=contract.MeetingResponse)
@@ -480,18 +495,18 @@ def decline_meeting(id: int, request: Request, user: CurrentUser):
 
 
 @router.post("/api/meetings/{id}/start", response_model=contract.MeetingResponse)
-def start_meeting(id: int, request: Request, user: CurrentUser):
+async def start_meeting(id: int, request: Request, user: CurrentUser):
     """开始会诊 / Start: `accepted` -> `in_progress`. Initiator only."""
-    return apply_progress(request, user, id, "start")
+    return await apply_progress(request, user, id, "start")
 
 
 @router.post("/api/meetings/{id}/complete", response_model=contract.MeetingResponse)
-def complete_meeting(id: int, request: Request, user: CurrentUser):
+async def complete_meeting(id: int, request: Request, user: CurrentUser):
     """结束会诊 / Complete: `in_progress` -> `completed`, after which a report
     can be written. The automatic grants are left to run out on their own
     schedule -- M5-T8 waits for the expiry scan, and revoking early would make
     "有效期 = 会诊时间 + 24h" untrue."""
-    return apply_progress(request, user, id, "complete")
+    return await apply_progress(request, user, id, "complete")
 
 
 @router.get(
