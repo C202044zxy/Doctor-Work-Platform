@@ -144,9 +144,41 @@ function attendees(meeting) {
       <h2 class="page-heading">{{ greeting }}, {{ clinician.name }}</h2>
       <p class="page-sub">
         <span>{{ today }}</span>
-        <span>{{ roleLabel }} · {{ clinician.department }}</span>
       </p>
     </header>
+
+    <!-- 0922意见 6: the account leads the page, ahead of the figure strip, and it
+         is the one card on the screen that is about the reader. The name and the
+         role are drawn as an identity block -- the badge the consultation screens
+         draw a person with -- and the two facts sit beside it rather than under
+         it, which keeps the block one band tall. The greeting above no longer
+         repeats the role and the department: the card states both. -->
+    <section class="panel account">
+      <header class="panel-head">
+        <h3>Your account</h3>
+      </header>
+      <div class="account-body">
+        <div class="account-id">
+          <span class="who-badge" data-tone="teal" aria-hidden="true">
+            {{ clinician.initials }}
+          </span>
+          <div class="account-who">
+            <p class="account-name">{{ clinician.name }}</p>
+            <p class="account-role">{{ roleLabel }}</p>
+          </div>
+        </div>
+        <dl class="account-facts">
+          <div>
+            <dt>Username</dt>
+            <dd class="data">{{ currentUsername }}</dd>
+          </div>
+          <div>
+            <dt>Department</dt>
+            <dd>{{ clinician.department }}</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
 
     <dl class="figures">
       <div v-for="figure in figures" :key="figure.label">
@@ -257,35 +289,6 @@ function attendees(meeting) {
       </section>
 
       <div class="rail">
-        <!-- 0922意见 6: the account has to stand out, so it leads the rail rather
-             than trailing it. The name and the role are drawn as an identity block
-             -- the badge the consultation screens draw a person with -- rather
-             than as two more rows of the list below, and the panel takes the brand
-             tint where the working panels keep the plain surface. -->
-        <section class="panel account">
-          <header class="panel-head">
-            <h3>Your account</h3>
-          </header>
-          <div class="account-id">
-            <span class="who-badge" data-tone="teal" aria-hidden="true">
-              {{ clinician.initials }}
-            </span>
-            <div class="account-who">
-              <p class="account-name">{{ clinician.name }}</p>
-              <p class="account-role">{{ roleLabel }}</p>
-            </div>
-          </div>
-          <dl class="kv">
-            <div>
-              <dt>Username</dt>
-              <dd class="data">{{ currentUsername }}</dd>
-            </div>
-            <div>
-              <dt>Department</dt>
-              <dd>{{ clinician.department }}</dd>
-            </div>
-          </dl>
-        </section>
         <section v-loading="loading" class="panel">
           <header class="panel-head">
             <h3>This week's consultations</h3>
@@ -574,10 +577,11 @@ function attendees(meeting) {
 
 /* Account card ------------------------------------------------------------- */
 
-/* The one card on this screen that is about the reader. It carries the brand
-   tint and a teal edge down its full height, so it is the first thing the eye
-   lands on, which is what 0922意见 6 asked for. */
+/* 0922意见 6: the account is the first block on the page, right under the
+   greeting, and the only card here that is about the reader. It carries the
+   brand tint and a teal edge, so it is the first thing the eye lands on. */
 .account {
+  margin-bottom: 20px;
   box-shadow: inset 3px 0 0 var(--teal);
 }
 
@@ -589,18 +593,27 @@ function attendees(meeting) {
   color: var(--teal-dark);
 }
 
+/* Identity on the left, facts on the right: one band, not a stack. */
+.account-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 32px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+
 .account-id {
   display: flex;
   gap: 12px;
   align-items: center;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--line-2);
+  min-width: 0;
 }
 
 .account .who-badge {
-  width: 38px;
-  height: 38px;
-  font-size: 13px;
+  width: 40px;
+  height: 40px;
+  font-size: 13.5px;
 }
 
 .account-who {
@@ -620,6 +633,32 @@ function attendees(meeting) {
   margin: 1px 0 0;
   font-size: 12.5px;
   color: var(--ink-2);
+}
+
+/* A label and its value, side by side: as a list these two would double the
+   band's height for nothing. */
+.account-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 36px;
+  margin: 0;
+}
+
+.account-facts > div {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.account-facts dt {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.account-facts dd {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
 }
 
 /* Load failure ------------------------------------------------------------- */
