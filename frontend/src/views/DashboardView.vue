@@ -144,9 +144,41 @@ function attendees(meeting) {
       <h2 class="page-heading">{{ greeting }}, {{ clinician.name }}</h2>
       <p class="page-sub">
         <span>{{ today }}</span>
-        <span>{{ roleLabel }} · {{ clinician.department }}</span>
       </p>
     </header>
+
+    <!-- 0922意见 6: the account leads the page, ahead of the figure strip, and it
+         is the one card on the screen that is about the reader. The name and the
+         role are drawn as an identity block -- the badge the consultation screens
+         draw a person with -- and the two facts sit beside it rather than under
+         it, which keeps the block one band tall. The greeting above no longer
+         repeats the role and the department: the card states both. -->
+    <section class="panel account">
+      <header class="panel-head">
+        <h3>Your account</h3>
+      </header>
+      <div class="account-body">
+        <div class="account-id">
+          <span class="who-badge" data-tone="teal" aria-hidden="true">
+            {{ clinician.initials }}
+          </span>
+          <div class="account-who">
+            <p class="account-name">{{ clinician.name }}</p>
+            <p class="account-role">{{ roleLabel }}</p>
+          </div>
+        </div>
+        <dl class="account-facts">
+          <div>
+            <dt>Username</dt>
+            <dd class="data">{{ currentUsername }}</dd>
+          </div>
+          <div>
+            <dt>Department</dt>
+            <dd>{{ clinician.department }}</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
 
     <dl class="figures">
       <div v-for="figure in figures" :key="figure.label">
@@ -240,16 +272,18 @@ function attendees(meeting) {
           </div>
         </template>
 
-        <!-- M3. Not a stub of a conversation: a statement that the module is not
-             written, so nobody reads an empty box as "no one has messaged me". -->
+        <!-- M3 landed after this panel was written: `/api/consultations` answers (three
+             seeded rooms, one per state) and the socket route exists, so the "no code at
+             all" note that stood here would now be a false statement on a demo screen.
+             The workbench still does not summarise messages -- the consultation screen
+             does -- so this points there rather than drawing an empty inbox. -->
         <div class="group">
           <p class="group-label">Patient messages</p>
           <p class="gap">
-            <span class="chip" data-severity="info">Not built</span>
-            Messages with patients are M3's, and it has no code: all 10 paths under
-            <span class="data">/api/consultations</span> in the contract are unimplemented, and
-            there is no WebSocket route in this build. Until they exist there is nothing here to
-            read, which is not the same as an empty inbox.
+            <span class="chip" data-severity="info">On its own screen</span>
+            Messages with patients are read and answered on the consultation screen,
+            which the workbench does not summarise.
+            <router-link :to="{ name: 'consultations' }">Open the consultations</router-link>.
           </p>
         </div>
       </section>
@@ -291,29 +325,6 @@ function attendees(meeting) {
           </ol>
         </section>
 
-        <section class="panel">
-          <header class="panel-head">
-            <h3>Your account</h3>
-          </header>
-          <dl class="kv">
-            <div>
-              <dt>Name</dt>
-              <dd>{{ clinician.name }}</dd>
-            </div>
-            <div>
-              <dt>Username</dt>
-              <dd class="data">{{ currentUsername }}</dd>
-            </div>
-            <div>
-              <dt>Role</dt>
-              <dd>{{ roleLabel }}</dd>
-            </div>
-            <div>
-              <dt>Department</dt>
-              <dd>{{ clinician.department }}</dd>
-            </div>
-          </dl>
-        </section>
       </div>
     </div>
   </div>
@@ -562,6 +573,92 @@ function attendees(meeting) {
 .slot-kind {
   font-size: 12.5px;
   color: var(--ink-2);
+}
+
+/* Account card ------------------------------------------------------------- */
+
+/* 0922意见 6: the account is the first block on the page, right under the
+   greeting, and the only card here that is about the reader. It carries the
+   brand tint and a teal edge, so it is the first thing the eye lands on. */
+.account {
+  margin-bottom: 20px;
+  box-shadow: inset 3px 0 0 var(--teal);
+}
+
+.account .panel-head {
+  background: var(--teal-soft);
+}
+
+.account .panel-head h3 {
+  color: var(--teal-dark);
+}
+
+/* Identity on the left, facts on the right: one band, not a stack. */
+.account-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 32px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+
+.account-id {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.account .who-badge {
+  width: 40px;
+  height: 40px;
+  font-size: 13.5px;
+}
+
+.account-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.account-name {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.account-role {
+  margin: 1px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+/* A label and its value, side by side: as a list these two would double the
+   band's height for nothing. */
+.account-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 36px;
+  margin: 0;
+}
+
+.account-facts > div {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.account-facts dt {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.account-facts dd {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
 }
 
 /* Load failure ------------------------------------------------------------- */

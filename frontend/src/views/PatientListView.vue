@@ -542,17 +542,6 @@ onMounted(async () => {
           @change="search"
         />
 
-        <el-date-picker
-          v-model="filters.birth"
-          class="filter-range"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          start-placeholder="Born from"
-          end-placeholder="to"
-          :disabled="loading"
-          @change="search"
-        />
-
         <el-select
           v-model="filters.allergenCodes"
           class="filter-allergen"
@@ -605,10 +594,6 @@ onMounted(async () => {
           />
         </el-select>
 
-        <!-- The filter reads groups; this is the only place that writes them. It
-             sits with the filter because the two are about the same rows. -->
-        <el-button link @click="openGroups">Manage groups</el-button>
-
         <!-- Both identifiers are exact matches. The input is the whole number: a
              prefix is not a hit, because the comparison is against the digest kept
              beside the ciphertext, not against a prefix of anything. -->
@@ -632,18 +617,39 @@ onMounted(async () => {
           @clear="search"
         />
 
-        <el-button v-if="hasFilters" link @click="clearFilters">Clear filters</el-button>
+        <!-- Last in the run: of the ten conditions this is the one people reach
+             for least, so it closes the grid. -->
+        <el-date-picker
+          v-model="filters.birth"
+          class="filter-range"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          start-placeholder="Born from"
+          end-placeholder="to"
+          :disabled="loading"
+          @change="search"
+        />
 
-        <form class="search" @submit.prevent="search">
-          <el-input
-            v-model="filters.name"
-            placeholder="Search by name"
-            clearable
-            :disabled="loading"
-            @clear="search"
-          />
-          <el-button native-type="submit" :loading="loading">Search</el-button>
-        </form>
+        <!-- The commands that belong with the run of conditions: the group editor,
+             the reset, and the name search -- the one people reach for first, so
+             it keeps the right end of the row. -->
+        <div class="filter-actions">
+          <!-- 0922意见 1: as a link the button read as a label beside the group
+               filter; it now wears the same border as the search next to it. -->
+          <el-button @click="openGroups">Manage groups</el-button>
+          <el-button v-if="hasFilters" link @click="clearFilters">Clear filters</el-button>
+
+          <form class="search" @submit.prevent="search">
+            <el-input
+              v-model="filters.name"
+              placeholder="Search by name"
+              clearable
+              :disabled="loading"
+              @clear="search"
+            />
+            <el-button native-type="submit" :loading="loading">Search</el-button>
+          </form>
+        </div>
 
       </div>
 
@@ -694,11 +700,11 @@ onMounted(async () => {
 
         <el-table-column label="Department" prop="department" min-width="150" />
 
-        <el-table-column label="Symptom tags" min-width="210">
+        <el-table-column label="Symptom tags" min-width="230">
           <template #default="{ row }">
-            <template v-if="row.symptom_tags?.length">
+            <span v-if="row.symptom_tags?.length" class="tags">
               <span v-for="tag in row.symptom_tags" :key="tag" class="tag">{{ tag }}</span>
-            </template>
+            </span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
@@ -1051,57 +1057,48 @@ onMounted(async () => {
 <!-- Page furniture (.page, .page-head, .panel, .toolbar, .field, .empty, .muted)
      lives in src/style.css; only what is specific to this screen is here. -->
 <style scoped>
-/* The page .toolbar spreads its children to both ends. This bar is a run of
-   filters that pack from the left; only the search is pushed to the right. */
+/* The conditions used to wrap as a ragged run of hand-set widths -- 168px beside
+   240px beside 132px -- so no two rows shared an edge and the same control could
+   land anywhere. Four equal columns give every row the same edges and every
+   control its column. */
 .filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 12px;
   align-items: center;
-  justify-content: flex-start;
 }
 
-/* The name search is the one condition people reach for first, so it sits at the
-   right end of the row, pushed there by the auto margin: the other filters fill the
-   left, and the eye lands on the search box where a toolbar usually keeps it. */
+/* The commands the reader reaches for once the conditions are set. They keep the
+   last row, right aligned, where a toolbar usually keeps them. */
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* The name search is the one condition people reach for first, so it keeps the
+   right end of that row. */
 .search {
   display: flex;
   gap: 8px;
   width: min(100%, 320px);
-  margin-left: auto;
 }
 
-.filter-no {
-  width: 168px;
-}
-
-.filter-tags {
-  width: 240px;
-}
-
-.filter-range {
-  width: 280px;
-}
-
-.filter-gender {
-  width: 132px;
-}
-
-.filter-allergen {
-  width: 220px;
-}
-
-.filter-severity {
-  width: 190px;
-}
-
-.filter-group {
-  width: 200px;
-}
-
-/* Exact matches, so the placeholder says the whole number is wanted. */
+/* Every condition fills its column: the hand-set widths were what made the rows
+   miss each other. Exact matches keep their placeholder, so the input still says
+   the whole number is wanted. */
+.filter-no,
+.filter-tags,
+.filter-range,
+.filter-gender,
+.filter-allergen,
+.filter-severity,
+.filter-group,
 .filter-id {
-  width: 190px;
+  width: 100%;
 }
 
 /* Two fields on one line, each taking half: the dialog is a form, not a list, and
@@ -1234,10 +1231,17 @@ onMounted(async () => {
   color: var(--ink-3);
 }
 
+/* The chips used to run to the edge of their column and touch the allergies chip
+   beside them; they wrap inside their own cell now. */
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .tag {
   display: inline-block;
   padding: 1px 7px;
-  margin: 0 4px 2px 0;
   font-size: 11.5px;
   color: var(--ink-2);
   background: var(--surface-2);
@@ -1247,6 +1251,13 @@ onMounted(async () => {
 
 .table {
   width: 100%;
+}
+
+/* A row is one line or two depending on whether the record carries a masked
+   phone number. One line height across the cells keeps the columns from reading
+   as a staircase. */
+.table :deep(.cell) {
+  line-height: 1.5;
 }
 
 /* T15's second scenario stops the service and expects "load failed, click to
@@ -1282,15 +1293,12 @@ onMounted(async () => {
 }
 
 @media (max-width: 900px) {
-  .filter-no,
-  .filter-tags,
-  .filter-range,
-  .filter-gender,
-  .filter-allergen,
-  .filter-severity,
-  .filter-group,
-  .filter-id {
-    width: 100%;
+  .filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .filter-actions {
+    justify-content: flex-start;
   }
 
   .field-row {
@@ -1299,7 +1307,6 @@ onMounted(async () => {
 
   .search {
     width: 100%;
-    margin-left: 0;
   }
 }
 </style>
