@@ -257,6 +257,35 @@ function attendees(meeting) {
       </section>
 
       <div class="rail">
+        <!-- 0922意见 6: the account has to stand out, so it leads the rail rather
+             than trailing it. The name and the role are drawn as an identity block
+             -- the badge the consultation screens draw a person with -- rather
+             than as two more rows of the list below, and the panel takes the brand
+             tint where the working panels keep the plain surface. -->
+        <section class="panel account">
+          <header class="panel-head">
+            <h3>Your account</h3>
+          </header>
+          <div class="account-id">
+            <span class="who-badge" data-tone="teal" aria-hidden="true">
+              {{ clinician.initials }}
+            </span>
+            <div class="account-who">
+              <p class="account-name">{{ clinician.name }}</p>
+              <p class="account-role">{{ roleLabel }}</p>
+            </div>
+          </div>
+          <dl class="kv">
+            <div>
+              <dt>Username</dt>
+              <dd class="data">{{ currentUsername }}</dd>
+            </div>
+            <div>
+              <dt>Department</dt>
+              <dd>{{ clinician.department }}</dd>
+            </div>
+          </dl>
+        </section>
         <section v-loading="loading" class="panel">
           <header class="panel-head">
             <h3>This week's consultations</h3>
@@ -293,35 +322,6 @@ function attendees(meeting) {
           </ol>
         </section>
 
-        <!-- 0922意见 6: the account has to stand out. The name and the role are
-             drawn as an identity block -- the badge the consultation screens draw
-             a person with -- rather than as two more rows of the list below, and
-             the panel takes the brand tint where the working panels keep the
-             plain surface. -->
-        <section class="panel account">
-          <header class="panel-head">
-            <h3>Your account</h3>
-          </header>
-          <div class="account-id">
-            <span class="who-badge" data-tone="teal" aria-hidden="true">
-              {{ clinician.initials }}
-            </span>
-            <div class="account-who">
-              <p class="account-name">{{ clinician.name }}</p>
-              <p class="account-role">{{ roleLabel }}</p>
-            </div>
-          </div>
-          <dl class="kv">
-            <div>
-              <dt>Username</dt>
-              <dd class="data">{{ currentUsername }}</dd>
-            </div>
-            <div>
-              <dt>Department</dt>
-              <dd>{{ clinician.department }}</dd>
-            </div>
-          </dl>
-        </section>
       </div>
     </div>
   </div>
@@ -593,7 +593,8 @@ function attendees(meeting) {
   display: flex;
   gap: 12px;
   align-items: center;
-  padding: 16px 20px 4px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line-2);
 }
 
 .account .who-badge {

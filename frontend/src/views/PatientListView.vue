@@ -542,17 +542,6 @@ onMounted(async () => {
           @change="search"
         />
 
-        <el-date-picker
-          v-model="filters.birth"
-          class="filter-range"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          start-placeholder="Born from"
-          end-placeholder="to"
-          :disabled="loading"
-          @change="search"
-        />
-
         <el-select
           v-model="filters.allergenCodes"
           class="filter-allergen"
@@ -628,11 +617,26 @@ onMounted(async () => {
           @clear="search"
         />
 
+        <!-- Last in the run: of the ten conditions this is the one people reach
+             for least, so it closes the grid. -->
+        <el-date-picker
+          v-model="filters.birth"
+          class="filter-range"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          start-placeholder="Born from"
+          end-placeholder="to"
+          :disabled="loading"
+          @change="search"
+        />
+
         <!-- The commands that belong with the run of conditions: the group editor,
              the reset, and the name search -- the one people reach for first, so
              it keeps the right end of the row. -->
         <div class="filter-actions">
-          <el-button link @click="openGroups">Manage groups</el-button>
+          <!-- 0922意见 1: as a link the button read as a label beside the group
+               filter; it now wears the same border as the search next to it. -->
+          <el-button @click="openGroups">Manage groups</el-button>
           <el-button v-if="hasFilters" link @click="clearFilters">Clear filters</el-button>
 
           <form class="search" @submit.prevent="search">
