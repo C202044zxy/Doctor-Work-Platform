@@ -293,22 +293,28 @@ function attendees(meeting) {
           </ol>
         </section>
 
-        <section class="panel">
+        <!-- 0922意见 6: the account has to stand out. The name and the role are
+             drawn as an identity block -- the badge the consultation screens draw
+             a person with -- rather than as two more rows of the list below, and
+             the panel takes the brand tint where the working panels keep the
+             plain surface. -->
+        <section class="panel account">
           <header class="panel-head">
             <h3>Your account</h3>
           </header>
-          <dl class="kv">
-            <div>
-              <dt>Name</dt>
-              <dd>{{ clinician.name }}</dd>
+          <div class="account-id">
+            <span class="who-badge" data-tone="teal" aria-hidden="true">
+              {{ clinician.initials }}
+            </span>
+            <div class="account-who">
+              <p class="account-name">{{ clinician.name }}</p>
+              <p class="account-role">{{ roleLabel }}</p>
             </div>
+          </div>
+          <dl class="kv">
             <div>
               <dt>Username</dt>
               <dd class="data">{{ currentUsername }}</dd>
-            </div>
-            <div>
-              <dt>Role</dt>
-              <dd>{{ roleLabel }}</dd>
             </div>
             <div>
               <dt>Department</dt>
@@ -562,6 +568,55 @@ function attendees(meeting) {
 }
 
 .slot-kind {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+/* Account card ------------------------------------------------------------- */
+
+/* The one card on this screen that is about the reader. It carries the brand
+   tint and a teal edge down its full height, so it is the first thing the eye
+   lands on, which is what 0922意见 6 asked for. */
+.account {
+  box-shadow: inset 3px 0 0 var(--teal);
+}
+
+.account .panel-head {
+  background: var(--teal-soft);
+}
+
+.account .panel-head h3 {
+  color: var(--teal-dark);
+}
+
+.account-id {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 16px 20px 4px;
+}
+
+.account .who-badge {
+  width: 38px;
+  height: 38px;
+  font-size: 13px;
+}
+
+.account-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.account-name {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.account-role {
+  margin: 1px 0 0;
   font-size: 12.5px;
   color: var(--ink-2);
 }
