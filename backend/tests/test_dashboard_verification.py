@@ -126,7 +126,15 @@ def test_the_panels_get_the_shapes_the_page_indexes(client):
     meeting = meetings["items"][0]
     assert not missing(
         meeting,
-        ["id", "patient_no", "status", "scheduled_at", "initiator_name", "initiator_id", "participants"],
+        [
+            "id",
+            "patient_no",
+            "status",
+            "scheduled_at",
+            "initiator_name",
+            "initiator_id",
+            "participants",
+        ],
     ), meeting
     assert not missing(meeting["participants"][0], ["user_id", "status", "name"]), meeting
 
@@ -134,6 +142,7 @@ def test_the_panels_get_the_shapes_the_page_indexes(client):
     assert not missing(patients, ["items", "total"]), patients
     assert patients["total"] >= 1, patients
     assert not missing(patients["items"][0], ["patient_no", "name"]), patients["items"][0]
+
 
 def test_the_screen_the_messages_panel_points_at_answers(client):
     """The panel sends the reader to the consultation screen, so that screen has
