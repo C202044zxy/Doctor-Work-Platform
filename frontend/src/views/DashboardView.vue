@@ -240,16 +240,18 @@ function attendees(meeting) {
           </div>
         </template>
 
-        <!-- M3. Not a stub of a conversation: a statement that the module is not
-             written, so nobody reads an empty box as "no one has messaged me". -->
+        <!-- M3 landed after this panel was written: `/api/consultations` answers (three
+             seeded rooms, one per state) and the socket route exists, so the "no code at
+             all" note that stood here would now be a false statement on a demo screen.
+             The workbench still does not summarise messages -- the consultation screen
+             does -- so this points there rather than drawing an empty inbox. -->
         <div class="group">
           <p class="group-label">Patient messages</p>
           <p class="gap">
-            <span class="chip" data-severity="info">Not built</span>
-            Messages with patients are M3's, and it has no code: all 10 paths under
-            <span class="data">/api/consultations</span> in the contract are unimplemented, and
-            there is no WebSocket route in this build. Until they exist there is nothing here to
-            read, which is not the same as an empty inbox.
+            <span class="chip" data-severity="info">On its own screen</span>
+            Messages with patients are read and answered on the consultation screen,
+            which the workbench does not summarise.
+            <router-link :to="{ name: 'consultations' }">Open the consultations</router-link>.
           </p>
         </div>
       </section>
