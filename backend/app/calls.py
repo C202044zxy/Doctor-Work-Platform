@@ -129,6 +129,7 @@ async def handle(app, room, user, connection, kind, payload):
             "caller": connection,
             "callee": peer,
             "caller_user": user.id,
+            "callee_user": hub.clients[peer][1],
             "started_at": datetime.now(UTC),
             "connected_at": None,
             "deadline": monotonic() + RING_TIMEOUT_SECONDS,

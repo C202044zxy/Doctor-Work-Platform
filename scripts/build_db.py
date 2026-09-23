@@ -66,6 +66,7 @@ sys.path.insert(0, str(BACKEND))
 # The schema a fresh build must produce. `alembic_version` is Alembic's own
 # bookkeeping table. Changing a model means changing this set in the same
 # commit as its revision.
+# Named test recordings reuse call_recording (is_test / filename); no extra table.
 EXPECTED_TABLES = frozenset(
     {
         "alembic_version",
@@ -100,6 +101,7 @@ EXPECTED_TABLES = frozenset(
         "consult_message",
         "image_upload",
         "call_log",
+        "call_recording",
         "notify_outbox",
         "legacy_medical_order",
         "health_plan",

@@ -4,6 +4,7 @@ import { accessToken } from '../session'
 import { mergeMessages, work } from '../api/work'
 import ChatImage from './ChatImage.vue'
 import ConsultationVideo from './ConsultationVideo.vue'
+import CallReplay from './CallReplay.vue'
 import { Picture } from '@element-plus/icons-vue'
 import {
   confirmPending,
@@ -44,6 +45,8 @@ const connected = ref(false), more = ref(false), busy = ref(false), scroller = r
 const historyLoading = ref(false), error = ref(''), live = ref(null)
 const video = ref(null), calls = ref([]), callPage = ref(1), callTotal = ref(0)
 const imageInput = ref(null)
+const replayRefresh = ref(0)
+function recordingsChanged() { replayRefresh.value++; loadCalls() }
 let socket, retryTimer, generation = 0, disposed = false
 
 const paths = computed(() => roomPaths(props.kind, props.roomId))
@@ -233,10 +236,15 @@ onUnmounted(() => { video.value?.finish(); disposed = true; generation++; stopSo
       <input ref="imageInput" hidden aria-label="Upload chat image" type="file" accept="image/jpeg,image/png,image/webp" :disabled="!writable || busy" @change="upload" />
     </form>
     <p v-if="!writable" class="muted">{{ notice }}</p>
-    <ConsultationVideo ref="video" :enabled="writable && connected" :send-signal="sendSignal" @finished="loadCalls" />
+    <ConsultationVideo ref="video" :room-key="roomKey(kind, roomId)" :enabled="writable && connected" :test-enabled="writable" :send-signal="sendSignal" @finished="recordingsChanged" />
     <details><summary>Call history ({{ callTotal }})</summary>
+      <h4>Test recordings</h4>
+      <CallReplay :room-key="roomKey(kind, roomId)" test :refresh="replayRefresh" />
       <p v-if="!calls.length" class="muted">No finished calls.</p>
-      <p v-for="call in calls" :key="call.id">{{ time(call.started_at) }} · {{ time(call.ended_at) }} · {{ call.duration_seconds }}s connected · {{ call.end_reason }}</p>
+      <article v-for="call in calls" :key="call.id">
+        <p>{{ time(call.started_at) }} · {{ time(call.ended_at) }} · {{ call.duration_seconds }}s connected · {{ call.end_reason }}</p>
+        <CallReplay :room-key="roomKey(kind, roomId)" :call-id="call.call_id" :refresh="replayRefresh" />
+      </article>
       <el-pagination v-model:current-page="callPage" :total="callTotal" :page-size="10" layout="prev, next" @current-change="loadCalls" />
     </details>
   </section>

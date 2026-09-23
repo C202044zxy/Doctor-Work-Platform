@@ -31,6 +31,7 @@ export const currentClinician = computed(() => ({
   initials: (user.value?.name || '').split(/\s+/).map((part) => part[0]).join('').slice(0, 2),
 }))
 export function accessToken() { return token.value }
+export function updateCurrentUser(profile) { user.value = { ...user.value, ...profile } }
 // T42 §4.3.1 ② names the account by username rather than by id, and the face
 // sign-in page has to send the one being claimed.
 export const currentUsername = computed(() => user.value?.username || '')

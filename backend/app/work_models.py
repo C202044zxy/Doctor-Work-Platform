@@ -91,6 +91,21 @@ class CallLog(Base):
     end_reason: Mapped[str] = mapped_column(String(30))
 
 
+class CallRecording(Base):
+    __tablename__ = "call_recording"
+    __table_args__ = (UniqueConstraint("call_id", "owner_id", name="uq_call_recorder"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    room_key: Mapped[str] = mapped_column(String(32), index=True)
+    call_id: Mapped[str] = mapped_column(String(64))
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(String(20), default="recording")
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    filename: Mapped[str | None] = mapped_column(String(180))
+    next_sequence: Mapped[int] = mapped_column(default=0)
+    byte_size: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class LegacyHealthPlan(Base):
     __tablename__ = "health_plan"
     id: Mapped[int] = mapped_column(primary_key=True)

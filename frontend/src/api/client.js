@@ -83,6 +83,13 @@ function json(body) {
   return send('POST', body)
 }
 
+export const profile = {
+  get: () => request('/profile'),
+  update: body => request('/profile', send('PATCH', body)),
+  sendEmailCode: body => request('/profile/email-code', json(body)),
+  changePassword: body => request('/profile/password', send('PUT', body)),
+}
+
 // multipart/form-data: the browser sets the boundary, so Content-Type is left off
 // on purpose. §4.3.1 posts the enrolment and the verification photos this way.
 function form(fields) {

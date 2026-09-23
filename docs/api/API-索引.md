@@ -985,6 +985,27 @@ M1-07：账户列表和详情支持 `pending`、`active`、`disabled`，列表�
 - 会话范围同时约束列表、记录、CSV、详情、消息、图片、通话及 WebSocket。非参与者列表为空/不含该会话，HTTP 单对象访问返回 404；管理员和临时授权也不绕过会话参与者限制。
 - 患者档案继续遵循原有科室范围；管理员及有效临时授权为已有例外。
 
+
+## 2026-09-22：个人资料与真实通话回放
+
+- `GET/PATCH /api/profile`：当前用户资料，仅姓名和邮箱可编辑；邮箱变更需当前密码及新邮箱验证码。
+- `POST /api/profile/email-code`：新邮箱验证，5 分钟有效，5 次错误失效，复用发送限流。
+- `PUT /api/profile/password`：校验原密码后修改；旧会话和旧登录 ticket 失效。
+- `GET/POST /api/rooms/{room_key}/calls/{call_id}/recordings`：列出回放 / 当前通话参与者创建录制。
+- `PUT /api/recordings/{id}/chunks/{sequence}`：录制者按序上传 WebM 字节；重试幂等。
+- `POST /api/recordings/{id}/complete`：生成可播放文件。
+- `GET /api/recordings/{id}/media`：房间参与者鉴权播放（支持 Range），文件不公开挂载。
+- `room_key` 沿用数字问诊 / m 前缀会诊；每个实际通话端保存一份合成双画面、混合双音轨的录像，标注录制者。
+
+Profile 响应还包含只读的账号状态与带时区创建时间。外观偏好在本浏览器按账号保存；人脸录入入口统一到 `/profile?section=face`。
+
+
+### 本机 Test 录像（2026-09-23）
+
+- POST /api/rooms/{room_key}/test-recordings/{test_id}：test_id 为客户端 UUID，活动房间参与者可创建，无需远端在线、无请求体，按测试和录制者幂等。
+- GET /api/rooms/{room_key}/test-recordings：参与者读取最新 100 条测试录像；复用既有分段上传、complete、media 路由。
+- CallRecording 新增 is_test 与 filename，测试命名 Test + UTC+08 开始时间，不使用联系方式。媒体响应 Content-Disposition 使用实际文件名；本机测试不产生患者通话日志。
+
 ## M7 医疗交流论坛
 
 字段契约见 `openapi.yaml` 的 `Forum*` schemas。全部接口要求登录，admin/senior/junior 跨科室共享；论坛不读取患者记录。

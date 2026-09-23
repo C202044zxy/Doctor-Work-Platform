@@ -711,6 +711,960 @@ paths:
               schema: { $ref: '#/components/schemas/CurrentUserResponse' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /api/profile: {
+    "get": {
+      "tags": [
+        "Profile"
+      ],
+      "summary": "Read own profile",
+      "description": "",
+      "responses": {
+        "200": {
+          "description": "Success",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileResponse"
+              }
+            }
+          }
+        },
+        "401": {
+          "description": "Sign in required",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "403": {
+          "description": "Operation forbidden",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "404": {
+          "description": "Resource unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "409": {
+          "description": "Conflict",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "422": {
+          "description": "Invalid input",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "429": {
+          "description": "Rate limited",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "503": {
+          "description": "Dependency unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    },
+    "patch": {
+      "tags": [
+        "Profile"
+      ],
+      "summary": "Edit own profile",
+      "description": "Name and email only; changing email requires the current password and a single-use code sent to the new email. Roles and departments cannot be self-edited.",
+      "responses": {
+        "200": {
+          "description": "Success",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileResponse"
+              }
+            }
+          }
+        },
+        "401": {
+          "description": "Sign in required",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "403": {
+          "description": "Operation forbidden",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "404": {
+          "description": "Resource unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "409": {
+          "description": "Conflict",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "422": {
+          "description": "Invalid input",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "429": {
+          "description": "Rate limited",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "503": {
+          "description": "Dependency unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      },
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProfileUpdate"
+            }
+          }
+        }
+      }
+    }
+  }
+  /api/profile/email-code: {
+    "post": {
+      "tags": [
+        "Profile"
+      ],
+      "summary": "Verify a new profile email",
+      "description": "Code expires in 300 seconds; five invalid attempts invalidate it. Shares the per-user verification send limits. Delivery failure returns 502.",
+      "responses": {
+        "200": {
+          "description": "Success",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OkData"
+              }
+            }
+          }
+        },
+        "401": {
+          "description": "Sign in required",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "403": {
+          "description": "Operation forbidden",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "404": {
+          "description": "Resource unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "409": {
+          "description": "Conflict",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "422": {
+          "description": "Invalid input",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "429": {
+          "description": "Rate limited",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "503": {
+          "description": "Dependency unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      },
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProfileEmailCodeRequest"
+            }
+          }
+        }
+      }
+    }
+  }
+  /api/profile/password: {
+    "put": {
+      "tags": [
+        "Profile"
+      ],
+      "summary": "Change own password",
+      "description": "Requires the current password. Passwords must fit 72 UTF-8 bytes. Invalidates existing sessions and prior login tickets.",
+      "responses": {
+        "200": {
+          "description": "Success",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OkData"
+              }
+            }
+          }
+        },
+        "401": {
+          "description": "Sign in required",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "403": {
+          "description": "Operation forbidden",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "404": {
+          "description": "Resource unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "409": {
+          "description": "Conflict",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "422": {
+          "description": "Invalid input",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "429": {
+          "description": "Rate limited",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "503": {
+          "description": "Dependency unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      },
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProfilePasswordRequest"
+            }
+          }
+        }
+      }
+    }
+  }
+  /api/rooms/{room_key}/test-recordings:
+    parameters:
+      - {name: room_key, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [Recordings]
+      summary: List the latest 100 local test recordings, newest first
+      description: Room participants only. Stored alongside normal call recordings without creating patient call logs.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CallRecordingListResponse'}
+        '401': {description: Authentication required}
+        '403': {description: Not a room participant}
+        '404': {description: Room not found or outside scope}
+  /api/rooms/{room_key}/test-recordings/{test_id}:
+    parameters:
+      - {name: room_key, in: path, required: true, schema: {type: string}}
+      - {name: test_id, in: path, required: true, schema: {type: string, format: uuid}}
+    post:
+      tags: [Recordings]
+      summary: Reserve a local test recording without a remote participant
+      description: Active room participant required. Idempotent per test UUID and owner. No request body or contact information. Filename is Test_YYYYMMDD_HHMMSS_microseconds.webm in UTC+08. Upload and finalize using the existing recording routes. Does not create a call log or signal a patient.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CallRecordingResponse'}
+        '401': {description: Authentication required}
+        '403': {description: Not a room participant}
+        '404': {description: Room not found or outside scope}
+        '409': {description: Room is not active}
+        '422': {description: Invalid test UUID}
+  /api/rooms/{room_key}/calls/{call_id}/recordings: {
+    "parameters": [
+      {
+        "name": "room_key",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      {
+        "name": "call_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    ],
+    "post": {
+      "tags": [
+        "Recordings"
+      ],
+      "summary": "Start automatic call recording",
+      "description": "Only actual connected call participants may start. Idempotent per call and recorder. Real WebM media, not simulated replay.",
+      "responses": {
+        "200": {
+          "description": "Success",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallRecordingResponse"
+              }
+            }
+          }
+        },
+        "401": {
+          "description": "Sign in required",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "403": {
+          "description": "Operation forbidden",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "404": {
+          "description": "Resource unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "409": {
+          "description": "Conflict",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "422": {
+          "description": "Invalid input",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "429": {
+          "description": "Rate limited",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "503": {
+          "description": "Dependency unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    },
+    "get": {
+      "tags": [
+        "Recordings"
+      ],
+      "summary": "List call replays",
+      "description": "Room participants only; partial recordings retain uploaded bytes after interruption.",
+      "responses": {
+        "200": {
+          "description": "Success",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallRecordingListResponse"
+              }
+            }
+          }
+        },
+        "401": {
+          "description": "Sign in required",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "403": {
+          "description": "Operation forbidden",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "404": {
+          "description": "Resource unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "409": {
+          "description": "Conflict",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "422": {
+          "description": "Invalid input",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "429": {
+          "description": "Rate limited",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "503": {
+          "description": "Dependency unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  /api/recordings/{recording_id}/chunks/{sequence}: {
+    "parameters": [
+      {
+        "name": "recording_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      {
+        "name": "sequence",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        }
+      }
+    ],
+    "put": {
+      "tags": [
+        "Recordings"
+      ],
+      "summary": "Upload ordered WebM bytes",
+      "description": "Owner only. Consecutive chunks from zero, retries must match saved bytes. Max 8 MiB per chunk, 256 MiB per replay. Oversize: 413; incorrect Content-Type: 415. First chunk must be WebM.",
+      "responses": {
+        "200": {
+          "description": "Success",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallRecordingResponse"
+              }
+            }
+          }
+        },
+        "401": {
+          "description": "Sign in required",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "403": {
+          "description": "Operation forbidden",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "404": {
+          "description": "Resource unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "409": {
+          "description": "Conflict",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "422": {
+          "description": "Invalid input",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "429": {
+          "description": "Rate limited",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "503": {
+          "description": "Dependency unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      },
+      "requestBody": {
+        "required": true,
+        "content": {
+          "video/webm": {
+            "schema": {
+              "type": "string",
+              "format": "binary"
+            }
+          }
+        }
+      }
+    }
+  }
+  /api/recordings/{recording_id}/complete: {
+    "parameters": [
+      {
+        "name": "recording_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    ],
+    "post": {
+      "tags": [
+        "Recordings"
+      ],
+      "summary": "Finalize replay",
+      "description": "",
+      "responses": {
+        "200": {
+          "description": "Success",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallRecordingResponse"
+              }
+            }
+          }
+        },
+        "401": {
+          "description": "Sign in required",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "403": {
+          "description": "Operation forbidden",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "404": {
+          "description": "Resource unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "409": {
+          "description": "Conflict",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "422": {
+          "description": "Invalid input",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "429": {
+          "description": "Rate limited",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "503": {
+          "description": "Dependency unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  /api/recordings/{recording_id}/media: {
+    "parameters": [
+      {
+        "name": "recording_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    ],
+    "get": {
+      "tags": [
+        "Recordings"
+      ],
+      "summary": "Play protected replay",
+      "description": "Room participants only. No public file URL. Supports Range requests (206); cannot play a live unfinished recording.",
+      "responses": {
+        "200": {
+          "description": "WebM video",
+          "content": {
+            "video/webm": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "401": {
+          "description": "Sign in required",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "403": {
+          "description": "Operation forbidden",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "404": {
+          "description": "Resource unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "409": {
+          "description": "Conflict",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "422": {
+          "description": "Invalid input",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "429": {
+          "description": "Rate limited",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "503": {
+          "description": "Dependency unavailable",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        },
+        "206": {
+          "description": "Partial WebM content"
+        }
+      }
+    }
+  }
+
   /api/users:
     get:
       operationId: listUsers
@@ -4115,6 +5069,217 @@ components:
             data: { $ref: '#/components/schemas/CurrentUser' }
 
     # ---------- Users ----------
+
+    Profile: {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/CurrentUser"
+        },
+        {
+          "type": "object",
+          "required": [
+            "email",
+            "status",
+            "created_at"
+          ],
+          "properties": {
+            "email": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 254,
+              "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+            },
+            "status": {
+              "$ref": "#/components/schemas/AccountStatus"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        }
+      ]
+    }
+    ProfileUpdate: {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "email"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254,
+          "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+        },
+        "current_password": {
+          "type": "string",
+          "maxLength": 72,
+          "writeOnly": true,
+          "nullable": true
+        },
+        "email_code": {
+          "type": "string",
+          "pattern": "^\\d{6}$",
+          "nullable": true,
+          "writeOnly": true
+        }
+      }
+    }
+    ProfileEmailCodeRequest: {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "email",
+        "current_password"
+      ],
+      "properties": {
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254,
+          "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+        },
+        "current_password": {
+          "type": "string",
+          "maxLength": 72,
+          "writeOnly": true,
+          "minLength": 1
+        }
+      }
+    }
+    ProfilePasswordRequest: {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "current_password",
+        "new_password"
+      ],
+      "properties": {
+        "current_password": {
+          "type": "string",
+          "maxLength": 72,
+          "writeOnly": true,
+          "minLength": 1
+        },
+        "new_password": {
+          "type": "string",
+          "maxLength": 72,
+          "writeOnly": true,
+          "minLength": 8
+        }
+      }
+    }
+    CallRecording: {
+      "type": "object",
+      "required": [
+        "id",
+        "call_id",
+        "owner_name",
+        "status",
+        "byte_size",
+        "next_sequence",
+        "playable",
+        "is_test",
+        "filename"
+      ],
+      "properties": {
+        "is_test": {"type": "boolean"},
+        "filename": {"type": "string", "description": "Actual WebM filename; local tests use Test plus UTC+08 start time. No contact information."},
+        "id": {
+          "type": "string"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "owner_name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "recording",
+            "ready",
+            "partial"
+          ]
+        },
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "next_sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "playable": {
+          "type": "boolean"
+        }
+      }
+    }
+    ProfileResponse: {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SuccessBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "data"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/components/schemas/Profile"
+            }
+          }
+        }
+      ]
+    }
+    CallRecordingResponse: {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SuccessBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "data"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/components/schemas/CallRecording"
+            }
+          }
+        }
+      ]
+    }
+    CallRecordingListResponse: {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SuccessBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "data"
+          ],
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/CallRecording"
+              }
+            }
+          }
+        }
+      ]
+    }
 
     AccountStatus:
       type: string
