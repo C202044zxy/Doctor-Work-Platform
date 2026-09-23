@@ -1,13 +1,21 @@
-// M2-04's two pieces of shaping: the allergy banner's tier and the history
-// timeline's rows.
+// M2's shaping: the allergy banner's tier, the history timeline's rows, and the
+// sex and age the directory and the detail head both print.
 //
-// Both are computed from a response the detail page already has, so neither is
-// visible by looking at a page that loaded — a banner one shade too quiet and a
-// timeline that quietly puts the undated entry first both render fine.
+// All of it is computed from a response a patient screen already has, so none of
+// it is visible by looking at a page that loaded — a banner one shade too quiet,
+// a timeline that quietly puts the undated entry first, and an age that is a year
+// out for the week before a birthday all render fine.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { allergySeverity, onsetLabel, timelineOf } from '../src/patient-record.js'
+import {
+  ageFrom,
+  allergySeverity,
+  dateLabel,
+  genderLabel,
+  sexAge,
+  timelineOf,
+} from '../src/patient-record.js'
 
 // The baseline's patient, as `GET /api/patients/P20260001` returns it.
 const SEVERE = [
@@ -27,17 +35,17 @@ test('no allergies at all is not a warning', () => {
   assert.equal(allergySeverity(undefined), 'info')
 })
 
-test('a date-only onset is not shifted by the reader’s timezone', () => {
+test('a date-only field is not shifted by the reader’s timezone', () => {
   // `new Date('2019-05-01')` is UTC midnight: the day before for anyone west of
-  // Greenwich, which is why `onsetLabel` never builds a Date.
-  assert.equal(onsetLabel('2019-05-01'), '1 May 2019')
-  assert.equal(onsetLabel('2024-12-31'), '31 Dec 2024')
+  // Greenwich, which is why `dateLabel` never builds a Date.
+  assert.equal(dateLabel('2019-05-01'), '1 May 2019')
+  assert.equal(dateLabel('2024-12-31'), '31 Dec 2024')
   // A full timestamp on the same field still lands on the right day.
-  assert.equal(onsetLabel('2019-05-01T00:00:00Z'), '1 May 2019')
+  assert.equal(dateLabel('2019-05-01T00:00:00Z'), '1 May 2019')
 })
 
 test('an unusable date is shown as it arrived rather than as a placeholder', () => {
-  assert.equal(onsetLabel('unknown'), 'unknown')
+  assert.equal(dateLabel('unknown'), 'unknown')
 })
 
 test('the timeline keeps the order the server sent and labels the undated entry', () => {
@@ -73,4 +81,39 @@ test('missing notes and an absent list both fall back rather than throwing', () 
   assert.equal(timelineOf([{ id: 1, diagnosis: 'Asthma', onset_date: null }])[0].notes, '')
   assert.deepEqual(timelineOf([]), [])
   assert.deepEqual(timelineOf(undefined), [])
+})
+
+// The baseline's patient: male, born 12 Mar 1968. Every assertion below is made
+// at a fixed instant rather than "now", because an age read from the wall clock
+// is a test that fails on the patient's birthday.
+const BORN = { gender: 'male', birth_date: '1968-03-12' }
+const TODAY = new Date('2026-09-23T12:00:00Z')
+
+test('the age is whole years, and this year’s birthday has to have happened', () => {
+  // 58 on 12 Mar 2026, and still 58 in September.
+  assert.equal(ageFrom('1968-03-12', TODAY), 58)
+  assert.equal(ageFrom('1968-09-23', TODAY), 58) // birthday today counts
+  assert.equal(ageFrom('1968-09-24', TODAY), 57) // tomorrow does not
+  // The year after a birthday nobody has reached yet.
+  assert.equal(ageFrom('1968-12-31', new Date('2026-01-01T12:00:00Z')), 57)
+})
+
+test('a birth date nobody can read is no age rather than a wrong one', () => {
+  // `null` is what the directory renders as its dash; a computed NaN would print
+  // as "Male · NaN".
+  assert.equal(ageFrom('', TODAY), null)
+  assert.equal(ageFrom(null, TODAY), null)
+  assert.equal(ageFrom(undefined, TODAY), null)
+  assert.equal(ageFrom('unknown', TODAY), null)
+})
+
+test('the identity line is one rule for both screens', () => {
+  assert.equal(sexAge(BORN, TODAY), 'Male · 58')
+  assert.equal(sexAge({ gender: 'female', birth_date: '1985-07-01' }, TODAY), 'Female · 41')
+  // No birth date on record: the sex alone, with no dangling separator.
+  assert.equal(sexAge({ gender: 'male' }, TODAY), 'Male')
+  // The enum's third value, and a record with no gender key at all.
+  assert.equal(genderLabel('unknown'), 'Unknown')
+  assert.equal(sexAge({}, TODAY), 'Unknown')
+  assert.equal(sexAge(undefined, TODAY), 'Unknown')
 })
