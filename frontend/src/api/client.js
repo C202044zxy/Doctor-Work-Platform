@@ -694,3 +694,11 @@ export const emr = {
   post: (path, body = {}) => request(path, json(body)),
   patch: (path, body) => request(path, send('PATCH', body)),
 }
+
+export const forum = {
+  list: params => request(`/forum/posts?${new URLSearchParams(params)}`),
+  get: id => request(`/forum/posts/${id}`),
+  create: body => request('/forum/posts', json(body)),
+  replies: (id, page = 1) => request(`/forum/posts/${id}/replies?page=${page}&size=20`),
+  reply: (id, body) => request(`/forum/posts/${id}/replies`, json({ body })),
+}

@@ -84,6 +84,225 @@ security:
   - bearerAuth: []
 
 paths:
+  /api/forum/posts:
+    get:
+      summary: Search discussions
+      tags:
+      - Forum
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForumPostListResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Forum disabled or discussion missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: page
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+      - name: size
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          default: 20
+          maximum: 100
+      - name: q
+        in: query
+        schema:
+          type: string
+          maxLength: 200
+      - name: category
+        in: query
+        schema:
+          type: string
+          enum:
+          - General discussion
+          - Clinical practice
+          - Patient communication
+          - Research & learning
+    post:
+      summary: Create discussion
+      tags:
+      - Forum
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForumPostResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Forum disabled or discussion missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForumPostCreate'
+  /api/forum/posts/{post_id}:
+    get:
+      summary: Read discussion
+      tags:
+      - Forum
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForumPostResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Forum disabled or discussion missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: post_id
+        in: path
+        required: true
+        schema:
+          type: integer
+  /api/forum/posts/{post_id}/replies:
+    get:
+      summary: List replies oldest first
+      tags:
+      - Forum
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForumReplyListResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Forum disabled or discussion missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: post_id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: page
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+      - name: size
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          default: 20
+          maximum: 100
+    post:
+      summary: Reply to discussion
+      tags:
+      - Forum
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForumReplyResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Forum disabled or discussion missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: post_id
+        in: path
+        required: true
+        schema:
+          type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForumReplyCreate'
   /api/legacy/health-plans:
     $ref: './legacy.openapi.json#/paths/~1api~1legacy~1health-plans'
   /api/legacy/health-plans/{id}:
@@ -4435,6 +4654,180 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
 
   schemas:
+    ForumPostCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - title
+      - body
+      - category
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: \S
+        body:
+          type: string
+          minLength: 1
+          maxLength: 10000
+          pattern: \S
+        category:
+          type: string
+          enum:
+          - General discussion
+          - Clinical practice
+          - Patient communication
+          - Research & learning
+    ForumReplyCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - body
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 5000
+          pattern: \S
+    ForumPost:
+      type: object
+      required:
+      - id
+      - author
+      - body
+      - created_at
+      - is_sample
+      - title
+      - category
+      - reply_count
+      properties:
+        id:
+          type: integer
+        author:
+          type: string
+        body:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        is_sample:
+          type: boolean
+        title:
+          type: string
+        category:
+          type: string
+          enum:
+          - General discussion
+          - Clinical practice
+          - Patient communication
+          - Research & learning
+        reply_count:
+          type: integer
+    ForumReply:
+      type: object
+      required:
+      - id
+      - author
+      - body
+      - created_at
+      - is_sample
+      properties:
+        id:
+          type: integer
+        author:
+          type: string
+        body:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        is_sample:
+          type: boolean
+    ForumPostResponse:
+      type: object
+      required:
+      - code
+      - message
+      - data
+      properties:
+        code:
+          const: 0
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/ForumPost'
+    ForumReplyResponse:
+      type: object
+      required:
+      - code
+      - message
+      - data
+      properties:
+        code:
+          const: 0
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/ForumReply'
+    ForumPostListResponse:
+      type: object
+      required:
+      - code
+      - message
+      - data
+      properties:
+        code:
+          const: 0
+        message:
+          type: string
+        data:
+          type: object
+          required:
+          - items
+          - total
+          - page
+          - size
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ForumPost'
+            total:
+              type: integer
+            page:
+              type: integer
+            size:
+              type: integer
+    ForumReplyListResponse:
+      type: object
+      required:
+      - code
+      - message
+      - data
+      properties:
+        code:
+          const: 0
+        message:
+          type: string
+        data:
+          type: object
+          required:
+          - items
+          - total
+          - page
+          - size
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ForumReply'
+            total:
+              type: integer
+            page:
+              type: integer
+            size:
+              type: integer
     SmsTicketRequest:
       type: object
       required: [ticket]

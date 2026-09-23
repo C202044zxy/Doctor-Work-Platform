@@ -545,3 +545,28 @@ class HealthAssessment(Base):
 
 # Register M4 metadata for Alembic and application startup.
 from app import emr_models  # noqa: F401
+
+
+class ForumPost(Base):
+    __tablename__ = "forum_posts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    title: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(40))
+    seed_key: Mapped[str | None] = mapped_column(String(80), unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
+class ForumReply(Base):
+    __tablename__ = "forum_replies"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("forum_posts.id"), index=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    body: Mapped[str] = mapped_column(Text)
+    seed_key: Mapped[str | None] = mapped_column(String(80), unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )

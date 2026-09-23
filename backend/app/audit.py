@@ -42,6 +42,8 @@ MARKED = {
     "profile.password",
     "call.recording.start",
     "call.recording.complete",
+    "forum.post.create",
+    "forum.reply.create",
     "patient.view",
     "patient.allergies.view",
     "allergy.create",

@@ -71,6 +71,22 @@ def drug(code="FURO20", dose="20mg", frequency="qd"):
     return {"order_type": "drug", "drug_code": code, "dose": dose, "frequency": frequency}
 
 
+def test_order_edits_preserve_drug_name_after_reload(client):
+    record = new_record(client)
+    order = call(client, "POST", "/emr/orders", {"record_id": record["id"], "items": [drug()]})[0]
+    assert order["content_json"]["drug_name"] == "Furosemide tablets"
+    for item, name in (
+        (drug(dose="40mg"), "Furosemide tablets"),
+        (drug("AMOX500", "0.5g", "tid"), "Amoxicillin capsules"),
+    ):
+        changed = call(client, "PATCH", f"/emr/orders/{order['id']}", item)
+        assert changed["content_json"]["drug_name"] == name
+        stored = call(client, "GET", f"/emr/orders?record_id={record['id']}")[0]
+        assert stored["content_json"]["drug_name"] == name
+        for key in ("drug_code", "dose", "frequency"):
+            assert stored["content_json"][key] == item[key]
+
+
 def test_templates_snapshot_validation_and_permissions(client):
     templates = call(client, "GET", "/emr/templates")
     assert len(templates) == 2

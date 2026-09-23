@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     smtp_starttls: bool = True
     smtp_timeout: float = Field(default=10, gt=0, le=30)
     otp_daily_limit: int = Field(default=20, ge=1)
+    forum_enabled: bool = True
     scheduler_enabled: bool = True
     reminder_timezone: str = "Asia/Shanghai"
     redis_url: str | None = None

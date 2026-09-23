@@ -14,6 +14,7 @@ import { canOpen, MODULE_ROLES } from '../access'
 // S2 explicitly refuses a build that only does the first.
 export const navigation = [
   { name: 'dashboard', label: 'Dashboard', icon: 'Odometer' },
+  { name: 'forum', label: 'Medical Forum', icon: 'ChatDotRound' },
   { name: 'patients', label: 'Patients', icon: 'User' },
   { name: 'records', label: 'Medical Records', icon: 'Document' },
   { name: 'consultations', label: 'Consultations', icon: 'ChatDotRound' },
@@ -25,6 +26,7 @@ export const navigation = [
 ]
 
 const routes = [
+  { path: '/forum', name: 'forum', component: () => import('../views/ForumView.vue'), meta: { title: 'Medical Forum' } },
   {
     path: '/profile',
     name: 'profile',

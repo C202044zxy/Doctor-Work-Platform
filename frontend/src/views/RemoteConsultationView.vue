@@ -883,6 +883,7 @@ onMounted(load)
               <span class="data">{{ stamp(report.created_at) }}</span>
             </p>
 
+            <h4 class="report-heading">Expert opinions ({{ report.expert_opinions.length }})</h4>
             <ul class="opinions">
               <li
                 v-for="opinion in report.expert_opinions"

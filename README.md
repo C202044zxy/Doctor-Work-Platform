@@ -83,3 +83,14 @@ WebRTC 默认无 STUN/TURN，只面向同机/可直连局域网验证；其他�
 - [API 索引](docs/api/API-索引.md) / [字段契约](docs/api/openapi.yaml)
 
 任务按 M0–M9 / S1–S6 / D01–D07 编号。新启动、架构文档是这些权威文档的操作补充，不另设任务清单。
+
+### Medical forum
+
+Open **Medical Forum** in the sidebar after signing in. All three roles can browse,
+search by keyword or topic, start discussions, and reply across departments.
+The normal startup migration and `app.seed_demo` add four fictional sample discussions
+and four replies idempotently. Existing databases gain the forum on the next normal
+startup; no rebuild is required. Sample content is labeled in the UI.
+Set `FORUM_ENABLED=false` in the backend environment to disable forum endpoints.
+Forum content uses separate tables in the existing SQLite file and has no links to
+patient records. Remove patient identifiers before posting.
