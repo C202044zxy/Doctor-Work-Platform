@@ -281,9 +281,14 @@ function attendees(meeting) {
           <p class="group-label">Patient messages</p>
           <p class="gap">
             <span class="chip" data-severity="info">On its own screen</span>
-            Messages with patients are read and answered on the consultation screen,
-            which the workbench does not summarise.
-            <router-link :to="{ name: 'consultations' }">Open the consultations</router-link>.
+            <!-- One item rather than three: `.gap` is a flex row, so the sentence
+                 and the full stop after the link were each a box of their own and
+                 the row's gap pushed the stop away from the words it closes. -->
+            <span>
+              Messages with patients are read and answered on the consultation
+              screen, which the workbench does not summarise.
+              <router-link :to="{ name: 'consultations' }">Open the consultations</router-link>.
+            </span>
           </p>
         </div>
       </section>
@@ -396,13 +401,15 @@ function attendees(meeting) {
   border-top: 1px solid var(--line-2);
 }
 
+/* Sentence case, like every other name in the interface -- `.panel-head`,
+   `.field-label` and the panel tails all are. This was the one tracked-out
+   uppercase label in the app, which made the workbench's groups look like a
+   different product from the rest of it. */
 .group-label {
   margin: 15px 0 2px;
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--ink-3);
-  text-transform: uppercase;
+  color: var(--ink-2);
 }
 
 /* The "5 of 36" tail: data, so it drops the small-caps treatment. */
