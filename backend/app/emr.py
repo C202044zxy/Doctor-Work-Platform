@@ -475,10 +475,12 @@ def orders(record_id: int, db: DB, user: CurrentUser):
 
 
 def assign_order(db, row, item, validation):
-    row.order_type = item.order_type
-    row.content_json = item.model_dump(exclude={"order_type"})
+    content = item.model_dump(exclude={"order_type"})
     if item.order_type == "drug":
-        row.content_json["drug_name"] = db.get(Drug, item.drug_code).name
+        content["drug_name"] = db.get(Drug, item.drug_code).name
+    # The drug lookup can autoflush; assign the complete JSON so its name is persisted.
+    row.order_type = item.order_type
+    row.content_json = content
     row.validation_status = validation["status"]
     row.validation_detail = validation["reasons"]
 
