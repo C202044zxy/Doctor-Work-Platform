@@ -23,6 +23,7 @@ from app import (
     consultation_records,
     crypto,
     face_login,
+    forum,
     grants,
     groups,
     health_work,
@@ -326,6 +327,7 @@ def create_app(settings: Settings | None = None):
     app.state.settings = settings
     from app import sms
 
+    app.include_router(forum.router)
     app.include_router(sms.router)
     app.include_router(auth.router)
     app.include_router(signup.router)

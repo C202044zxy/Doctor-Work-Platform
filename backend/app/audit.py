@@ -38,6 +38,8 @@ ACTIONS = {
 # middleware falls back to `<route name>.<method>`, so an action missing here is
 # still recorded -- it only prints as a raw key such as `list_patient_groups.get`.
 MARKED = {
+    "forum.post.create",
+    "forum.reply.create",
     "patient.view",
     "patient.allergies.view",
     "allergy.create",

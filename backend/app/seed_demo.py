@@ -424,6 +424,9 @@ def seed_demo(*, repair: bool = False) -> list[str]:
                             f"patient {patient_no}: {diagnosis!r} onset date restored to "
                             f"{expected_onset}"
                         )
+            from app.seed_forum import seed_forum
+
+            seed_forum(db)
             db.commit()
             drift = baseline_drift(db)
     finally:
