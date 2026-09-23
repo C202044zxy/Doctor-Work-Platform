@@ -69,6 +69,8 @@ sys.path.insert(0, str(BACKEND))
 EXPECTED_TABLES = frozenset(
     {
         "alembic_version",
+        "forum_posts",
+        "forum_replies",
         "emr_template",
         "emr_record",
         "emr_version",
@@ -284,6 +286,13 @@ def verify(db_path, with_demo, with_flow, upload_dir):
 
     if with_demo:
         from app.seed_demo import PATIENTS, USERS
+        from app.seed_forum import SAMPLES
+
+        with sqlite3.connect(db_path) as connection:
+            for table in ("forum_posts", "forum_replies"):
+                keys = {row[0] for row in connection.execute(f"SELECT seed_key FROM {table}")}
+                if keys != {f"m7-{sample[0]}" for sample in SAMPLES}:
+                    raise BuildError(f"The forum baseline in {table} is incomplete.")
 
         expected_users = {user[0] for user in USERS}
         if usernames != expected_users:
