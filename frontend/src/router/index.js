@@ -21,9 +21,16 @@ export const navigation = [
   { name: 'review', label: 'Review Queue', icon: 'Checked', roles: MODULE_ROLES.review },
   { name: 'audit', label: 'Audit Log', icon: 'Tickets', roles: MODULE_ROLES.audit },
   { name: 'users', label: 'User Management', icon: 'UserFilled', roles: MODULE_ROLES.users },
+  { name: 'profile', label: 'My profile', icon: 'User' },
 ]
 
 const routes = [
+  {
+    path: '/profile',
+    name: 'profile',
+    component: () => import('../views/ProfileView.vue'),
+    meta: { title: 'My profile' },
+  },
   {
     path: '/consultation-records',
     name: 'consultation-records',
@@ -144,14 +151,12 @@ const routes = [
   },
 
   // T42 §4.3.3【录入】. Signed in by definition — the image belongs to the caller's
-  // own record and the endpoint identifies them from the token. No `public`, and
-  // deliberately no sidebar entry: enrolment is a one-off, reached from the
-  // account menu, not a daily workspace.
+  // own record and the endpoint identifies them from the token. Old enrolment
+  // links now land in the unified profile page.
   {
     path: '/face/enroll',
     name: 'face-enroll',
-    component: () => import('../views/FaceEnrollView.vue'),
-    meta: { title: 'Face enrolment' },
+    redirect: { name: 'profile', query: { section: 'face' } },
   },
 
   // Unknown paths fall back to the dashboard rather than a dead end.

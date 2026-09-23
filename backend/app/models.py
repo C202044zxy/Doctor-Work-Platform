@@ -59,6 +59,7 @@ class User(Base):
     department: Mapped[Department] = relationship(lazy="joined")
     email: Mapped[str] = mapped_column(String(254), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+    session_version: Mapped[int] = mapped_column(default=0, server_default="0")
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"))
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"))
 

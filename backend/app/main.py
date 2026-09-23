@@ -29,6 +29,8 @@ from app import (
     histories,
     meetings,
     orders,
+    profile,
+    recordings,
     signup,
     users,
 )
@@ -335,6 +337,8 @@ def create_app(settings: Settings | None = None):
     # invite picker needs it and its operator is a junior physician; the writes
     # and the detail read carry their own `user.manage` dependency in `app.users`.
     app.include_router(users.router)
+    app.include_router(profile.router)
+    app.include_router(recordings.router)
     # Static records/export paths must precede the integer /{id} route.
     app.include_router(consultation_records.router)
     app.include_router(chat.router)

@@ -1,18 +1,84 @@
 <script setup>
-import { computed, nextTick, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onUnmounted, reactive, ref } from 'vue'
 import { connectLoopback } from '../call-loopback.js'
 import { acquireCallMedia, callMediaError, stopCallMedia } from '../call-media.js'
+import { createCallRecorder, createUploadQueue, recordingSupported } from '../call-recording.js'
+import { accessToken } from '../session'
 
-const props = defineProps({ sendSignal: { type: Function, required: true }, enabled: Boolean })
+const props = defineProps({ sendSignal: { type: Function, required: true }, enabled: Boolean, testEnabled: Boolean, roomKey: String })
 const emit = defineEmits(['finished'])
 const state = ref('idle'), error = ref(''), caller = ref('')
 const localVideo = ref(null), remoteVideo = ref(null)
 const mediaMode = ref('camera')
 let pc, loop, stream, callId, offer, timer, version = 0, candidates = [], localCandidates = [], described = false
+let recorder, recordingAudio, recordingStarted = false
+const recordingJobs = ref([])
+
+function prepareRecording() {
+  recordingStarted = false
+  if (!recordingSupported()) return
+  const Audio = globalThis.AudioContext || globalThis.webkitAudioContext
+  if (Audio) {
+    recordingAudio = new Audio()
+    recordingAudio.resume().catch(() => {})
+  }
+}
+
+function startRecording(isTest = false) {
+  if (recordingStarted || !callId || !props.roomKey) return
+  recordingStarted = true
+  const key = props.roomKey, id = callId, token = accessToken()
+  const job = reactive({ id, status: 'Starting automatic recording…', failed: false, queue: null })
+  recordingJobs.value.push(job)
+  if (!recordingSupported() || !recordingAudio || recordingAudio.state !== 'running') {
+    job.status = 'Replay recording unavailable. Use desktop Chrome or Edge with media permissions enabled.'
+    return
+  }
+  const request = async (path, method, body) => {
+    const response = await fetch(`/api${path}`, {
+      method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'video/webm' } : {}) },
+      body, signal: AbortSignal.timeout(30000),
+    })
+    const result = await response.json()
+    if (!response.ok) throw new Error(result.message || 'Recording upload failed')
+    return result.data
+  }
+  const queue = createUploadQueue({
+    start: () => request(isTest ? `/rooms/${key}/test-recordings/${id}` : `/rooms/${key}/calls/${id}/recordings`, 'POST'),
+    upload: (recordingId, sequence, blob) => request(`/recordings/${recordingId}/chunks/${sequence}`, 'PUT', blob),
+    complete: recordingId => request(`/recordings/${recordingId}/complete`, 'POST'),
+    onStatus: (status, failed = false) => { job.status = status; job.failed = failed; if (status === 'Replay saved') emit('finished') },
+  })
+  job.queue = queue
+  // Reserve the recording while this call is connected, before the first timeslice.
+  queue.retry()
+  try {
+    recorder = createCallRecorder({
+      local: localVideo.value, remote: isTest ? null : remoteVideo.value, audioContext: recordingAudio, isTest,
+      onChunk: blob => queue.add(blob),
+      onError: message => { job.status = message; job.failed = true },
+    })
+    recorder.done.then(() => queue.finish())
+  } catch (err) { job.status = err.message; job.failed = true }
+}
+
+function stopRecording() {
+  if (recorder) { recorder.stop(); recorder = null }
+  else recordingAudio?.close().catch(() => {})
+  recordingAudio = null
+  recordingStarted = false
+}
+
+function warnBeforeClose(event) {
+  if (callId || recordingJobs.value.some(job => job.queue && !job.queue.saved)) {
+    event.preventDefault(); event.returnValue = ''
+  }
+}
+globalThis.addEventListener('beforeunload', warnBeforeClose)
 
 const statusText = computed(() => {
   if (state.value === 'incoming') return `${caller.value} is calling`
-  if (state.value === 'loopback') return 'Loopback on this computer — your camera is connected to you. No call was placed and nothing was recorded.'
+  if (state.value === 'loopback') return 'Local test — your own camera and microphone are being recorded. No patient is connected.'
   return `Video: ${state.value}`
 })
 
@@ -21,6 +87,7 @@ function signal(type, data = {}) {
 }
 
 function reset(message = '') {
+  stopRecording()
   version++
   clearTimeout(timer)
   if (pc) {
@@ -48,7 +115,7 @@ function reset(message = '') {
 }
 
 function finish(type = 'call_end') {
-  if (callId) {
+  if (callId && state.value !== 'loopback') {
     try { signal(type) } catch { /* Server closes the call when the socket disappears. */ }
   }
   reset()
@@ -103,6 +170,7 @@ async function prepare(expected) {
       state.value = 'connected'
       clearTimeout(timer)
       try { signal('call_connected') } catch { reset('Signaling disconnected.') }
+      if (callId) startRecording()
     } else if (['failed', 'closed'].includes(pc.connectionState)) {
       finish()
       error.value = 'Media connection failed. Continue using text chat.'
@@ -114,14 +182,10 @@ async function prepare(expected) {
   return true
 }
 
-// A same-page loopback, for showing a connected video pane on one computer. It is
-// deliberately outside the signaling path: the server refuses an offer whenever no
-// other connection is in the room (`backend/app/calls.py`), and satisfying that check
-// with nobody there would mean the server pretending to have a peer. So this sends no
-// offer and no `call_id` is set, which is also why nothing lands in the call history
-// or the audit trail -- no call happened, only a real local media path.
+// Local test media uses its own recording endpoint and never signals a patient call.
 async function startLoopback() {
-  if (!props.enabled || state.value !== 'idle' || mediaMode.value === 'receive') return
+  if (!props.testEnabled || state.value !== 'idle' || mediaMode.value === 'receive') return
+  prepareRecording()
   error.value = ''
   state.value = 'preparing'
   const expected = ++version
@@ -138,6 +202,8 @@ async function startLoopback() {
     clearTimeout(timer)
     await nextTick()
     if (remoteVideo.value) remoteVideo.value.srcObject = loop.remote
+    callId = crypto.randomUUID()
+    startRecording(true)
   } catch (err) {
     if (expected === version) { finish(); error.value = callMediaError(err) }
   }
@@ -145,6 +211,7 @@ async function startLoopback() {
 
 async function start() {
   if (!props.enabled || state.value !== 'idle') return
+  prepareRecording()
   error.value = ''
   callId = crypto.randomUUID()
   state.value = 'preparing'
@@ -169,6 +236,7 @@ async function start() {
 
 async function accept() {
   if (state.value !== 'incoming') return
+  prepareRecording()
   state.value = 'connecting'
   const expected = version
   callTimeout('connecting')
@@ -235,16 +303,17 @@ async function receive(type, data) {
   }
 }
 
-defineExpose({ receive, finish, disconnected: () => reset('Connection lost. The call has ended.'), failed: data => {
+defineExpose({ receive, finish, disconnected: () => { if (state.value !== 'loopback') reset('Connection lost. The call has ended.') }, failed: data => {
   if (data.call_id && data.call_id !== callId) return
   finish()
   error.value = data.message
 } })
-onUnmounted(() => finish())
+onUnmounted(() => { finish(); globalThis.removeEventListener('beforeunload', warnBeforeClose) })
 </script>
 
 <template>
   <section class="video-call" aria-label="Video call">
+    <p class="recording-notice">Calls and local tests are automatically recorded and saved in Call history for room participants. Keep this page open until “Replay saved” appears.</p>
     <label class="media-mode">
       Local media
       <select v-model="mediaMode" aria-label="Local media" :disabled="!['idle', 'incoming'].includes(state)">
@@ -256,11 +325,11 @@ onUnmounted(() => finish())
     <p v-if="mediaMode === 'receive'">Receive only: your camera and microphone stay off. You can watch and hear the other participant.</p>
     <p v-else>Testing on one computer? Choose Receive only on the other side to avoid competing for the same camera.</p>
     <el-button v-if="state === 'idle'" :disabled="!enabled" @click="start">Start video call</el-button>
-    <el-button v-if="state === 'idle'" class="loopback" :disabled="!enabled || mediaMode === 'receive'" @click="startLoopback">Test on this computer (loopback)</el-button>
+    <el-button v-if="state === 'idle'" class="loopback" :disabled="!testEnabled || mediaMode === 'receive'" @click="startLoopback">Test on this computer (loopback)</el-button>
     <p v-if="state === 'idle' && mediaMode !== 'receive'" class="loopback-note">
       Loopback skips the check that the other participant is online, and connects your own camera
-      back to you: the picture is real, the other party is not. It places no call and writes nothing
-      to the call history. Its audio stays muted on this page to avoid feedback.
+      back to you. Your camera and microphone are saved as a Test recording in Call history.
+      No patient is connected. Live audio stays muted on this page to avoid feedback.
     </p>
     <template v-if="state !== 'idle'">
       <p>{{ statusText }}</p>
@@ -272,6 +341,10 @@ onUnmounted(() => finish())
       </div>
     </template>
     <p v-if="error" role="status">{{ error }}</p>
+    <div v-for="job in recordingJobs" :key="job.id" class="recording-state" role="status">
+      <span>{{ job.status }}</span>
+      <el-button v-if="job.failed && job.queue" size="small" @click="job.queue.retry()">Retry saving replay</el-button>
+    </div>
   </section>
 </template>
 
@@ -279,4 +352,5 @@ onUnmounted(() => finish())
 .video-call{border-top:1px solid #dce6e3;padding:12px 0}.videos{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}video{display:block;width:100%;max-height:220px;background:#182724;border-radius:8px}.video-call p{font-size:13px}
 .media-mode{display:flex;align-items:center;gap:10px;font-size:13px;margin-bottom:8px}.media-mode select{max-width:100%;padding:6px;border:1px solid #dce6e3;border-radius:6px}
 .loopback{margin-left:8px}.loopback-note{color:#5b6b68;margin:6px 0 0;max-width:62ch}
+.recording-notice{padding:10px 12px;border-radius:6px;background:#edf4f1;color:#31584d}.recording-state{display:flex;align-items:center;gap:12px;padding:8px 0;font-size:13px}
 </style>

@@ -104,6 +104,7 @@ def issue_token(user, secret: str):
     return jwt.encode(
         {
             "user_id": user.id,
+            "session_version": user.session_version,
             "title": user.role.name,
             "department": user.department.name,
             "jti": secrets.token_urlsafe(32),
@@ -140,6 +141,8 @@ def current_user(
         user = db.get(User, claims["user_id"])
         if user is None or user.status != "active":
             raise HTTPException(401, "User is unavailable or disabled")
+        if claims.get("session_version", 0) != user.session_version:
+            raise HTTPException(401, "Session expired after a password change")
         if user.role.name not in {"admin", "senior", "junior"}:
             raise HTTPException(403, "Unknown role")
         request.state.identity = user
@@ -190,6 +193,7 @@ def login(body: LoginRequest, request: Request):
         cache.delete(failures)
         ticket = secrets.token_urlsafe(32)
         cache.set(ticket_key(ticket), user.id, ex=300)
+        cache.set(ticket_key(ticket) + ":session", user.session_version, ex=300)
         return ok({"ticket": ticket, "expires_in": 300})
 
 
@@ -225,11 +229,13 @@ def verify_code(body: VerifyCodeRequest, request: Request):
                 user = db.get(User, int(uid))
                 if user is None or user.status != "active":
                     raise HTTPException(401, "User is unavailable or disabled")
+                if int(cache.get(key + ":session") or 0) != user.session_version:
+                    raise HTTPException(401, "Login ticket expired after a password change")
                 token = issue_token(user, request.app.state.settings.jwt_secret)
                 data = user_data(user)
                 request.state.identity = user
             pipe.multi()
-            pipe.delete(key, ck, attempts)
+            pipe.delete(key, ck, attempts, key + ":session")
             pipe.execute()
     except WatchError:
         raise HTTPException(401, "Login ticket or code was already used; retry login") from None

@@ -3,7 +3,6 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
-  Avatar,
   Bell,
   ChatDotRound,
   Checked,
@@ -103,8 +102,8 @@ onUnmounted(() => clearInterval(unreadTimer))
 
 const accountBusy = ref(false)
 async function handleAccount(command) {
-  if (command === 'face-enroll') {
-    router.push({ name: 'face-enroll' })
+  if (command === 'profile') {
+    router.push({ name: 'profile' })
     return
   }
   if (accountBusy.value) return
@@ -193,9 +192,7 @@ async function handleAccount(command) {
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item disabled>{{ clinician.department }}</el-dropdown-item>
-                <el-dropdown-item command="face-enroll" :icon="Avatar" divided>
-                  Face enrolment
-                </el-dropdown-item>
+                <el-dropdown-item command="profile" :icon="User">My profile</el-dropdown-item>
                 <el-dropdown-item :disabled="accountBusy" command="sign-out" :icon="SwitchButton" divided>
                   Sign out
                 </el-dropdown-item>
