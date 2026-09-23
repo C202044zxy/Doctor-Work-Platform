@@ -118,6 +118,22 @@ h4 {
   letter-spacing: -0.01em;
 }
 
+/* The furniture above covers panels, chips, tables and buttons, but nothing ever
+   named a link -- so every screen that needed one in running text fell through to
+   the browser's own blue, and four screens did. A link is the one place the brand
+   colour appears inside a sentence, and its underline stays quiet until the
+   pointer is on it. Element Plus links and the nav's own anchors set their colour
+   at a higher specificity and are unaffected. */
+a {
+  color: var(--teal-dark);
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  text-decoration-color: currentcolor;
+}
+
 /* Identifiers and measurements. Prose stays in --font-ui. */
 .data {
   font-family: var(--font-data);

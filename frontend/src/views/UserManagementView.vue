@@ -355,26 +355,28 @@ onMounted(async () => {
       </div>
 
       <el-table v-else v-loading="loading" :data="rows" class="table">
-        <el-table-column label="Name" min-width="200">
+        <el-table-column label="Name" min-width="180">
           <template #default="{ row }">
             <span class="name">{{ row.name }}</span>
             <span class="username data">{{ row.username }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="Role" width="170">
+        <el-table-column label="Role" width="140">
           <template #default="{ row }">{{ titleLabel(row.title) }}</template>
         </el-table-column>
 
-        <el-table-column label="Department" prop="department" min-width="180" />
+        <!-- Wide enough for the longest department the service has, which is
+             "Information Technology": narrowed further it breaks over two lines. -->
+        <el-table-column label="Department" prop="department" min-width="190" />
 
-        <el-table-column label="Email" min-width="220">
+        <el-table-column label="Email" min-width="195">
           <template #default="{ row }">
             <span class="data">{{ row.email }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="Status" width="120">
+        <el-table-column label="Status" width="100">
           <template #default="{ row }">
             <span class="chip" :data-severity="row.status === 'active' ? 'ok' : 'alert'">
               {{ { pending: 'Pending', active: 'Active', disabled: 'Disabled' }[row.status] ?? row.status }}
@@ -382,13 +384,19 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="Created" width="150">
+        <!-- Wide enough for the stamp on one line: at 140 the mono date and its
+             time broke onto two, which is a worse look than the clipped column. -->
+        <el-table-column label="Created" width="160">
           <template #default="{ row }">
             <span class="data">{{ stamp(row.created_at) }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column width="170" align="right">
+        <!-- The seven columns are budgeted to 1105px against the 1154px the table
+             actually gets: it was 1210 and the actions column, which is the last
+             one and right aligned, sat 56px past the panel's edge with its buttons
+             half outside it. -->
+        <el-table-column width="140" align="right">
           <template #default="{ row }">
             <el-button link @click="openEdit(row)">Edit</el-button>
             <!-- Disabling yourself would sign you out on the next request, with

@@ -10,7 +10,8 @@ import {
   patients as patientsApi,
 } from '../api/client'
 import { currentUserId } from '../session'
-import { allergySeverity, timelineOf } from '../patient-record'
+import { allergySeverity, dateLabel, sexAge, timelineOf } from '../patient-record'
+import { initials } from '../people'
 import PatientHealth from '../components/PatientHealth.vue'
 
 // M2-04 owns the patient detail page; M5 and M6 each borrow a tab.
@@ -27,7 +28,11 @@ import PatientHealth from '../components/PatientHealth.vue'
 //
 // M2's own parts are the face sheet above the tabs -- the allergy warning the
 // directory only badges, the groups and tags this patient carries, and the
-// editor for both allergies and history -- plus the history timeline itself.
+// editor for both allergies and history -- plus the history timeline itself and
+// the identity block in the page head: the initials badge the consultation
+// screens draw a person with, the sex and age as `patient-record.js` shapes them,
+// and the two masked identifiers, which the detail payload has always carried and
+// this page never showed.
 //
 // The timeline reads `patient.histories`, not
 // `GET /api/patients/{patient_no}/histories`. One reader on the server produces
@@ -365,14 +370,41 @@ onMounted(async () => {
 <template>
   <div class="page">
     <header class="page-head">
-      <div>
-        <h2 class="page-heading">{{ patient?.name || patientNo }}</h2>
-        <p class="page-sub">
-          <span class="data">{{ patientNo }}</span>
-          <span v-if="patient">{{ patient.department }}</span>
-          <span v-if="patient">{{ patient.gender }}</span>
-          <span v-if="patient?.admitted_at">Admitted {{ patient.admitted_at }}</span>
-        </p>
+      <!-- The head answers who the page is about before the face sheet answers
+           what not to do to them: the same identity block the directory and the
+           consultation screens draw, then the facts the record carries. -->
+      <div class="head-id">
+        <span v-if="patient?.name" class="who-badge" aria-hidden="true">
+          {{ initials(patient.name) }}
+        </span>
+        <div>
+          <h2 class="page-heading">{{ patient?.name || patientNo }}</h2>
+          <p class="page-sub">
+            <span class="data">{{ patientNo }}</span>
+            <span v-if="patient">{{ sexAge(patient) }}</span>
+            <span v-if="patient">{{ patient.department }}</span>
+            <!-- The same formatter the history timeline uses, so the two dates
+                 on this page are not written two different ways. -->
+            <span v-if="patient?.admitted_at" class="head-fact">
+              <span class="sub-label">Admitted</span>
+              <span class="data">{{ dateLabel(patient.admitted_at) }}</span>
+            </span>
+          </p>
+          <!-- The service masks both identifiers before they leave it; showing
+               them masked is what lets a reader confirm this is the right Zhang
+               Wei without a number anyone could dial. A record that carries
+               neither shows no line at all rather than a row of dashes. -->
+          <p v-if="patient?.phone_masked || patient?.id_card_masked" class="page-sub">
+            <span v-if="patient.phone_masked" class="head-fact">
+              <span class="sub-label">Phone</span>
+              <span class="data">{{ patient.phone_masked }}</span>
+            </span>
+            <span v-if="patient.id_card_masked" class="head-fact">
+              <span class="sub-label">National ID</span>
+              <span class="data">{{ patient.id_card_masked }}</span>
+            </span>
+          </p>
+        </div>
       </div>
       <div class="page-actions">
         <el-button :icon="Refresh" :loading="loadingPatient" @click="loadPatient">
@@ -703,6 +735,37 @@ onMounted(async () => {
 <!-- Page furniture (.page, .panel, .chip, .empty, .muted) lives in src/style.css;
      only what is specific to this screen is here. -->
 <style scoped>
+/* The page head: the identity block on the left, the page actions on the right.
+   The badge takes the same 40px the account card gives its own -- this is the
+   other screen where one person is the subject of the whole page -- and it stays
+   the motif's grey, because teal is the signed-in reader's own card and this is
+   the patient. */
+.head-id {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.head-id .who-badge {
+  width: 40px;
+  height: 40px;
+  font-size: 13.5px;
+}
+
+/* A label and its value are one inline flex row, so they are spaced by the gap
+   rather than by a space in the template, which the compiler is free to condense
+   away. The label steps back; the value keeps the head's ink and the data face. */
+.head-fact {
+  display: inline-flex;
+  gap: 5px;
+  align-items: baseline;
+}
+
+.sub-label {
+  color: var(--ink-3);
+}
+
 /* The face sheet: the strip that answers "what must I not do to this patient"
    before anything else on the page. */
 .face-sheet {

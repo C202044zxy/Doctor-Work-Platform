@@ -1,13 +1,15 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh } from '@element-plus/icons-vue'
+import { FolderOpened, Plus, Refresh } from '@element-plus/icons-vue'
 import {
   allergens as allergensApi,
   departments as departmentsApi,
   patientGroups as patientGroupsApi,
   patients as patientsApi,
 } from '../api/client'
+import { sexAge } from '../patient-record'
+import { initials } from '../people'
 import { currentClinician } from '../session'
 
 // T15 + M2-03. Every search condition the service accepts is exposed here — fuzzy
@@ -99,26 +101,30 @@ const hasFilters = computed(
     filters.idCard.trim() !== '',
 )
 
-// Age is derived rather than stored: `PatientSummary` carries a birth date, and a
-// stored age would be wrong the day after it was written.
-function ageFrom(birthDate) {
-  if (!birthDate) return null
-  const born = new Date(`${birthDate}T00:00:00Z`)
-  if (Number.isNaN(born.getTime())) return null
-  const now = new Date()
-  let age = now.getUTCFullYear() - born.getUTCFullYear()
-  const month = now.getUTCMonth() - born.getUTCMonth()
-  if (month < 0 || (month === 0 && now.getUTCDate() < born.getUTCDate())) age -= 1
-  return age
+// The sex and the age are shaped in `patient-record.js`: the detail page prints
+// the same line about the same patient, and a rule with two copies has two
+// answers as soon as one of them is edited.
+
+// The tiers the detail page's banner is drawn from, in the shape the list can
+// answer: the rows themselves are not in a list response, but the server computed
+// both flags from those same rows, so the two screens cannot disagree about one
+// patient. A severe record is the reserved red, a record that is only mild or
+// moderate is a warning -- the banner's middle tier -- and no record at all is
+// nothing to say rather than a calm version of a warning.
+//
+// One function, because the chip and the row's edge are the same signal: a row
+// that said one thing in its middle and another at its edge would be worse than
+// either alone.
+function allergyTier(row) {
+  if (!row.allergy_count) return null
+  return row.has_severe_allergy ? 'alert' : 'warn'
 }
 
-function genderLabel(gender) {
-  return { male: 'Male', female: 'Female' }[gender] ?? 'Unknown'
-}
-
-function sexAge(row) {
-  const age = ageFrom(row.birth_date)
-  return age === null ? genderLabel(row.gender) : `${genderLabel(row.gender)} · ${age}`
+// The tier again, as the row's left edge: the signal at the size a list can carry,
+// so a patient whose allergy matters is visible before the row is read.
+function severityClass({ row }) {
+  const tier = allergyTier(row)
+  return tier ? `row-${tier}` : ''
 }
 
 async function load() {
@@ -492,151 +498,173 @@ onMounted(async () => {
     </header>
 
     <section class="panel">
+      <!-- 0923: ten conditions used to be one wall of eleven identical controls.
+           They are grouped by what they ask, which is also how the record is put
+           together: the columns that identify a patient, the clinical facts hung
+           off it, and the plain fields the patient row itself carries. Each group
+           names itself and lays its controls into the same four columns, so the
+           edges still line up the whole way down the panel. -->
       <div class="toolbar filters">
 
-        <el-input
-          v-model="filters.patientNo"
-          class="filter-no"
-          placeholder="Patient number"
-          clearable
-          :disabled="loading"
-          @keyup.enter="search"
-          @clear="search"
-        />
+        <div class="filter-section">
+          <span class="field-label">Identifiers</span>
 
-        <el-select
-          v-model="filters.symptomTags"
-          class="filter-tags"
-          multiple
-          filterable
-          allow-create
-          default-first-option
-          collapse-tags
-          clearable
-          placeholder="Symptom tags"
-          :disabled="loading"
-          @change="search"
-        />
-
-        <el-select
-          v-model="filters.gender"
-          class="filter-gender"
-          clearable
-          placeholder="Any gender"
-          :disabled="loading"
-          @change="search"
-        >
-          <el-option label="Male" value="male" />
-          <el-option label="Female" value="female" />
-          <el-option label="Unknown" value="unknown" />
-        </el-select>
-
-        <el-date-picker
-          v-model="filters.admitted"
-          class="filter-range"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          start-placeholder="Admitted from"
-          end-placeholder="to"
-          :disabled="loading"
-          @change="search"
-        />
-
-        <el-select
-          v-model="filters.allergenCodes"
-          class="filter-allergen"
-          multiple
-          filterable
-          allow-create
-          default-first-option
-          collapse-tags
-          clearable
-          placeholder="Allergens"
-          :disabled="loading"
-          @change="search"
-        >
-          <el-option
-            v-for="item in allergenOptions"
-            :key="item.code"
-            :label="`${item.name} · ${item.code}`"
-            :value="item.code"
+          <el-input
+            v-model="filters.patientNo"
+            class="filter-no"
+            placeholder="Patient number"
+            clearable
+            :disabled="loading"
+            @keyup.enter="search"
+            @clear="search"
           />
-        </el-select>
 
-        <el-select
-          v-model="filters.allergySeverity"
-          class="filter-severity"
-          multiple
-          collapse-tags
-          clearable
-          placeholder="Allergy severity"
-          :disabled="loading"
-          @change="search"
-        >
-          <el-option label="Mild" value="mild" />
-          <el-option label="Moderate" value="moderate" />
-          <el-option label="Severe" value="severe" />
-        </el-select>
-
-        <el-select
-          v-model="filters.groupId"
-          class="filter-group"
-          clearable
-          placeholder="Patient group"
-          :disabled="loading"
-          @change="search"
-        >
-          <el-option
-            v-for="group in groups"
-            :key="group.id"
-            :label="`${group.name} (${group.member_count})`"
-            :value="group.id"
+          <!-- Both identifiers are exact matches. The input is the whole number: a
+               prefix is not a hit, because the comparison is against the digest kept
+               beside the ciphertext, not against a prefix of anything. -->
+          <el-input
+            v-model="filters.phone"
+            class="filter-id"
+            placeholder="Phone, full number"
+            clearable
+            :disabled="loading"
+            @keyup.enter="search"
+            @clear="search"
           />
-        </el-select>
 
-        <!-- Both identifiers are exact matches. The input is the whole number: a
-             prefix is not a hit, because the comparison is against the digest kept
-             beside the ciphertext, not against a prefix of anything. -->
-        <el-input
-          v-model="filters.phone"
-          class="filter-id"
-          placeholder="Phone, full number"
-          clearable
-          :disabled="loading"
-          @keyup.enter="search"
-          @clear="search"
-        />
+          <el-input
+            v-model="filters.idCard"
+            class="filter-id"
+            placeholder="National ID, full number"
+            clearable
+            :disabled="loading"
+            @keyup.enter="search"
+            @clear="search"
+          />
+        </div>
 
-        <el-input
-          v-model="filters.idCard"
-          class="filter-id"
-          placeholder="National ID, full number"
-          clearable
-          :disabled="loading"
-          @keyup.enter="search"
-          @clear="search"
-        />
+        <div class="filter-section">
+          <span class="field-label">Clinical</span>
 
-        <!-- Last in the run: of the ten conditions this is the one people reach
-             for least, so it closes the grid. -->
-        <el-date-picker
-          v-model="filters.birth"
-          class="filter-range"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          start-placeholder="Born from"
-          end-placeholder="to"
-          :disabled="loading"
-          @change="search"
-        />
+          <el-select
+            v-model="filters.symptomTags"
+            class="filter-tags"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            collapse-tags
+            clearable
+            placeholder="Symptom tags"
+            :disabled="loading"
+            @change="search"
+          />
+
+          <el-select
+            v-model="filters.allergenCodes"
+            class="filter-allergen"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            collapse-tags
+            clearable
+            placeholder="Allergens"
+            :disabled="loading"
+            @change="search"
+          >
+            <el-option
+              v-for="item in allergenOptions"
+              :key="item.code"
+              :label="`${item.name} · ${item.code}`"
+              :value="item.code"
+            />
+          </el-select>
+
+          <el-select
+            v-model="filters.allergySeverity"
+            class="filter-severity"
+            multiple
+            collapse-tags
+            clearable
+            placeholder="Allergy severity"
+            :disabled="loading"
+            @change="search"
+          >
+            <el-option label="Mild" value="mild" />
+            <el-option label="Moderate" value="moderate" />
+            <el-option label="Severe" value="severe" />
+          </el-select>
+
+          <el-select
+            v-model="filters.groupId"
+            class="filter-group"
+            clearable
+            placeholder="Patient group"
+            :disabled="loading"
+            @change="search"
+          >
+            <el-option
+              v-for="group in groups"
+              :key="group.id"
+              :label="`${group.name} (${group.member_count})`"
+              :value="group.id"
+            />
+          </el-select>
+        </div>
+
+        <div class="filter-section">
+          <span class="field-label">Demographics</span>
+
+          <el-select
+            v-model="filters.gender"
+            class="filter-gender"
+            clearable
+            placeholder="Any gender"
+            :disabled="loading"
+            @change="search"
+          >
+            <el-option label="Male" value="male" />
+            <el-option label="Female" value="female" />
+            <el-option label="Unknown" value="unknown" />
+          </el-select>
+
+          <el-date-picker
+            v-model="filters.admitted"
+            class="filter-range"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            start-placeholder="Admitted from"
+            end-placeholder="to"
+            :disabled="loading"
+            @change="search"
+          />
+
+          <!-- Last in the run: of the ten conditions this is the one people reach
+               for least, so it closes the grid. -->
+          <el-date-picker
+            v-model="filters.birth"
+            class="filter-range"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            start-placeholder="Born from"
+            end-placeholder="to"
+            :disabled="loading"
+            @change="search"
+          />
+        </div>
 
         <!-- The commands that belong with the run of conditions: the group editor,
              the reset, and the name search -- the one people reach for first, so
              it keeps the right end of the row. -->
         <div class="filter-actions">
           <!-- 0922意见 1: as a link the button read as a label beside the group
-               filter; it now wears the same border as the search next to it. -->
-          <el-button @click="openGroups">Manage groups</el-button>
+               filter; it now wears the same border as the search next to it, in
+               the brand colour, so the one command in a run of ten conditions
+               reads as a command rather than as an eleventh field. -->
+          <el-button plain type="primary" :icon="FolderOpened" @click="openGroups">
+            Manage groups
+          </el-button>
           <el-button v-if="hasFilters" link @click="clearFilters">Clear filters</el-button>
 
           <form class="search" @submit.prevent="search">
@@ -654,12 +682,11 @@ onMounted(async () => {
       </div>
 
       <p class="toolbar-note">
-        Every condition is sent to the service and they combine with AND. The list is
-        limited to your own department unless you are an administrator, and a group from
-        another department matches nothing rather than widening it. Phone and national ID
-        are exact matches against the blind index kept beside the encrypted column, so the
-        whole number is required — spaces and hyphens are ignored. Symptom tags are typed
-        rather than chosen: no endpoint publishes the tag vocabulary.
+        Every condition goes to the service and they combine with AND; the list is limited
+        to your own department unless you are an administrator. Phone and national ID
+        match the whole number against the blind index kept beside the encrypted column
+        — spaces and hyphens are ignored — and symptom tags are typed rather than chosen,
+        because no endpoint publishes the tag vocabulary.
       </p>
 
       <div v-if="loadError" class="load-error">
@@ -670,27 +697,47 @@ onMounted(async () => {
         <el-button :icon="Refresh" :loading="loading" @click="load">Try again</el-button>
       </div>
 
-      <el-table v-else v-loading="loading" :data="rows" class="table">
+      <el-table
+        v-else
+        v-loading="loading"
+        :data="rows"
+        :row-class-name="severityClass"
+        class="table"
+      >
         <el-table-column label="Patient number" width="150">
           <template #default="{ row }">
             <span class="data">{{ row.patient_no }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="Name" min-width="180">
+        <el-table-column label="Name" min-width="196">
           <template #default="{ row }">
             <!-- M5-T7. The consultation report is archived into the patient
                  record, and the tab that reads it back lives on the detail
-                 screen, so the name is the way in rather than a dead label. -->
+                 screen, so the name is the way in rather than a dead label.
+
+                 M2: drawn as the identity block the consultation screens draw a
+                 person with -- initials, name, and the identifier under it -- so
+                 the directory and the record it opens read as one person. The
+                 badge is the default grey here: teal is the signed-in reader's
+                 own card and nobody in this table is the reader. -->
             <router-link
               class="name-link"
               :to="{ name: 'patient-detail', params: { patientNo: row.patient_no } }"
             >
-              <span class="name">{{ row.name }}</span>
+              <span class="who">
+                <span class="who-badge" aria-hidden="true">{{ initials(row.name) }}</span>
+                <span class="who-text">
+                  <span class="who-name">{{ row.name }}</span>
+                  <!-- Already masked by the server; showing it in the data face
+                       keeps it from being mistaken for something a reader can
+                       dial. -->
+                  <span v-if="row.phone_masked" class="who-meta data">
+                    {{ row.phone_masked }}
+                  </span>
+                </span>
+              </span>
             </router-link>
-            <!-- Already masked by the server; showing it in the data face keeps
-                 it from being mistaken for something a reader can dial. -->
-            <span v-if="row.phone_masked" class="phone data">{{ row.phone_masked }}</span>
           </template>
         </el-table-column>
 
@@ -713,12 +760,9 @@ onMounted(async () => {
           <template #default="{ row }">
             <!-- The server computes the severity flag so the list does not walk
                  the allergy array; the colour is what makes it readable at a
-                 glance, which is the point of computing it at all. -->
-            <span
-              v-if="row.allergy_count"
-              class="chip"
-              :data-severity="row.has_severe_allergy ? 'alert' : 'info'"
-            >
+                 glance, which is the point of computing it at all. It is the same
+                 tier as the row's edge, from the same function. -->
+            <span v-if="row.allergy_count" class="chip" :data-severity="allergyTier(row)">
               {{ row.allergy_count }}
               {{ row.has_severe_allergy ? 'severe' : 'recorded' }}
             </span>
@@ -1058,14 +1102,39 @@ onMounted(async () => {
      lives in src/style.css; only what is specific to this screen is here. -->
 <style scoped>
 /* The conditions used to wrap as a ragged run of hand-set widths -- 168px beside
-   240px beside 132px -- so no two rows shared an edge and the same control could
-   land anywhere. Four equal columns give every row the same edges and every
-   control its column. */
+   240px beside 132px -- and then as one flat grid of eleven equal controls, which
+   is what made them read as a wall. They are three named groups now, each one row:
+   the name keeps a gutter on the left and the controls run to the right of it, so
+   naming the groups costs the panel no height at all.
+
+   That gutter is one width for all three groups rather than each group's own
+   `max-content`. Sized per group, "Clinical" would indent its controls 40px less
+   far than "Demographics" and the four control columns would stop lining up between
+   groups -- which is the one thing the four-column run is for. */
 .filters {
+  --label-gutter: 96px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+/* Filled down the single row rather than across: the label takes the gutter, the
+   controls take the four columns beside it. A group that grows a fifth control
+   opens a sixth column instead of overflowing the panel -- `grid-auto-columns`
+   is what it would get, and it is sized like the four the other groups share. */
+.filter-section {
+  display: grid;
+  grid-template-columns: var(--label-gutter) repeat(4, minmax(0, 1fr));
+  grid-template-rows: auto;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 8px 12px;
   align-items: center;
+}
+
+/* `field-label` spaces itself from what it names, which is what it is for above a
+   control; beside one the column gap is already doing that job. */
+.filter-section > .field-label {
+  margin-bottom: 0;
 }
 
 /* The commands the reader reaches for once the conditions are set. They keep the
@@ -1073,7 +1142,6 @@ onMounted(async () => {
 .filter-actions {
   display: flex;
   flex-wrap: wrap;
-  grid-column: 1 / -1;
   gap: 12px;
   align-items: center;
   justify-content: flex-end;
@@ -1087,18 +1155,34 @@ onMounted(async () => {
   width: min(100%, 320px);
 }
 
-/* Every condition fills its column: the hand-set widths were what made the rows
-   miss each other. Exact matches keep their placeholder, so the input still says
-   the whole number is wanted. */
+/* Every condition fills its column rather than sizing itself: the widths belong
+   to the grid, and a control that decided its own would break the shared edge.
+   Exact matches keep their placeholder, so the input still says the whole number
+   is wanted.
+
+   `min-width: 0` is not decoration either. A grid item's automatic minimum size is
+   its min-content width, and that floor outranks the `width` above it. */
 .filter-no,
 .filter-tags,
-.filter-range,
 .filter-gender,
 .filter-allergen,
 .filter-severity,
 .filter-group,
 .filter-id {
   width: 100%;
+  min-width: 0;
+}
+
+/* The two date ranges are the one control that has to be reached through `:deep`.
+   An `el-date-picker` renders its editor inside a tooltip, and the scope attribute
+   stops at that wrapper: the editor is a child of this component's template but
+   never receives the `data-v-…` the selectors above are compiled with, so a scoped
+   `.filter-range` rule applies to nothing at all. Left to itself the editor lays
+   out at its own 350px default inside a 243px column, covering the control beside
+   it -- and covering it invisibly, since the boxes are white. */
+.filter-section :deep(.filter-range) {
+  width: 100%;
+  min-width: 0;
 }
 
 /* Two fields on one line, each taking half: the dialog is a form, not a list, and
@@ -1210,25 +1294,26 @@ onMounted(async () => {
   width: 160px;
 }
 
-.name {
-  display: block;
-}
-
-/* The name keeps the table's ink and gains an underline on hover: a blue link
-   in a clinical table reads as a different kind of thing than it is. */
+/* The whole identity block is the way into the record, not just the name: it is
+   the target the reader is already aiming at. It keeps the table's ink and gains
+   an underline on hover -- a blue link in a clinical table reads as a different
+   kind of thing than it is -- and it is a block rather than an inline run, so the
+   flex block inside it takes the cell's width instead of collapsing around the
+   name. */
 .name-link {
+  display: block;
   color: inherit;
   text-decoration: none;
 }
 
-.name-link:hover .name {
+.name-link:hover .who-name {
   text-decoration: underline;
 }
 
-.phone {
-  display: block;
-  font-size: 11.5px;
-  color: var(--ink-3);
+/* Twenty rows of names are a column, not twenty headings: the motif's semibold
+   steps back to the table's own weight and the badge carries the identity. */
+.table .who-name {
+  font-weight: 400;
 }
 
 /* The chips used to run to the edge of their column and touch the allergies chip
@@ -1253,9 +1338,20 @@ onMounted(async () => {
   width: 100%;
 }
 
+/* The allergy rail: the row's left edge, in the tiers the detail page's banner and
+   the allergies chip use. An inset shadow rather than a border, so a row that
+   carries one keeps the same column edges as a row that does not. */
+.table :deep(.row-alert) td:first-child {
+  box-shadow: inset 3px 0 0 var(--alert);
+}
+
+.table :deep(.row-warn) td:first-child {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+
 /* A row is one line or two depending on whether the record carries a masked
-   phone number. One line height across the cells keeps the columns from reading
-   as a staircase. */
+   phone number, and the identity badge sets a floor under both. One line height
+   across the cells keeps the columns from reading as a staircase. */
 .table :deep(.cell) {
   line-height: 1.5;
 }
@@ -1293,8 +1389,15 @@ onMounted(async () => {
 }
 
 @media (max-width: 900px) {
-  .filters {
+  /* Too narrow for a gutter beside the controls, so the group names go back to
+     naming their rows from above and the controls drop to two columns. */
+  .filter-section {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: row;
+  }
+
+  .filter-section > .field-label {
+    grid-column: 1 / -1;
   }
 
   .filter-actions {

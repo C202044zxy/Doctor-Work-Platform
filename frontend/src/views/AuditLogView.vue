@@ -233,12 +233,18 @@ onMounted(() => {
     <section class="panel">
       <div class="toolbar">
         <div class="filters">
+          <!-- Both selects are given a placeholder naming the condition they
+               stand for. The empty string is their "no condition" value, and
+               Element Plus renders a placeholder rather than the label of the
+               option carrying it -- so with nothing set, both dropdowns read
+               "Select", which says which control it is but not what it does. -->
           <el-select
             v-model="filters.action"
             class="filter-action"
             filterable
             allow-create
             default-first-option
+            placeholder="All actions"
             aria-label="Action"
           >
             <el-option label="All actions" value="" />
@@ -249,6 +255,7 @@ onMounted(() => {
             v-model="filters.actor"
             class="filter-actor"
             filterable
+            placeholder="All accounts"
             aria-label="Account"
           >
             <el-option label="All accounts" value="" />
